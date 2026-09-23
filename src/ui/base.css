@@ -1,0 +1,49 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;600&display=swap');
+
+:root {
+  --ink: #14161d;
+  --ink-raised: #1d2029;
+  --paper: #efe6d2;
+  --paper-muted: #b9b1a0;
+  --accent: #59f2ff;
+  --gold: #ffc857;
+  --danger: #ff5470;
+  --hairline: rgba(239, 230, 210, 0.16);
+  --font-display: 'Barlow Condensed', 'Segoe UI', sans-serif;
+  --font-body: 'Inter', 'Segoe UI', sans-serif;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--ink);
+  color: var(--paper);
+  font: 400 14px/1.6 var(--font-body);
+}
+
+a {
+  color: var(--accent);
+}
+
+.shell {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 48px 16px;
+}
+
+.shell h1 {
+  font: 700 48px/1.05 var(--font-display);
+  letter-spacing: 0.02em;
+  margin: 0 0 16px;
+}
+
+.build {
+  color: var(--paper-muted);
+  font-size: 12.5px;
+}
