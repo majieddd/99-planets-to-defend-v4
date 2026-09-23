@@ -2,7 +2,7 @@
 // The owner's standing rule: no em dash anywhere, in any of its four spellings. The patterns are
 // assembled from parts so this file, which the check also scans, never spells one itself.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const EM_DASH_FORMS = [
@@ -45,8 +45,10 @@ function main() {
     let text;
     try {
       text = readFileSync(file, 'utf8');
-    } catch {
-      continue; // listed by git but deleted in the working tree
+    } catch (error) {
+      // A file git lists can be deleted in the working tree, or be a nested repository directory.
+      if (error.code === 'ENOENT' || error.code === 'EISDIR') continue;
+      throw error;
     }
     for (const finding of findEmDashes(text)) {
       console.log(`${file}:${finding.line}: em dash (${finding.form})`);
@@ -57,4 +59,7 @@ function main() {
   if (total > 0) process.exit(1);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+// Compare real paths: Node resolves symlinks and junctions in import.meta.url but not in argv[1],
+// so a plain comparison skipped the scan and exited 0 when the checkout sat behind a link.
+const entry = process.argv[1]; // absent under node -e, and realpathSync(undefined) throws
+if (entry && realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url))) main();
