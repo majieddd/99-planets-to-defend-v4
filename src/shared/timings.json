@@ -1,0 +1,12 @@
+{
+  "commanders": {
+    "bulwark": {
+      "attack": { "duration": 0.85, "strike": 0.34 }
+    }
+  },
+  "xeno": {
+    "husk": {
+      "attack": { "duration": 1.4, "strike": 0.4 }
+    }
+  }
+}
