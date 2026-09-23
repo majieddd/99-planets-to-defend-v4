@@ -1,0 +1,23 @@
+# Dependencies and builds
+node_modules/
+dist/
+.vite/
+coverage/
+
+# Test and capture output (evidence worth keeping is copied into docs/evidence/)
+playwright-report/
+test-results/
+artifacts/
+
+# Blender scratch files (recipes are the source; exports in public/assets are committed)
+*.blend1
+*.blend@
+__pycache__/
+*.pyc
+
+# Local environment
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

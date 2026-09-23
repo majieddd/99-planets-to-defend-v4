@@ -1,0 +1,15 @@
+# Keep text files LF in the repository on every platform; this machine defaults to CRLF.
+* text=auto eol=lf
+
+# Exported assets and renders are binary: never diff or normalise them.
+*.glb binary
+*.gltf -text
+*.bin binary
+*.ktx2 binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.blend binary
+*.exr binary
+*.ogg binary
+*.wav binary
