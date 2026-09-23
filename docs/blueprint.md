@@ -366,12 +366,11 @@ with its telegraph. There is never invisible damage.
 **Purpose:** makes venturing dangerous without ending a 30-minute planet on one mistake.
 **Experience:** a Souls-style recovery. You fall; your carried crystals and unextracted pickups drop
 as a glowing cargo cache where you died; you watch the base from the Strategic view while the respawn
-counts down; you walk back and reclaim the cache. Die again before reaching it and that cache is
-gone.
-**Inputs:** commander health reaching zero, the death position, cargo, frontier state, any existing
-cache.
+counts down; you walk back and reclaim the cache. Caches never expire: die again before reaching one
+and both wait for you.
+**Inputs:** commander health reaching zero, the death position, cargo, frontier state.
 **Outputs:** a cargo cache entity with a HUD marker; a respawn timer (12 s inside the frontier, 30 s
-outside); respawn at the heart at full health; removal of the previous cache if one existed.
+outside); respawn at the heart at full health. Earlier caches stay where they are.
 **Edge cases:** death in deep water, lava or a pit puts the cache at the last safe ground position;
 death during the boss fight still respawns while the boss keeps going; a cache swallowed by expanded
 territory stays claimable; death while mounted sends the mount home; the heart falling while the
@@ -529,11 +528,10 @@ the music thins; points of interest pull you on: crystal glints, cache beacons, 
 nest pulses; a compass always shows home.
 **Inputs:** the frontier mask, the commander's position, points of interest, distance from the
 frontier.
-**Outputs:** fog density, the danger level (wandering packs spawn out of sight, more often farther
-out), compass markers, the Strategic view lock.
+**Outputs:** fog density, compass markers, the Strategic view lock. The danger outside is the
+swarm's own: raiders walking from live nests toward the heart, and the planet's hazards.
 **Edge cases:** the frontier can expand while the commander is outside, putting them suddenly inside;
-mounts extend the practical range; telegraphs always draw above the fog; wandering packs never spawn
-within sight of the commander.
+mounts extend the practical range; telegraphs always draw above the fog.
 **Failure:** if the compass cannot resolve a route home, it points in a straight line.
 
 ### Procedural planets
@@ -735,16 +733,16 @@ idempotent receipts, so a reload never pays twice (v3).
 **Failure:** a failed save offers retry and export, and travel to the next planet waits for a
 successful save (v3).
 
-### Onboarding and difficulty
+### Onboarding
 
-**Purpose:** teaches one system at a time and lets players choose the challenge.
+**Purpose:** teaches one system at a time, so the full game never arrives as a wall of rules.
 **Experience:** planet 1 guides towers, crystals and the heart; each later planet introduces at most
 one system: drafts on planet 2, weapons in depth on 3, disasters on 4, mounts on 5, walls and
-crafting on 6. Three difficulties: Story, Standard and Veteran.
-**Inputs:** planet index, difficulty, tutorial flags.
-**Outputs:** system gates, contextual prompts, difficulty multipliers.
-**Edge cases:** skipping the tutorial releases every gate at once; difficulty changes only between
-planets; the first-planet guide holds the first wave until the first heart upgrade (v3).
+crafting on 6.
+**Inputs:** planet index, tutorial flags.
+**Outputs:** system gates and contextual prompts.
+**Edge cases:** skipping the tutorial releases every gate at once; the first-planet guide holds the
+first wave until the first heart upgrade (v3).
 **Failure:** a tutorial step that cannot complete times out and releases its hold (v3).
 
 ### Audio
@@ -883,7 +881,6 @@ the owner's playtests overrule the bot.
 | New nests per wave | 1, or 2 on waves 5, 10 and 15 | v3 |
 | Nest warning | 3 s | v3 |
 | Nest bounty | 180 gold | v3 |
-| Wandering packs outside the frontier | at most 2 alive, spawned at least 40 m beyond it | Exploration carries danger without flooding the wild |
 
 ### Economy and loot
 
@@ -1149,7 +1146,7 @@ live Pages link.
 | M6 | Boss parts and Boss Lab | Boss generator and attack library | |
 | M7 | Route map, talent tree, hangar | Drafts, meta progression, campaign, saves | |
 | M8 | Mounts, walls, disaster effects, themes to 12 or more | Mount, wall and disaster logic | |
-| M9 | Full HUD and menus, touch controls, audio and music, ink cutscenes, onboarding | Onboarding gates, difficulty | |
+| M9 | Full HUD and menus, touch controls, audio and music, ink cutscenes, onboarding | Onboarding gates | |
 | M10 | Balance, performance, accessibility, release | | |
 
 The order of construction:
@@ -1209,14 +1206,14 @@ The order of construction:
 | Route choice between two or three planets | not yet | approved improvement, 2026-09-23 |
 | One new system per planet over the first six planets | not yet | approved improvement, 2026-09-23 |
 | Every power and talent has a test proving its effect | not yet | approved improvement, 2026-09-23 |
-| Crystals deposit automatically in the heart's aura | not yet | added while writing this spec; awaits owner review |
-| Enemies strike the heart with telegraphed blows instead of subtracting lives | not yet | added while writing this spec; awaits owner review |
-| Terrain affinity gives bonuses instead of restrictions | not yet | added while writing this spec; awaits owner review |
-| Tower card draft offers a choice of two | not yet | added while writing this spec; awaits owner review |
-| A second death before reclaiming the cargo cache loses it | not yet | added while writing this spec; awaits owner review |
-| Per-tower target priority | not yet | added while writing this spec; awaits owner review |
-| Story, Standard and Veteran difficulties | not yet | added while writing this spec; awaits owner review |
-| Wandering packs outside the frontier | not yet | added while writing this spec; awaits owner review |
+| Crystals deposit automatically in the heart's aura | not yet | owner approved in spec review, 2026-09-23 |
+| Enemies strike the heart with telegraphed blows instead of subtracting lives | not yet | owner approved in spec review, 2026-09-23 |
+| Terrain affinity gives bonuses instead of restrictions | not yet | owner approved in spec review, 2026-09-23 |
+| Tower card draft offers a choice of two | not yet | owner approved in spec review, 2026-09-23 |
+| Per-tower target priority | not yet | owner approved in spec review, 2026-09-23 |
+| A second death before reclaiming the cargo cache loses it | dropped | owner declined in spec review, 2026-09-23; caches never expire |
+| Story, Standard and Veteran difficulties | dropped | owner declined in spec review, 2026-09-23 |
+| Wandering packs outside the frontier | dropped | owner declined in spec review, 2026-09-23 |
 | Gamepad as a first-class input | dropped | owner selected keyboard and mouse plus touch, 2026-09-23 |
 | Whole-screen painterly post filter (approach B) | dropped | owner chose approach A, 2026-09-23 |
 | v3's Apophis and Earth-first prologue told verbatim | dropped | owner chose a new telling of the core fiction, 2026-09-23 |
@@ -1226,7 +1223,7 @@ The order of construction:
 
 ## Task list
 
-- [ ] Owner reviews this blueprint, including the eight details marked "awaits owner review"
+- [x] Owner reviewed this blueprint and settled the eight additions (2026-09-23)
 - [ ] Write the M0 implementation plan (writing-plans), then dispatch through the Chief Orchestrator
 - [ ] Toolchain: Vite, strict TypeScript, Three.js, Vitest, Playwright, ESLint with the simulation
       boundary rule, an em dash check covering all four forms
@@ -1249,5 +1246,7 @@ The order of construction:
 Blender 5.2.1 LTS portable is installed at `C:\Users\Majied LaFleur\tools\blender-5.2.1` (checksum
 verified against blender.org, 915 MB); portable 4.5.1 and 4.3.2 installs were already present in the
 same folder. The local OpenViking knowledge base
-was not running. Next: the owner reviews this blueprint, then the M0 implementation plan is written
-and dispatched.
+was not running. The owner then reviewed this written spec, kept five of the eight details added
+while writing it (auto-deposit, heart blows, terrain bonuses, a choice of two cards, target
+priority) and declined three (losing a cache on a second death, difficulty levels, wandering packs).
+Next: the M0 implementation plan is written and dispatched.
