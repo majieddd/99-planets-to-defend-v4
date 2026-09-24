@@ -15,6 +15,7 @@ import numpy as np  # noqa: E402
 
 from lib import anim, export, rig  # noqa: E402
 from lib import geo, ink, palette  # noqa: E402
+from lib import paint  # noqa: E402
 from lib import scene  # noqa: E402
 from lib.png import linear_to_srgb, srgb_to_linear, write_png  # noqa: E402
 
@@ -172,6 +173,72 @@ def test_rigid_binding_and_action_export(tmp):
     off = max((during[0][0] - bind_lo).length, (during[0][1] - bind_hi).length)
     assert off < 1e-4, f'render_views must render the bind pose, bounds off by {off}'
     assert arm.data.pose_position == 'POSE', arm.data.pose_position
+
+
+def _flat(value, shape=(4, 4)):
+    return np.full(shape, value, np.float64)
+
+
+def test_composite_neutral_inputs_give_region_times_mid_gradient(tmp):
+    style = palette.PaintStyle()
+    region = np.full((4, 4, 3), 0.5)
+    albedo, emissive = paint.composite(region, _flat(1.0), _flat(0.5), _flat(0.5), _flat(0.5), np.zeros((4, 4, 3)), style)
+    mid = (np.array(style.warm) + np.array(style.cool)) / 2
+    assert np.allclose(albedo[0, 0], 0.5 * mid, atol=1e-6), albedo[0, 0]
+    assert float(emissive.max()) == 0.0
+
+
+def test_composite_occlusion_takes_the_shadow_colour(tmp):
+    style = palette.PaintStyle(shadow_tint=(0.2, 0.6, 0.8), ao_strength=1.0)
+    region = np.full((4, 4, 3), 0.6)
+    open_, _ = paint.composite(region, _flat(1.0), _flat(0.5), _flat(0.5), _flat(0.5), np.zeros((4, 4, 3)), style)
+    shut, _ = paint.composite(region, _flat(0.0), _flat(0.5), _flat(0.5), _flat(0.5), np.zeros((4, 4, 3)), style)
+    ratio = shut[0, 0] / open_[0, 0]
+    assert np.allclose(ratio, (0.2, 0.6, 0.8), atol=1e-6), ratio
+
+
+def test_paint_bakes_an_atlas_and_assigns_one_material(tmp):
+    scene.configure_cycles(samples=4)
+    (tmp / 'textures').mkdir()
+    write_png(tmp / 'textures' / 'brush_strokes.png', np.full((16, 16), 0.5))
+    a = geo.box('a', (1, 1, 1), material=palette.region('t_red', '#c03030'))
+    b = geo.box('b', (1, 1, 1), location=(3, 0, 0), material=palette.region('t_glow', '#202020', emit_hex='#59f2ff'))
+    mat = paint.paint([a, b], name='t', out_dir=tmp, textures_dir=tmp / 'textures', size=64, ao_samples=4)
+    assert (tmp / 't_albedo.png').exists() and (tmp / 't_emissive.png').exists()
+    assert list(a.data.materials) == [mat] and list(b.data.materials) == [mat]
+    # The bake-only height attribute must not stay behind: glTF export writes it as COLOR_0.
+    assert len(a.data.color_attributes) == 0 and len(b.data.color_attributes) == 0, [c.name for c in a.data.color_attributes]
+    # glTF export writes only the maps linked to the BSDF; Workbench shows the active image node, a preview.
+    gj = glb_json(export.export_glb([a, b], tmp / 't.glb'))
+    assert sorted(image['name'] for image in gj['images']) == ['t_albedo', 't_emissive'], gj['images']
+    preview = mat.node_tree.nodes.active.image
+    shown = pathlib.Path(preview.filepath).name if preview else None
+    assert shown == 't_preview.png', f'the active image node shows {shown}'
+    maps = {}
+    for key, image in (('albedo', bpy.data.images.load(str(tmp / 't_albedo.png'))),
+                       ('emissive', bpy.data.images.load(str(tmp / 't_emissive.png'))), ('preview', preview)):
+        pixels = np.empty(64 * 64 * 4, np.float32)
+        image.pixels.foreach_get(pixels)
+        maps[key] = pixels.reshape(64, 64, 4)  # row 0 at the bottom, like UV v = 0
+    # The whole gutter is filled, so no mip level pulls in black.
+    black = int(np.all(maps['albedo'][..., :3] == 0.0, axis=2).sum())
+    assert black == 0, f'{black} albedo texels left unfilled'
+    # A shared atlas: no object's padding may paint over another object's islands (only b glows), and the
+    # preview carries b's glow.
+    for ob, lit in ((a, False), (b, True)):
+        uv = np.empty(len(ob.data.loops) * 2)
+        ob.data.uv_layers.active.data.foreach_get('uv', uv)
+        uv = uv.reshape(-1, 2)
+        ob.data.calc_loop_triangles()
+        for tri in ob.data.loop_triangles:
+            corners = uv[list(tri.loops)]
+            for weights in ((0.6, 0.2, 0.2), (0.2, 0.6, 0.2), (0.2, 0.2, 0.6)):
+                u, v = np.dot(weights, corners)
+                texel = int(v * 64), int(u * 64)
+                glow = float(maps['emissive'][texel][:3].max())
+                assert (glow > 0.5) == lit, f'{ob.name} texel at uv ({u:.3f}, {v:.3f}) has emission {glow:.3f}'
+                cyan = min(maps['preview'][texel][1:3]) > 0.8
+                assert cyan == lit, f'{ob.name} preview texel at uv ({u:.3f}, {v:.3f}) is {maps["preview"][texel][:3]}'
 
 
 def main():
