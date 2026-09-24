@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / 'blender'))
 import bpy  # noqa: E402
 import numpy as np  # noqa: E402
 
+from lib import geo, ink, palette  # noqa: E402
 from lib import scene  # noqa: E402
 from lib.png import linear_to_srgb, srgb_to_linear, write_png  # noqa: E402
 
@@ -41,6 +42,36 @@ def test_png_round_trip(tmp):
 def test_srgb_conversions_invert(tmp):
     values = np.linspace(0, 1, 11)
     assert np.allclose(srgb_to_linear(linear_to_srgb(values)), values, atol=1e-6)
+
+
+def test_region_material_carries_linear_colours(tmp):
+    mat = palette.region('t_steel', '#808080', emit_hex='#59f2ff')
+    base = list(mat['p99_base'])
+    assert abs(base[0] - 0.2158605) < 1e-4, base
+    assert max(mat['p99_emit']) > 0.5
+    assert palette.region('t_steel', '#808080') is mat  # cached by name
+
+
+def test_box_and_cylinder_builders(tmp):
+    b = geo.box('b', (2.0, 1.0, 0.5), location=(1, 2, 3), bevel=0.05)
+    assert len(b.data.vertices) > 8  # bevel applied
+    lo, hi = scene.world_bounds([b])
+    assert abs((hi.x - lo.x) - 2.0) < 1e-3 and abs(lo.z - 2.75) < 1e-3
+    c = geo.cylinder('c', 0.5, 2.0, segments=8, radius_top=0.1)
+    assert len(c.data.polygons) == 10  # 8 sides and 2 caps
+
+
+def test_segment_aligns_to_head_and_tail(tmp):
+    s = geo.segment('s', (0, 0, 1), (0, -1, 1), 0.1, 0.1, segments=6)
+    lo, hi = scene.world_bounds([s])
+    assert abs(lo.y + 1.0) < 1e-3 and abs(hi.y) < 1e-3, (lo, hi)
+
+
+def test_ink_attribute_is_written(tmp):
+    b = geo.box('b', (1, 1, 1))
+    ink.set_ink(b, 1.5)
+    values = [d.value for d in b.data.attributes['_ink'].data]
+    assert len(values) == len(b.data.vertices) and all(abs(v - 0.75) < 1e-6 for v in values), values[:3]
 
 
 def main():

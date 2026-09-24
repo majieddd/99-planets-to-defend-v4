@@ -1,0 +1,60 @@
+"""Named palettes from docs/blueprint.md (Art direction, Content). Colours are authored as sRGB hex and
+converted to linear for Blender. A region material carries its colours as custom properties that the
+paint bake reads; its node tree is rebuilt per bake pass."""
+from dataclasses import dataclass
+
+import bpy
+
+from .png import srgb_to_linear
+
+
+def hex_to_linear(hex_color):
+    h = hex_color.lstrip('#')
+    return tuple(float(srgb_to_linear(int(h[i:i + 2], 16) / 255.0)) for i in (0, 2, 4))
+
+
+PLAYER = {
+    'gunmetal': '#3d4757', 'gunmetal_light': '#566276', 'trim': '#cdd8e6', 'enamel': '#d9d2c0',
+    'undersuit': '#22273a', 'leather': '#6b4a33', 'energy': '#59f2ff',
+}
+XENO = {'chitin': '#241a38', 'chitin_light': '#3a2c52', 'bone': '#8c7f96', 'seam': '#ff3fa6', 'seam_violet': '#d84dff'}
+HEART = {'core': '#ffc36b', 'facet': '#ffb38a', 'deep': '#ff8a3d', 'stone': '#9c8a74', 'inlay': '#ffc857'}
+VERDANT = {
+    'meadow': '#4ec98a', 'meadow_light': '#7fdd9e', 'moss': '#2e8f6a', 'stone': '#8a8378', 'stone_cool': '#6b7a8f',
+    'bark': '#6b4a33', 'foliage': '#3e9f6e', 'foliage_light': '#7fdd9e', 'flower': '#ffc857', 'flower_warm': '#ffb347',
+}
+
+
+def region(name, base_hex, emit_hex=None):
+    """A paint region: one flat base colour and an optional emissive colour."""
+    mat = bpy.data.materials.get(name)
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new(name)
+    base = hex_to_linear(base_hex)
+    mat['p99_base'] = list(base)
+    mat['p99_emit'] = list(hex_to_linear(emit_hex)) if emit_hex else [0.0, 0.0, 0.0]
+    mat.diffuse_color = (*base, 1.0)
+    return mat
+
+
+@dataclass
+class PaintStyle:
+    """How the numpy composite turns bake passes into a painted colour map (see paint.composite)."""
+    shadow_tint: tuple = (0.42, 0.62, 0.70)   # occlusion takes this colour instead of grey
+    ao_strength: float = 0.7
+    curv_gain: float = 8.0
+    edge_light: float = 0.35
+    edge_tint: tuple = (1.0, 0.93, 0.8)
+    cavity_dark: float = 0.4
+    warm: tuple = (1.08, 1.0, 0.9)            # tops lean warm
+    cool: tuple = (0.9, 0.96, 1.06)           # bottoms lean cool
+    brush_strength: float = 0.45
+    stroke_tint_mix: float = 0.25
+    emissive_brush: float = 0.25
+
+
+PLAYER_STYLE = PaintStyle(shadow_tint=(0.40, 0.58, 0.72), edge_light=0.5, cavity_dark=0.5, brush_strength=0.3)
+XENO_STYLE = PaintStyle(shadow_tint=(0.55, 0.35, 0.70), ao_strength=0.8, edge_light=0.3, edge_tint=(0.9, 0.8, 1.0), cavity_dark=0.6, brush_strength=0.35)
+NATURE_STYLE = PaintStyle(shadow_tint=(0.35, 0.60, 0.62), ao_strength=0.65, edge_light=0.25, cavity_dark=0.35, brush_strength=0.6, stroke_tint_mix=0.35)
+HEART_STYLE = PaintStyle(shadow_tint=(0.85, 0.55, 0.50), ao_strength=0.35, edge_light=0.7, edge_tint=(1.0, 0.95, 0.85), cavity_dark=0.2, brush_strength=0.25, emissive_brush=0.35)
