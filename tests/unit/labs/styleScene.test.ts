@@ -527,12 +527,22 @@ describe('buildStyleScene', () => {
   it('keeps Bulwark at home through idle and attack, then runs one lap from home back to home', () => {
     const { assets, style } = build();
     const home = patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position;
+    // The cycle sets his lap angle on a line of its own, apart from run mode's step, so the run-mode test's checks on
+    // his direction are repeated on every lap frame: with that line's sign flipped he would run the lap backward and
+    // still leave and rejoin home on time. Home is on the lap, so the step off it is a stride along the lap too.
+    // Measured 0.84 degrees at worst between his stride and his facing, and 1.43 between his left and the heart.
+    const alongPath = Math.cos((RUN_SPEED / RUN_RADIUS) * DT);
+    const previous = worldPosition(assets.bulwark.root);
     const away: number[] = [];
     for (let i = 1; i <= 12 * 60; i++) {
       style.update(DT);
       const p = worldPosition(assets.bulwark.root);
+      const stride = p.clone().sub(previous);
+      previous.copy(p);
       if (p.distanceTo(home) < 1e-9) continue;
       expect(tangentRadius(p)).toBeCloseTo(RUN_RADIUS, 9);
+      expect(facing(assets.bulwark.root).dot(stride.normalize())).toBeGreaterThan(alongPath);
+      expect(leftOf(assets.bulwark.root).dot(new Vector3(-p.x, 0, -p.z).normalize())).toBeGreaterThan(0.999);
       away.push(i * DT);
     }
     // Idle to 3 s, the attack to 3.85 s and idle again to 6 s, then the lap: 2 pi 4 / 7 = 3.59 s, back by 9.59 s.
@@ -542,14 +552,16 @@ describe('buildStyleScene', () => {
     expect(away.at(-1)! - away[0]!).toBeCloseTo((away.length - 1) * DT, 9); // one unbroken stretch
   });
 
-  it('moves Bulwark at most one run step and turns him under 40 degrees a frame, through two cycles', () => {
+  it('moves Bulwark at most one run step and turns him under 40 degrees a frame, through three cycles', () => {
     const { assets, style } = build();
     const root = assets.bulwark.root;
     let position = worldPosition(root);
     let forward = facing(root);
     let largestMove = 0;
     let largestTurn = 0;
-    for (let i = 0; i < 24 * 60; i++) {
+    // Three cycles, because a lap angle summed frame by frame instead of read off the cycle clock drifts by part of a
+    // step each lap, and its step off home first passes a run step as the third lap starts (measured 0.134 m at 30 s).
+    for (let i = 0; i < 36 * 60; i++) {
       style.update(DT);
       const p = worldPosition(root);
       const f = facing(root);
@@ -564,6 +576,20 @@ describe('buildStyleScene', () => {
     // Where the lap meets home he turns through the 37 degrees between his home facing and the lap's direction
     // there, plus at most one frame of the lap's own turn (1.7 degrees). Measured 37.6 degrees.
     expect(largestTurn).toBeLessThan(40);
+  });
+
+  it("starts run mode's lap from home, wherever a switch cut the cycle's lap short", () => {
+    const { assets, style } = build();
+    const home = patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position;
+    step(style, 7.5);
+    // 7.5 s is 1.5 s into the cycle's lap: 10.5 m round it, 7.73 m from home.
+    expect(worldPosition(assets.bulwark.root).distanceTo(home)).toBeGreaterThan(7);
+    style.setBulwarkMode('idle');
+    style.update(DT);
+    style.setBulwarkMode('run');
+    style.update(DT);
+    // One step from home. Had run mode taken up the lap at the angle the cycle left, he would have jumped 7.76 m.
+    expect(worldPosition(assets.bulwark.root).distanceTo(home)).toBeLessThan(RUN_SPEED * DT + 1e-6);
   });
 
   it('restarts a repeated strike in place instead of fading it in from the bind pose', () => {
