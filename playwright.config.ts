@@ -1,6 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
+import { previewPort } from './tools/preview-port';
 
 const ci = Boolean(process.env.CI);
+const origin = `http://127.0.0.1:${previewPort()}/`;
 
 // CI runners have no GPU. Chrome gates its software WebGL path behind these flags, and without them
 // every WebGL page fails to create a context.
@@ -13,14 +15,15 @@ export default defineConfig({
   retries: ci ? 1 : 0,
   reporter: ci ? [['github'], ['list']] : 'list',
   use: {
-    baseURL: 'http://127.0.0.1:4173/',
+    baseURL: origin,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'npm run build && npm run preview -- --host 127.0.0.1',
-    url: 'http://127.0.0.1:4173/',
-    reuseExistingServer: !ci,
+    command: 'npm run build && npm run preview',
+    url: origin,
+    // A server already on the port belongs to another checkout or project; testing it would pass or fail on someone else's files.
+    reuseExistingServer: false,
     timeout: 240_000,
   },
   projects: [
