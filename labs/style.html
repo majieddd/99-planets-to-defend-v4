@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- An empty icon stops the browser requesting /favicon.ico, whose 404 is logged as a console error. -->
+    <link rel="icon" href="data:," />
+    <title>Style Lab</title>
+    <link rel="stylesheet" href="/src/ui/base.css" />
+    <style>
+      #stage {
+        position: fixed;
+        inset: 0;
+      }
+      #stage canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <script type="module" src="/src/labs/style/main.ts"></script>
+  </body>
+</html>
