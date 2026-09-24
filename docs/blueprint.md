@@ -1,8 +1,8 @@
 # 99 Planets To Defend (v4): game blueprint
 
 Status: design approved in brainstorming on 2026-09-23. The M0a toolchain, checks, CI and Pages site
-exist; no game code yet. This file is both the approved spec and the running design document for the
-whole game. Check it before any build:
+and the M0b simulation kernel exist; no game systems yet. This file is both the approved spec and
+the running design document for the whole game. Check it before any build:
 
 ```bash
 node "<aegis-suite>/tools/blueprint.js" check docs/blueprint.md --gate
@@ -1236,7 +1236,7 @@ The order of construction:
 - [ ] Style scene assets: Bulwark (idle, run, attack), Bolt Sentinel marks I to III, Husk (walk,
       attack), Worldheart, nest, Verdant kit (rocks, flora, grass cards), brush atlas
 - [ ] Style Lab with live dials, the reference board and the colour audit
-- [ ] Simulation kernel: fixed tick, seeded RNG streams, event log, save envelope, bot harness
+- [x] Simulation kernel: fixed tick, seeded RNG streams, event log, save envelope, bot harness
 - [ ] Owner style gate; lock the Painted-Anime-Inkline 4.0 defaults
 - [ ] Owner: choose a license (none yet, so all rights are reserved by default)
 
@@ -1253,3 +1253,5 @@ priority) and declined three (losing a cache on a second death, difficulty level
 2026-09-24. M0a is complete: the toolchain, checks, CI and the Pages site are live at
 https://majieddd.github.io/99-planets-to-defend-v4/. Next: M0b, M0c and M0d in parallel
 (docs/superpowers/plans/2026-09-23-m0-overview.md).
+M0b is complete: the simulation kernel is deterministic across seeds, commands and a mid-run save
+(tests/unit/sim/determinism.test.ts), and `npm run bot` prints a stable result line.
