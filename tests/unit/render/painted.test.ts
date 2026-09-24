@@ -78,6 +78,10 @@ describe('painted materials', () => {
     expect(applied.uAmbientSky.value.getHexString()).toBe('7f95c8');
     expect(applied.uAmbientGround.value.getHexString()).toBe('5c4a6e');
     expect(applied.uRimColor.value.getHexString()).toBe('ff9a6a');
+    const fresh = createPaintUniforms(dusk, changed, null);
+    expect(fresh.uAmbientSky.value.getHexString()).toBe('7f95c8');
+    expect(fresh.uAmbientGround.value.getHexString()).toBe('5c4a6e');
+    expect(fresh.uRimColor.value.getHexString()).toBe('ff9a6a');
   });
 
   it('enable lights and choose features by define', () => {

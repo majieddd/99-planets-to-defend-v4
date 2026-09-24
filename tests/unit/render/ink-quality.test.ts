@@ -64,6 +64,8 @@ describe('attachHull', () => {
     expect(unflip).toBeGreaterThan(vs.indexOf('#include <defaultnormal_vertex>'));
     expect(vs.indexOf('vec2 direction')).toBeGreaterThan(unflip);
     expect(vs.lastIndexOf('#ifdef FLIP_SIDED', unflip)).toBeGreaterThan(vs.indexOf('#include <defaultnormal_vertex>'));
+    const guard = vs.lastIndexOf('#ifdef FLIP_SIDED', unflip);
+    expect(vs.slice(guard + '#ifdef FLIP_SIDED'.length, unflip)).not.toMatch(/#\s*(if|else|elif|endif)/);
   });
 
   it('shares the instance matrices of an instanced mesh', () => {
