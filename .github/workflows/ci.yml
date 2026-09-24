@@ -6,7 +6,8 @@ on:
   pull_request:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # A new push to a pull request supersedes its older run; each main commit keeps its own result.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -15,19 +16,26 @@ permissions:
 jobs:
   check-and-test:
     runs-on: ubuntu-latest
+    # A unit test stuck in a synchronous loop never lets Vitest's timer fire and would hold the runner
+    # for GitHub's 360-minute default. 30 minutes clears the slowest real failure (browser tests
+    # retried once), so a genuine failure still reaches the evidence upload.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          # The project's one Node version source, so a bump to .nvmrc moves CI too.
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npm run check
       - run: npm test
       - run: npx playwright install --with-deps chromium
-      - run: npm run e2e
+      - id: e2e
+        run: npm run e2e
       - name: Keep browser evidence on failure
-        if: failure()
+        # Only a failed e2e step leaves browser evidence; an earlier failure would add a no-files warning.
+        if: failure() && steps.e2e.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-results
