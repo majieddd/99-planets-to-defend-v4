@@ -1,7 +1,8 @@
 # 99 Planets To Defend (v4): game blueprint
 
-Status: design approved in brainstorming on 2026-09-23. No code yet. This file is both the approved
-spec and the running design document for the whole game. Check it before any build:
+Status: design approved in brainstorming on 2026-09-23. The M0a toolchain, checks, CI and Pages site
+exist; no game code yet. This file is both the approved spec and the running design document for the
+whole game. Check it before any build:
 
 ```bash
 node "<aegis-suite>/tools/blueprint.js" check docs/blueprint.md --gate
@@ -1188,7 +1189,7 @@ The order of construction:
 
 | Decision | Status | Evidence |
 |---|---|---|
-| Browser game: TypeScript, Three.js on WebGL2, Vite, GitHub Pages | not yet | owner choice, 2026-09-23 |
+| Browser game: TypeScript, Three.js on WebGL2, Vite, GitHub Pages | partial | toolchain, CI and Pages live (docs/evidence/m0/pages-placeholder.png); no game yet |
 | Repository majieddd/99-planets-to-defend-v4, public | partial | repository created holding this blueprint, 2026-09-23 |
 | Approach A: painted assets, shader lighting, two-pass ink | not yet | owner choice, 2026-09-23 |
 | Every asset built by script in Blender 5.2.1 | not yet | owner requirement, 2026-09-23 |
@@ -1224,10 +1225,10 @@ The order of construction:
 ## Task list
 
 - [x] Owner reviewed this blueprint and settled the eight additions (2026-09-23)
-- [ ] Write the M0 implementation plan (writing-plans), then dispatch through the Chief Orchestrator
-- [ ] Toolchain: Vite, strict TypeScript, Three.js, Vitest, Playwright, ESLint with the simulation
+- [x] Write the M0 implementation plan (writing-plans), then dispatch through the Chief Orchestrator
+- [x] Toolchain: Vite, strict TypeScript, Three.js, Vitest, Playwright, ESLint with the simulation
       boundary rule, an em dash check covering all four forms
-- [ ] CI workflow and the GitHub Pages deploy
+- [x] CI workflow and the GitHub Pages deploy
 - [ ] Blender pipeline: headless runner, shared libraries (paint bake, rig, animate, export),
       manifest, turntable sheets, asset checks
 - [ ] Renderer v1: painted lighting material, hull ink, screen-space edge ink, fog and sky, bloom and
@@ -1249,4 +1250,5 @@ same folder. The local OpenViking knowledge base
 was not running. The owner then reviewed this written spec, kept five of the eight details added
 while writing it (auto-deposit, heart blows, terrain bonuses, a choice of two cards, target
 priority) and declined three (losing a cache on a second death, difficulty levels, wandering packs).
-Next: the M0 implementation plan is written and dispatched.
+M0a is complete: the toolchain, checks, CI and the Pages site are live at
+https://majieddd.github.io/99-planets-to-defend-v4/. Next: M0b, M0c and M0d in parallel.
