@@ -1,7 +1,7 @@
 import { CommandQueue, type Command } from './commands';
 import { EventLog, type SimEvent } from './events';
 import { Rng, streamState } from './rng';
-import { SIM_VERSION, TICK_DT, type SimState } from './state';
+import { SIM_VERSION, TICK_DT, type PlayerState, type SimState } from './state';
 import type { JsonObject, JsonValue } from './types';
 
 /** What a system sees on each tick. */
@@ -9,6 +9,8 @@ export interface SystemContext {
   readonly tick: number;
   readonly dt: number;
   readonly seed: number;
+  /** The roster, so systems loop over players instead of assuming player 0 (v3 invariant 1). */
+  readonly players: readonly PlayerState[];
   readonly commands: readonly Command[];
   /** A named RNG stream. The same name returns the same generator for the rest of the tick. */
   rng(name: string): Rng;
@@ -22,7 +24,7 @@ export interface SystemContext {
  */
 export interface SimSystem<D extends JsonObject = JsonObject> {
   readonly id: string;
-  init(seed: number): D;
+  init(seed: number, players: readonly PlayerState[]): D;
   step(data: D, ctx: SystemContext): void;
 }
 
@@ -58,7 +60,7 @@ export function createSim(options: CreateSimOptions): Sim {
     rng: {},
     systems: {},
   };
-  for (const system of options.systems) state.systems[system.id] = system.init(seed);
+  for (const system of options.systems) state.systems[system.id] = system.init(seed, state.players);
   const sim: Sim = { state, systems: options.systems, events: new EventLog(), queue: new CommandQueue() };
   sim.events.emit(0, 'sim/created', { seed });
   return sim;
@@ -69,6 +71,11 @@ export function restoreSim(state: SimState, systems: readonly SimSystem[]): Sim 
   assertUniqueIds(systems);
   for (const system of systems) {
     if (!(system.id in state.systems)) throw new Error(`restoreSim: state has no data for system '${system.id}'`);
+  }
+  // Data with no system would silently stop running, or is left over by a migration that forgot to drop it.
+  const ids = new Set(systems.map((system) => system.id));
+  for (const id of Object.keys(state.systems)) {
+    if (!ids.has(id)) throw new Error(`restoreSim: no system for the data under '${id}'`);
   }
   const sim: Sim = { state, systems, events: new EventLog(), queue: new CommandQueue() };
   sim.events.emit(state.tick, 'sim/restored', { version: state.version });
@@ -91,6 +98,7 @@ export function stepSim(sim: Sim): SimEvent[] {
     tick,
     dt: TICK_DT,
     seed: state.seed,
+    players: state.players,
     commands,
     rng(name) {
       let rng = live.get(name);

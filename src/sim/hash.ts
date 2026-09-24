@@ -32,6 +32,10 @@ export function cyrb53(text: string, seed = 0): number {
  * game when the save loads.
  */
 export function canonicalStringify(value: unknown): string {
+  return canonical(value, new Set());
+}
+
+function canonical(value: unknown, seen: Set<object>): string {
   if (value === null) return 'null';
   switch (typeof value) {
     case 'number':
@@ -41,14 +45,18 @@ export function canonicalStringify(value: unknown): string {
     case 'boolean':
       return JSON.stringify(value);
     case 'object': {
+      // JSON has no references: an object reached twice loads back as two copies, so a resumed game would
+      // drift from the continuous one although their hashes matched at the save. A cycle would never end.
+      if (seen.has(value)) throw new Error('canonicalStringify: the same object or array is reachable twice');
+      seen.add(value);
       // Array.from reads holes as undefined, which the default case refuses. map skipped holes, so join wrote
       // invalid text like [1,,,4] while the save held [1,null,null,4] and failed its own hash check on load.
-      if (Array.isArray(value)) return `[${Array.from(value, (item) => canonicalStringify(item)).join(',')}]`;
+      if (Array.isArray(value)) return `[${Array.from(value, (item) => canonical(item, seen)).join(',')}]`;
       const record = value as Record<string, unknown>;
       const fields = Object.keys(record)
         .filter((key) => record[key] !== undefined)
         .sort()
-        .map((key) => `${JSON.stringify(key)}:${canonicalStringify(record[key])}`);
+        .map((key) => `${JSON.stringify(key)}:${canonical(record[key], seen)}`);
       return `{${fields.join(',')}}`;
     }
     default:

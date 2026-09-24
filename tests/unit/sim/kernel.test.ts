@@ -124,6 +124,23 @@ describe('stepSim contract', () => {
     expect(sim.state.rng['dice']).toEqual(expected.state());
   });
 
+  it('shows systems the player roster in init and on every tick', () => {
+    const seen: number[][] = [];
+    const roster: SimSystem<{ n: number }> = {
+      id: 'roster',
+      init(_seed, players) {
+        seen.push(players.map((p) => p.id));
+        return { n: 0 };
+      },
+      step(data, ctx) {
+        data.n += 1;
+        seen.push(ctx.players.map((p) => p.id));
+      },
+    };
+    runTicks(createSim({ seed: 1, systems: [roster], players: 2 }), 1);
+    expect(seen).toEqual([[0, 1], [0, 1]]);
+  });
+
   it('queues for the next tick to run by default and delivers commands in queue order', () => {
     const sim = createSim({ seed: 1, systems: [recorder('a')] });
     runTicks(sim, 2);
@@ -138,6 +155,11 @@ describe('restoreSim', () => {
   it('refuses duplicate system ids', () => {
     const sim = createSim({ seed: 1, systems: [recorder('a')] });
     expect(() => restoreSim(sim.state, [recorder('a'), recorder('a')])).toThrow(/duplicate system id/);
+  });
+
+  it('refuses data for a system it was not given', () => {
+    const sim = createSim({ seed: 1, systems: [recorder('a'), recorder('b')] });
+    expect(() => restoreSim(sim.state, [recorder('a')])).toThrow(/no system for the data under 'b'/);
   });
 
   it('requires data for every system', () => {

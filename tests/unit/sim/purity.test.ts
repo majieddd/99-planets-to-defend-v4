@@ -10,8 +10,8 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-// Both folders sit inside the simulation boundary. The minimum counts catch a scan that silently stops
-// recursing or finds nothing.
+// Both folders sit inside the simulation boundary. The minimum counts catch a scan that finds nothing;
+// src/sim has more top-level files than its minimum, so the nested dev file is what proves it recurses.
 const ROOTS: ReadonlyArray<readonly [string, number]> = [
   ['src/sim', 6],
   ['src/shared', 1],
@@ -46,6 +46,7 @@ describe('simulation purity', () => {
     for (const [root, minimum] of ROOTS) {
       const files = sourceFiles(root);
       expect(files.length, root).toBeGreaterThanOrEqual(minimum);
+      if (root === 'src/sim') expect(files, 'the scan must recurse into src/sim/dev').toContain(join('src', 'sim', 'dev', 'pulse.ts'));
       for (const file of files) {
         const text = readFileSync(file, 'utf8');
         for (const pattern of FORBIDDEN) expect(pattern.test(text), `${file} matches ${pattern}`).toBe(false);

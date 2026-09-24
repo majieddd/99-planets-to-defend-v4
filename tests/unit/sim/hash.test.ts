@@ -35,6 +35,14 @@ describe('canonicalStringify', () => {
     expect(() => canonicalStringify({ f: () => 1 })).toThrow(/unsupported/);
   });
 
+  it('refuses an object reachable twice, which a save would split into two copies', () => {
+    const shared = { hp: 1 };
+    expect(() => canonicalStringify({ a: shared, b: [shared] })).toThrow(/reachable twice/);
+    const cyclic: Record<string, unknown> = {};
+    cyclic['self'] = cyclic;
+    expect(() => canonicalStringify(cyclic)).toThrow(/reachable twice/);
+  });
+
   it('refuses sparse arrays, which JSON would load back with nulls', () => {
     const holey: number[] = [1];
     holey[3] = 4;
