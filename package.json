@@ -17,6 +17,7 @@
     "check:blueprint": "node tools/check-blueprint.mjs",
     "check": "npm run typecheck && npm run lint && npm run check:emdash && npm run check:blueprint",
     "test": "vitest run",
+    "test:determinism": "vitest run tests/unit/sim/determinism.test.ts",
     "e2e": "playwright test"
   },
   "dependencies": {
