@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "name": "brush_strokes",
+      "family": "textures",
+      "kind": "texture",
+      "file": "textures/brush_strokes.png",
+      "nodes": [],
+      "animations": [],
+      "tris": 0,
+      "bones": 0,
+      "textures": [],
+      "hasInk": false,
+      "bytes": 0
+    },
+    {
+      "name": "ink_noise",
+      "family": "textures",
+      "kind": "texture",
+      "file": "textures/ink_noise.png",
+      "nodes": [],
+      "animations": [],
+      "tris": 0,
+      "bones": 0,
+      "textures": [],
+      "hasInk": false,
+      "bytes": 0
+    }
+  ]
+}

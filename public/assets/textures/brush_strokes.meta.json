@@ -1,0 +1,11 @@
+{
+  "name": "brush_strokes",
+  "family": "textures",
+  "file": "textures/brush_strokes.png",
+  "kind": "texture",
+  "recipe": "brushes",
+  "nodes": [],
+  "animations": [],
+  "tris": 0,
+  "notes": {}
+}

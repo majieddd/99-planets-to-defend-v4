@@ -1,0 +1,11 @@
+{
+  "name": "ink_noise",
+  "family": "textures",
+  "file": "textures/ink_noise.png",
+  "kind": "texture",
+  "recipe": "brushes",
+  "nodes": [],
+  "animations": [],
+  "tris": 0,
+  "notes": {}
+}
