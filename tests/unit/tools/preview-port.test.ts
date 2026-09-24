@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_PREVIEW_PORT, previewPort } from '../../../tools/preview-port';
+import { DEFAULT_PREVIEW_PORT, previewPort } from '../../../tools/preview-port.ts';
 
 describe('previewPort', () => {
   afterEach(() => {

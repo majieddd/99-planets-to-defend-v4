@@ -1,11 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
-import { previewPort } from './tools/preview-port';
+import { previewPort } from './tools/preview-port.ts';
 
 const ci = Boolean(process.env.CI);
 const origin = `http://127.0.0.1:${previewPort()}/`;
 
-// CI runners have no GPU. Chrome gates its software WebGL path behind these flags, and without them
-// every WebGL page fails to create a context.
+// CI runners have no GPU. Playwright already passes --enable-unsafe-swiftshader; pinning ANGLE to
+// SwiftShader means CI never tries a GPU backend first.
 const ciGpuArgs = ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
 
 export default defineConfig({
@@ -13,6 +13,8 @@ export default defineConfig({
   outputDir: 'test-results',
   timeout: 90_000,
   retries: ci ? 1 : 0,
+  // A test.only left in a commit would run one test and report the suite as passing.
+  forbidOnly: ci,
   reporter: ci ? [['github'], ['list']] : 'list',
   use: {
     baseURL: origin,
