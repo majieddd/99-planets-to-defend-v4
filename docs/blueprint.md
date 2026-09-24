@@ -1243,12 +1243,13 @@ The order of construction:
 ## Where we are
 
 2026-09-23. The design was approved in brainstorming: the platform, approach A, design sections 1 to
-4, and the cargo cache death rule. The repository holds this blueprint and a README, and no code yet.
+4, and the cargo cache death rule. The repository held this blueprint and a README, and no code yet.
 Blender 5.2.1 LTS portable is installed at `C:\Users\Majied LaFleur\tools\blender-5.2.1` (checksum
 verified against blender.org, 915 MB); portable 4.5.1 and 4.3.2 installs were already present in the
 same folder. The local OpenViking knowledge base
 was not running. The owner then reviewed this written spec, kept five of the eight details added
 while writing it (auto-deposit, heart blows, terrain bonuses, a choice of two cards, target
 priority) and declined three (losing a cache on a second death, difficulty levels, wandering packs).
-M0a is complete: the toolchain, checks, CI and the Pages site are live at
-https://majieddd.github.io/99-planets-to-defend-v4/. Next: M0b, M0c and M0d in parallel.
+2026-09-24. M0a is complete: the toolchain, checks, CI and the Pages site are live at
+https://majieddd.github.io/99-planets-to-defend-v4/. Next: M0b, M0c and M0d in parallel
+(docs/superpowers/plans/2026-09-23-m0-overview.md).

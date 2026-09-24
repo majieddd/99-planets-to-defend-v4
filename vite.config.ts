@@ -30,7 +30,8 @@ export default defineConfig({
     },
   },
   server: {
-    // Windows resolves localhost to ::1 first, and the docs, launch config and browser checks use 127.0.0.1:5173.
+    // Windows resolves localhost to ::1 first, while CLAUDE.md and the planned built-in-browser checks
+    // use 127.0.0.1:5173.
     host: '127.0.0.1',
     port: 5173,
     strictPort: true,
