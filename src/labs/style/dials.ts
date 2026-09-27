@@ -1,7 +1,10 @@
 import GUI from 'lil-gui';
 import { NUMERIC_RANGES, type RenderDials } from '../../render/defaults';
 import type { TierName } from '../../render/quality';
+import { NARROW_SCREEN } from './referenceBoard';
 import { PRESETS, type BulwarkMode, type PresetName } from './scene';
+
+const TITLE = 'Painted-Anime-Inkline 4.0';
 
 export interface LabState {
   tier: TierName;
@@ -30,7 +33,23 @@ const GROUPS: Record<string, (keyof RenderDials)[]> = {
 };
 
 export function createDialsPanel(dials: RenderDials, state: LabState, handlers: LabHandlers): GUI {
-  const gui = new GUI({ title: 'Painted-Anime-Inkline 4.0' });
+  // On a phone the open panel covered most of the canvas, so there it starts closed and its title bar is the toggle,
+  // under a label short enough to leave the canvas clear. If the width later crosses the line (a turned tablet, a
+  // resized window) the label follows the layout, but the panel stays open or closed as the viewer left it.
+  const narrow = matchMedia(NARROW_SCREEN);
+  const title = (): string => (narrow.matches ? 'Dials' : TITLE);
+  const gui = new GUI({ title: title() });
+  if (narrow.matches) gui.close();
+  narrow.addEventListener('change', () => gui.title(title()));
+  // The phone layout hides the banner under the open panel by this class. Matched with :has() instead, the rule was
+  // merged by Vite's CSS minifier into the board rule's selector list, so a browser without :has() dropped both and the
+  // banner painted over an open board. lil-gui calls back for every folder too, so this reads the root's own state; and
+  // it calls back only on a change, so the state at creation is set here once.
+  const syncOpenClass = (): void => {
+    document.body.classList.toggle('dials-open', !gui._closed);
+  };
+  gui.onOpenClose(syncOpenClass);
+  syncOpenClass();
   const lab = gui.addFolder('Lab');
   lab.add(state, 'tier', ['high', 'medium', 'low']).name('quality tier').onChange((tier: TierName) => handlers.onTier(tier));
   lab.add(state, 'preset', PRESETS).name('camera').onChange((preset: PresetName) => handlers.onPreset(preset));

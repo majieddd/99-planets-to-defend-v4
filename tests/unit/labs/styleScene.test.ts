@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import {
   AnimationClip,
+  Color,
   InstancedMesh,
   Line3,
   Matrix4,
@@ -10,14 +12,17 @@ import {
   type CapsuleGeometry,
   type Mesh,
   type Object3D,
+  type ShaderMaterial,
 } from 'three';
 import { describe, expect, it } from 'vitest';
+import { rgbToHsv } from '../../../src/labs/style/audit';
 import { placeholderAssets } from '../../../src/labs/style/placeholders';
 import {
   buildStyleScene,
   BULWARK_HOME,
   HUSK_RADIUS,
   HUSK_SPEED,
+  NO_EDGE_PIECES,
   PRESETS,
   RUN_RADIUS,
   RUN_SPEED,
@@ -33,6 +38,7 @@ import { DEFAULT_DIALS } from '../../../src/render/defaults';
 import { createHullMaterial, createInkUniforms } from '../../../src/render/ink/hull';
 import { LAYERS } from '../../../src/render/layers';
 import { createPaintUniforms } from '../../../src/render/materials/painted';
+import { BLOOM_SMOOTHING } from '../../../src/render/post/pipeline';
 import { createStylePatch, STYLE_PLANET_RADIUS } from '../../../src/render/terrain/stylePatch';
 import { VERDANT } from '../../../src/render/themes';
 
@@ -228,6 +234,48 @@ describe('placeholderAssets', () => {
       expect(box(assets.heart.root, `heart_stage_${String(level).padStart(2, '0')}`).min.y).toBeCloseTo(0.4, 6);
     }
   });
+
+  it('gives only the energy an emissive key, each one enough to glow at the default threshold', () => {
+    // The key the painted shader writes: the brightest channel of emissive colour times intensity (no map here).
+    const keyOf = (mesh: Mesh): number => {
+      const u = (mesh.material as ShaderMaterial).uniforms;
+      const c = u['uEmissiveColor']!.value as Color;
+      return Math.max(c.r, c.g, c.b) * (u['uEmissiveIntensity']!.value as number);
+    };
+    const energy = /^(bolt_mk\d_rail|nest|heart_stage_\d\d)$/;
+    let glowing = 0;
+    for (const { root } of Object.values(placeholderAssets(ctx))) {
+      for (const mesh of meshesUnder(root)) {
+        if (isHull(mesh)) continue;
+        if (energy.test(mesh.name)) {
+          expect(keyOf(mesh), mesh.name).toBeGreaterThanOrEqual(DEFAULT_DIALS.bloomThreshold + BLOOM_SMOOTHING);
+          glowing += 1;
+        } else expect(keyOf(mesh), mesh.name).toBe(0);
+      }
+    }
+    expect(glowing).toBe(3 + 1 + 11); // three rails, the nest, eleven heart stages
+  });
+
+  it('glows the heart amber-gold at full chroma, which AgX keeps from white', () => {
+    // The palette's pale core (#ffc36b, saturation 0.58) left AgX near white; blue in a glow whitens first.
+    const stage = placeholderAssets(ctx).heart.root.getObjectByName('heart_stage_03') as Mesh;
+    const srgb = ((stage.material as ShaderMaterial).uniforms['uEmissiveColor']!.value as Color).getHex();
+    const [hue, saturation] = rgbToHsv((srgb >> 16) & 255, (srgb >> 8) & 255, srgb & 255);
+    expect(hue).toBeGreaterThanOrEqual(35);
+    expect(hue).toBeLessThanOrEqual(45);
+    expect(saturation).toBeGreaterThanOrEqual(0.85);
+  });
+});
+
+describe('Style Lab camera layers', () => {
+  // main.ts builds a renderer on load, so its two layer lines are held by their text.
+  const main = readFileSync('src/labs/style/main.ts', 'utf8');
+
+  it('draws the noEdge layer and casts its shadows', () => {
+    // r186's shadow map tests the main camera's layers; the shadow camera's line keeps flowers casting if that changes.
+    expect(main).toMatch(/^\s*camera\.layers\.enable\(LAYERS\.noEdge\);/m);
+    expect(main).toMatch(/^\s*sun\.shadow\.camera\.layers\.enable\(LAYERS\.noEdge\);/m);
+  });
 });
 
 describe('buildStyleScene', () => {
@@ -268,6 +316,23 @@ describe('buildStyleScene', () => {
       const hulls = mesh.children.filter(isHull);
       expect(hulls).toHaveLength(isHull(mesh) || maxInk(mesh) <= 0 ? 0 : 1);
     }
+  });
+
+  it('draws the grass and the flowers on the noEdge layer alone, out of the edge pass, and the flowers keep their hull', () => {
+    // On the world layer the edge pass outlined every grass cone, and the open meadow read as scribble.
+    expect(LAYERS.noEdge).toBe(3);
+    expect(new Set(Object.values(LAYERS)).size).toBe(Object.keys(LAYERS).length);
+    expect([...NO_EDGE_PIECES].sort()).toEqual(['flowers', 'grass_tuft']);
+    const { style } = build();
+    for (const [name] of SCATTER_PLAN) {
+      const instanced = style.root.getObjectByName(`${name}_instances`) as InstancedMesh;
+      // Layer masks, not a test against one layer: noEdge alone, never noEdge and world together.
+      expect(instanced.layers.mask, name).toBe(NO_EDGE_PIECES.includes(name) ? 1 << LAYERS.noEdge : 1 << LAYERS.world);
+      for (const hull of instanced.children.filter(isHull)) expect(hull.layers.mask, `${name} hull`).toBe(1 << LAYERS.hull);
+    }
+    const flowers = style.root.getObjectByName('flowers_instances') as InstancedMesh;
+    expect(flowers.children.filter(isHull)).toHaveLength(1);
+    expect(flowers.castShadow).toBe(true);
   });
 
   it('lays out each lower tier as the first instances of every piece at the high tier', () => {

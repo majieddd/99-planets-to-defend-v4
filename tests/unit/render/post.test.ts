@@ -1,17 +1,20 @@
-import { Color, Matrix4, PerspectiveCamera, Texture, Vector2, Vector3 } from 'three';
+import { Color, DepthTexture, FloatType, Matrix4, PerspectiveCamera, Texture, Vector2, Vector3, WebGLRenderTarget } from 'three';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DIALS, type RenderDials } from '../../../src/render/defaults';
 import { FinishEffect } from '../../../src/render/post/finishEffect';
 import { FogEffect } from '../../../src/render/post/fogEffect';
 import { GradeEffect } from '../../../src/render/post/gradeEffect';
-import { edgeFadeRange, InkEdgeEffect } from '../../../src/render/post/inkEdgeEffect';
+import { COVER_TOLERANCE, edgeFadeRange, InkEdgeEffect } from '../../../src/render/post/inkEdgeEffect';
 import { VERDANT, type Theme } from '../../../src/render/themes';
 
 type Uniforms = Map<string, { value: unknown }>;
 
 const value = (uniforms: Uniforms, name: string): unknown => uniforms.get(name)?.value;
 const hex = (uniforms: Uniforms, name: string): string => (value(uniforms, name) as Color).getHexString();
-const ink = (dials: RenderDials): InkEdgeEffect => new InkEdgeEffect(new PerspectiveCamera(), new Texture(), new Texture(), dials);
+/** The normal pass's target as the pipeline builds it: normals in colour, the edge set's depth in a depth texture. */
+const edgeBuffers = (width = 1920, height = 1080): WebGLRenderTarget =>
+  new WebGLRenderTarget(width, height, { depthTexture: new DepthTexture(width, height, FloatType) });
+const ink = (dials: RenderDials): InkEdgeEffect => new InkEdgeEffect(new PerspectiveCamera(), edgeBuffers(), new Texture(), dials);
 
 describe('ink edge fade range', () => {
   // The two fade sliders overlap and move independently, and a pasted dials link can carry any pair.
@@ -124,7 +127,7 @@ describe('post effect frame state', () => {
 
   it('copies the camera matrices on update', () => {
     const camera = new PerspectiveCamera(50, 16 / 9, 0.1, 2500);
-    const inkEffect = new InkEdgeEffect(camera, new Texture(), new Texture(), DEFAULT_DIALS);
+    const inkEffect = new InkEdgeEffect(camera, edgeBuffers(), new Texture(), DEFAULT_DIALS);
     const fog = new FogEffect(camera, VERDANT, new Vector3(0, 1, 0), DEFAULT_DIALS);
     // The uniforms start as identity, so the camera moves first or a dropped copy would still match it.
     camera.position.set(3, 7, -2);
@@ -139,5 +142,69 @@ describe('post effect frame state', () => {
       expect(matrix(effect.uniforms, 'uProjectionInverse')).toEqual(camera.projectionMatrixInverse.toArray());
       expect(matrix(effect.uniforms, 'uViewInverse')).toEqual(camera.matrixWorld.toArray());
     }
+  });
+});
+
+describe('ink edge buffers', () => {
+  const vector = (uniforms: Uniforms, name: string): number[] => (value(uniforms, name) as Vector2).toArray();
+  // Only the GPU runs the shader, so these hold the lines that carry the behaviour.
+  const shader = ink(DEFAULT_DIALS).getFragmentShader();
+
+  it('reads normals and the edge depth from the normal pass target, and refuses a target without depth', () => {
+    const edges = edgeBuffers();
+    const effect = new InkEdgeEffect(new PerspectiveCamera(), edges, new Texture(), DEFAULT_DIALS);
+    expect(value(effect.uniforms, 'uNormalBuffer')).toBe(edges.texture);
+    expect(value(effect.uniforms, 'uEdgeDepth')).toBe(edges.depthTexture);
+    expect(value(effect.uniforms, 'uCoverTolerance')).toBe(COVER_TOLERANCE);
+    expect(() => new InkEdgeEffect(new PerspectiveCamera(), new WebGLRenderTarget(4, 4), new Texture(), DEFAULT_DIALS)).toThrow(/depth texture/);
+  });
+
+  it('floors its taps at one texel of the edge buffers, which the medium tier draws at 0.75 scale', () => {
+    // 1440 x 810 is the normal pass at 0.75 of 1920 x 1080. Read on update, whichever the composer resizes first.
+    const edges = edgeBuffers(1920, 1080);
+    const effect = new InkEdgeEffect(new PerspectiveCamera(), edges, new Texture(), DEFAULT_DIALS);
+    effect.setSize(1920, 1080);
+    edges.setSize(1440, 810);
+    effect.update();
+    expect(vector(effect.uniforms, 'uEdgeTexel')).toEqual([1 / 1440, 1 / 810]);
+    expect(vector(effect.uniforms, 'uTexel')).toEqual([1 / 1920, 1 / 1080]);
+    expect(shader).toContain('vec2 offset = max(uTexel * uLineWidth * mix(0.6, 1.4, wobble), uEdgeTexel);');
+  });
+
+  it('runs its depth test and distance fade on the edge depth, not on the main depth', () => {
+    // On the main depth, which also holds grass, flowers and hulls, it outlined every grass cone.
+    expect(shader).toContain('return -getViewZ(texture2D(uEdgeDepth, coord).r);');
+    expect(shader).toContain('float edgeDepth = texture2D(uEdgeDepth, uv).r;');
+    expect(shader).toContain('float d = -getViewZ(edgeDepth);');
+    expect(shader).toContain('float fade = 1.0 - smoothstep(uFadeNear, uFadeFar, d);');
+    expect(shader).toContain('smoothstep(uDepthThreshold, uDepthThreshold * 2.0, (farthest - d) / d)');
+    // The main depth reaches the shader only as mainImage's depth argument, for the cover test.
+    expect(shader).not.toContain('readDepth(');
+    expect(shader.match(/getViewZ\(depth\)/g)).toHaveLength(1);
+  });
+
+  it('keeps ink off pixels something outside the edge set covers', () => {
+    expect(shader).toContain('float nearest = min(d, min(min(right, left), min(up, down)));');
+    expect(shader).toContain('float covered = step(-getViewZ(depth), nearest * (1.0 - uCoverTolerance));');
+    expect(shader).toContain('mix(inputColor.rgb, uInkColor, edge * uInkStrength * (1.0 - covered))');
+    // Alpha is the emissive key on its way to the bloom.
+    expect(shader).toContain('inputColor.a);');
+  });
+
+  it('declares every uniform it is given, and nothing else', () => {
+    const declared = [...shader.matchAll(/^\s*uniform\s+\w+\s+(\w+)\s*;/gm)].map((m) => m[1]);
+    expect(declared.sort()).toEqual([...ink(DEFAULT_DIALS).uniforms.keys()].sort());
+  });
+});
+
+describe('fog alpha', () => {
+  it('passes the emissive key in alpha through on every write', () => {
+    // Fog sits between the scene and the bloom, so an opaque write here would hand every pixel the full key and bloom
+    // the whole frame. Only the GPU runs the shader, so this holds each of its writes, the sky's early return included.
+    const shader = new FogEffect(new PerspectiveCamera(), VERDANT, new Vector3(0, 1, 0), DEFAULT_DIALS).getFragmentShader();
+    expect(shader.match(/outputColor = [^;]+;/g)).toEqual([
+      'outputColor = inputColor;',
+      'outputColor = vec4(mix(inputColor.rgb, mix(uFogColor, uFogSunColor, sun), amount), inputColor.a);',
+    ]);
   });
 });
