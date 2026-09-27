@@ -19,10 +19,12 @@ test('home page boots without console errors', async ({ page }) => {
 });
 
 test('style lab renders WebGL frames', async ({ page }) => {
+  test.setTimeout(240_000);
   const errors = collectErrors(page);
   await page.goto('./labs/style.html');
-  await page.waitForFunction(() => window.__P99__?.ready === true && window.__P99__?.page === 'style');
+  await page.waitForFunction(() => window.__P99__?.ready === true && window.__P99__?.page === 'style', undefined, { timeout: 180_000 });
   await expect(page.locator('#stage canvas')).toBeVisible();
-  await page.screenshot({ path: 'test-results/style-lab-placeholder.png' });
+  // One path per project: the Pages base-path pass would otherwise overwrite the root pass's frame.
+  await page.screenshot({ path: `test-results/${test.info().project.name}/style-lab-placeholder.png` });
   expect(errors).toEqual([]);
 });

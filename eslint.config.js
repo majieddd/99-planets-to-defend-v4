@@ -13,7 +13,7 @@ const SIM_GLOBALS = ['window', 'self', 'globalThis', 'global', 'document', 'navi
 
 export default defineConfig([
   {
-    ignores: ['dist/**', 'node_modules/**', 'public/**', 'build/**', 'playwright-report/**', 'test-results/**', 'blender/**'],
+    ignores: ['dist/**', 'dist-pages/**', 'node_modules/**', 'public/**', 'build/**', 'playwright-report/**', 'test-results/**', 'blender/**'],
   },
   js.configs.recommended,
   tseslint.configs.recommended,
