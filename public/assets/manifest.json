@@ -206,6 +206,7 @@
         "bolt_mk1_foot2",
         "bolt_mk1_foot3",
         "bolt_mk1_trim",
+        "bolt_mk1_brow",
         "bolt_mk1_coil0_0",
         "bolt_mk1_coil0_1",
         "bolt_mk1_coil1_0",
@@ -225,14 +226,10 @@
         "bolt_mk2_foot3",
         "bolt_mk2_ring",
         "bolt_mk2_trim",
+        "bolt_mk2_collar",
         "bolt_mk2_armorL",
         "bolt_mk2_armorR",
-        "bolt_mk2_coil0_0",
-        "bolt_mk2_coil0_1",
-        "bolt_mk2_coil0_2",
-        "bolt_mk2_coil1_0",
-        "bolt_mk2_coil1_1",
-        "bolt_mk2_coil1_2",
+        "bolt_mk2_brow",
         "bolt_mk2_critcoil",
         "bolt_mk2_muzzle0",
         "bolt_mk2_muzzle1",
@@ -240,6 +237,8 @@
         "bolt_mk2_rail1",
         "bolt_mk2_railglow0",
         "bolt_mk2_railglow1",
+        "bolt_mk2_shroud",
+        "bolt_mk2_shroudglow",
         "bolt_mk2_pitch",
         "bolt_mk2_yaw",
         "bolt_mk2",
@@ -253,8 +252,10 @@
         "bolt_mk3_foot3",
         "bolt_mk3_ring",
         "bolt_mk3_trim",
+        "bolt_mk3_collar",
         "bolt_mk3_armorL",
         "bolt_mk3_armorR",
+        "bolt_mk3_brow",
         "bolt_mk3_coil0_0",
         "bolt_mk3_coil0_1",
         "bolt_mk3_coil0_2",
@@ -291,7 +292,7 @@
         ""
       ],
       "animations": [],
-      "tris": 4874,
+      "tris": 7378,
       "bones": 0,
       "textures": [
         {
@@ -307,7 +308,7 @@
       ],
       "hasInk": true,
       "doubleSided": false,
-      "bytes": 204292
+      "bytes": 346220
     },
     {
       "name": "husk",
