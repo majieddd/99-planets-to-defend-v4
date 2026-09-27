@@ -10,23 +10,23 @@ from . import ink, scene
 
 HUMANOID_LEFT = [
     ('root', (0, 0, 0), (0, 0, 0.3), None),
-    ('hips', (0, 0, 1.00), (0, 0, 1.12), 'root'),
-    ('spine', (0, 0, 1.12), (0, 0, 1.30), 'hips'),
-    ('chest', (0, 0, 1.30), (0, 0, 1.52), 'spine'),
-    ('neck', (0, 0, 1.52), (0, 0, 1.62), 'chest'),
-    ('head', (0, 0, 1.62), (0, 0, 1.92), 'neck'),
-    ('shoulder.L', (0.06, 0, 1.47), (0.21, 0, 1.47), 'chest'),
-    ('upper_arm.L', (0.23, 0, 1.46), (0.30, 0, 1.20), 'shoulder.L'),
-    ('forearm.L', (0.30, 0, 1.20), (0.34, -0.03, 0.96), 'upper_arm.L'),
-    ('hand.L', (0.34, -0.03, 0.96), (0.35, -0.05, 0.85), 'forearm.L'),
-    ('socket.L', (0.36, -0.06, 1.05), (0.36, -0.20, 1.05), 'forearm.L'),  # shield mount on the forearm
-    ('thigh.L', (0.11, 0, 1.00), (0.12, 0, 0.56), 'hips'),
-    ('shin.L', (0.12, 0, 0.56), (0.12, 0.03, 0.11), 'thigh.L'),
-    ('foot.L', (0.12, 0.03, 0.11), (0.12, -0.13, 0.03), 'shin.L'),
+    ('hips', (0, 0, 1.06), (0, 0, 1.16), 'root'),
+    ('spine', (0, 0, 1.16), (0, 0, 1.35), 'hips'),
+    ('chest', (0, 0, 1.35), (0, 0, 1.58), 'spine'),
+    ('neck', (0, 0, 1.58), (0, 0, 1.67), 'chest'),
+    ('head', (0, 0, 1.67), (0, 0, 1.93), 'neck'),
+    ('shoulder.L', (0.06, 0, 1.53), (0.22, 0, 1.53), 'chest'),
+    ('upper_arm.L', (0.25, 0, 1.51), (0.31, 0.01, 1.22), 'shoulder.L'),
+    ('forearm.L', (0.31, 0.01, 1.22), (0.35, -0.03, 0.97), 'upper_arm.L'),
+    ('hand.L', (0.35, -0.03, 0.97), (0.36, -0.05, 0.85), 'forearm.L'),
+    ('socket.L', (0.37, -0.06, 1.08), (0.37, -0.20, 1.08), 'forearm.L'),  # shield mount on the forearm
+    ('thigh.L', (0.12, 0, 1.06), (0.13, 0, 0.58), 'hips'),
+    ('shin.L', (0.13, 0, 0.58), (0.13, 0.03, 0.10), 'thigh.L'),
+    ('foot.L', (0.13, 0.03, 0.10), (0.13, -0.15, 0.03), 'shin.L'),
 ]
 
 # socket.R sits in the right hand at the sword grip; replace the mirrored one after mirroring.
-HUMANOID_SOCKET_R = ('socket.R', (-0.35, -0.05, 0.88), (-0.35, -0.20, 0.88), 'hand.R')
+HUMANOID_SOCKET_R = ('socket.R', (-0.36, -0.05, 0.90), (-0.36, -0.20, 0.90), 'hand.R')
 
 CREATURE_LEFT = [
     ('root', (0, 0, 0), (0, 0, 0.3), None),
