@@ -215,7 +215,7 @@ describe('placeholderAssets', () => {
     expect([inked, bare]).toEqual([34, 1]);
   });
 
-  it('roots every stand-in at its ground contact point, the turret marks as empties, with the parts above seated on their bases', () => {
+  it('roots each stand-in placed one by one at its ground contact point, the turret marks as empties, with the parts above seated on their bases', () => {
     const assets = placeholderAssets(ctx);
     const box = (root: Object3D, name: string) => {
       root.updateMatrixWorld(true);
@@ -224,8 +224,10 @@ describe('placeholderAssets', () => {
       return mesh.geometry.boundingBox!.clone().applyMatrix4(mesh.matrixWorld);
     };
     // Geometry positions are float32, so these hold to about 1e-8 m.
-    // M0c's ground rule for everything the scene places: the lowest point on the root, neither over the ground nor
-    // under it. The Husk's ball once floated 0.2 m, and the nest's ball reached 1.4 m underground.
+    // The assets the scene places one by one (Bulwark, the Husk, the nest, the heart and the three turret marks) each
+    // keep M0c's ground rule with no sink: the lowest point on the root, neither over the ground nor under it. The
+    // Husk's ball once floated 0.2 m, and the nest's ball reached 1.4 m underground. The check leaves out the kit,
+    // which the scene scatters, and M0c's rule itself allows a declared sink, such as the real nest's 0.123 m.
     const placed: [string, Object3D][] = [
       ['bulwark', assets.bulwark.root],
       ['husk', assets.husk.root],
@@ -233,12 +235,16 @@ describe('placeholderAssets', () => {
       ['heart', assets.heart.root],
       ...[1, 2, 3].map((level): [string, Object3D] => [`bolt_mk${level}`, assets.bolt.root.getObjectByName(`bolt_mk${level}`) as Object3D]),
     ];
-    for (const [name, root] of placed) expect(new Box3().setFromObject(root).min.y, name).toBeCloseTo(0, 6);
+    // Precise, from the vertices: by default each part adds its local bounding box after its transform, which is exact
+    // only while no part is rotated within its root.
+    for (const [name, root] of placed) expect(new Box3().setFromObject(root, true).min.y, name).toBeCloseTo(0, 6);
     for (const level of [1, 2, 3]) {
       // M0c's tree: the mark is an empty at the asset origin, which is its ground contact point, with the base, the
-      // yaw ring and the pitch head hung under it in that order. The scene aims each head in its parent's frame.
+      // yaw ring and the pitch head hung under it in that order. The scene aims each head in its parent's frame. An
+      // empty is a node with no mesh, so the check is on that property, not on a class: the GLB's bolt_mkN loads as a
+      // plain Object3D and the stand-in's is a Group.
       const mark = assets.bolt.root.getObjectByName(`bolt_mk${level}`) as Object3D;
-      expect(mark.type).toBe('Group');
+      expect((mark as Mesh).isMesh).toBeUndefined();
       expect([...mark.position.toArray(), ...mark.quaternion.toArray()]).toEqual([0, 0, 0, 0, 0, 0, 1]);
       const parents = ['_base', '_yaw', '_pitch'].map((suffix) => assets.bolt.root.getObjectByName(`bolt_mk${level}${suffix}`)?.parent?.name);
       expect(parents).toEqual(['', '_base', '_yaw'].map((suffix) => `bolt_mk${level}${suffix}`));
@@ -443,14 +449,20 @@ describe('buildStyleScene', () => {
       const ground = patch.surfaceAt(Math.cos(angle) * TURRET_RING_RADIUS, Math.sin(angle) * TURRET_RING_RADIUS);
       expect(worldPosition(mark).distanceTo(ground.position)).toBeLessThan(1e-9);
       // Its up lies half way from the planet's up to the ground's normal, and it faces out from the heart. The heading
-      // is read across the ground because the 3.7 to 3.9 degree tilt moves the facing's bearing only at second order
-      // (measured 0.002 degrees at most), where a turn away from the ring's bearing would move it one for one.
+      // is read across the ground, where a turn away from the ring's bearing moves it one for one and the tilt only at
+      // second order: place() yaws the mark level and then tilts it by the angle t between its up and the pole's,
+      // which turns the facing's bearing by pi / 2 - 2 atan(sqrt(cos t)) at most, about t squared over 4. That is
+      // 0.058 to 0.066 degrees at these marks' 3.65 to 3.88 degree tilts. Measured 0.002 degrees at most, because each
+      // mark leans within a degree of its facing, but the bound holds whichever way the ground leans.
       const up = new Vector3(0, 1, 0).applyQuaternion(worldQuaternion(mark));
       expect(up.distanceTo(ground.up.clone().lerp(ground.normal, 0.5).normalize())).toBeLessThan(1e-9);
+      const tilt = up.angleTo(new Vector3(0, 1, 0));
       const bearing = Math.atan2(facing(mark).z, facing(mark).x) - angle;
-      expect(Math.abs(Math.atan2(Math.sin(bearing), Math.cos(bearing)))).toBeLessThan((0.05 * Math.PI) / 180);
+      const error = Math.abs(Math.atan2(Math.sin(bearing), Math.cos(bearing)));
+      expect(error).toBeLessThanOrEqual(Math.PI / 2 - 2 * Math.atan(Math.sqrt(Math.cos(tilt))) + 1e-12);
       // The base's bottom centre is on the ground point, not half the base below it, and the pivots stand where the
-      // old site groups held them: the yaw ring's centre 0.1 m over the base's top and the pitch pivot 0.35 m over it.
+      // old site groups held them: the yaw ring's centre 0.1 m over the base's top, and the pitch pivot 0.35 m over
+      // the yaw ring's centre, which is 0.45 m over the base's top.
       const baseHeight = 0.35 + 0.12 * index;
       const over = (height: number) => ground.position.clone().addScaledVector(up, height);
       const base = mark.getObjectByName(`bolt_mk${level}_base`) as Object3D;

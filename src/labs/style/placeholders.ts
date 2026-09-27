@@ -33,8 +33,10 @@ function asset(root: Group, ctx: MaterialContext, blend: number): LoadedAsset {
 
 /**
  * Stand-ins that carry the node names the style scene looks up, so the lab runs before M0c's assets exist and
- * switches to them without code changes. Where the scene drives or places a node, the stand-in also puts its pivot
- * where M0c's recipe does.
+ * switches to them without code changes. Where the scene drives or places a node, the stand-in keeps M0c's node tree,
+ * the same names under the same parents, so the scene places and aims both the same way. The heights are the
+ * stand-in's own: mark I's yaw and pitch pivots stand 0.45 and 0.80 m up here, and 0.37 and 0.62 m on M0c's Bolt
+ * Sentinel.
  */
 export function placeholderAssets(ctx: MaterialContext) {
   const bulwark = new Group();
@@ -43,9 +45,9 @@ export function placeholderAssets(ctx: MaterialContext) {
   bulwark.add(bulwarkBody);
   const husk = new Group();
   const huskBody = part('husk', new IcosahedronGeometry(0.6, 1), '#3a2c52', '#000000');
-  // The ball rests on the ground, as M0c's ground rule stands every asset the scene places. Centred 0.8 m up, it
-  // floated 0.2 m over the grass, its shadow apart from it in the strategic frame. The turrets still aim 0.8 m up the
-  // Husk, which is inside the ball.
+  // The ball rests on the ground, its lowest point on the root, as M0c's ground rule stands the Husk: at its ground
+  // contact point, with no sink. Centred 0.8 m up, it floated 0.2 m over the grass, its shadow apart from it in the
+  // strategic frame. The turrets still aim 0.8 m up the Husk, which is inside the ball.
   huskBody.position.y = 0.6;
   husk.add(huskBody);
   const bolt = new Group();
@@ -89,10 +91,11 @@ export function placeholderAssets(ctx: MaterialContext) {
   }
   const nest = new Group();
   // The mound is a dome standing on the ground. It was a whole ball centred on the root, which looked the same above
-  // the grass but put its lowest point 1.4 m underground, where M0c's nest beds its spikes 0.12 m at most. Unindexed,
-  // each facet keeps its own normal, so the dome shades faceted like the ball did.
-  const dome = new SphereGeometry(1.4, 10, 4, 0, Math.PI * 2, 0, Math.PI / 2).toNonIndexed();
-  dome.computeVertexNormals();
+  // the grass but put its lowest point 1.4 m underground, where M0c's nest beds its spikes about 0.12 m deep. The
+  // sphere's own normals light it as one broad dome, as the ball did (IcosahedronGeometry at detail 1 takes the
+  // sphere's normals) and as M0c's mound does under a faceted silhouette. Unindexed with its normals recomputed, the
+  // dome lit as 40 flat facets instead.
+  const dome = new SphereGeometry(1.4, 10, 4, 0, Math.PI * 2, 0, Math.PI / 2);
   nest.add(part('nest', dome, '#241a38', '#ff3fa6'));
   const kit = new Group();
   const pieces: [string, BufferGeometry, string, number][] = [
