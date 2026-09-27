@@ -83,6 +83,12 @@ describe('attachHull', () => {
     expect(uniforms.uInkWidthPx.value).toBe(3);
     expect(uniforms.uInkColor.value.getHexString()).toBe('102030');
   });
+
+  it('writes an emissive key of 0, so the bloom never reads ink as energy', () => {
+    // Alpha carries the key from the scene to the bloom, and an opaque ShaderMaterial writes it unblended.
+    expect(material.fragmentShader).toContain('gl_FragColor = vec4(uInkColor, 0.0);');
+    expect(material.transparent).toBe(false);
+  });
 });
 
 describe('tierForGpu', () => {

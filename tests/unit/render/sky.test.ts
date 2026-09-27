@@ -69,4 +69,11 @@ describe('createPaintedSky', () => {
     expect(fragmentShader).toContain('float h = s * uDipCos + sqrt(max(1.0 - s * s, 0.0)) * uDipSin;');
     expect(fragmentShader).toContain('mix(uHorizon, uGround, pow(-h, 0.35) * uGroundMix)');
   });
+
+  it('writes an emissive key of 0, so the bloom never reads the sky, sun disc included, as energy', () => {
+    const material = createPaintedSky(VERDANT, new Texture(), sun).mesh.material as ShaderMaterial;
+    expect(material.fragmentShader).toContain('gl_FragColor = vec4(color, 0.0);');
+    expect(material.fragmentShader).not.toContain('vec4(color, 1.0)');
+    expect(material.transparent).toBe(false);
+  });
 });

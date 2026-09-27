@@ -1,5 +1,12 @@
 import type { Theme } from '../../render/themes';
 
+/**
+ * Below 768 px the dials panel and the board opened over most of the canvas (82 percent of it at 313 px, with the
+ * board cut off), so on these screens both start closed behind short labels. style.css repeats this query for the
+ * phone layout; change the two together.
+ */
+export const NARROW_SCREEN = '(max-width: 767px)';
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (text) node.textContent = text;
@@ -16,15 +23,30 @@ function list(items: string[]): HTMLUListElement {
 /** The board describes the references in words and swatches; it carries no copied imagery. */
 export function mountReferenceBoard(host: HTMLElement, theme: Theme): void {
   host.replaceChildren();
-  const toggle = el('button', 'Reference board', 'board-toggle');
+  const narrow = matchMedia(NARROW_SCREEN);
+  const toggle = el('button', undefined, 'board-toggle');
   toggle.type = 'button';
-  toggle.setAttribute('aria-expanded', 'true');
+  // As with the dials, the label follows a later width change and the open or closed state stays the viewer's.
+  const label = (): void => {
+    toggle.textContent = narrow.matches ? 'Board' : 'Reference board';
+  };
+  label();
+  narrow.addEventListener('change', label);
   const body = el('div', undefined, 'board-body');
-  toggle.addEventListener('click', () => {
-    const open = body.hidden;
+  // The class lets the phone layout shrink a closed board to its toggle, which a hidden body alone does not: the box
+  // kept its full width. One function sets all three so the class cannot disagree with aria-expanded.
+  let open = !narrow.matches;
+  const setOpen = (next: boolean): void => {
+    open = next;
     body.hidden = !open;
     toggle.setAttribute('aria-expanded', String(open));
-  });
+    host.classList.toggle('board-closed', !open);
+  };
+  setOpen(open);
+  toggle.addEventListener('click', () => setOpen(!open));
+  // iOS Safari applies :active during a touch only when a touch listener sits on the element or an ancestor, so without
+  // one the phone layout's press feedback never showed on an iPhone. lil-gui adds the same empty listener to its title.
+  toggle.addEventListener('touchstart', () => {}, { passive: true });
   body.append(
     el('h2', 'What we are matching'),
     list([

@@ -85,6 +85,31 @@ export function applyPaintDials(u: PaintUniforms, dials: RenderDials, theme: The
   u.uStandardBlendScale.value = dials.standardBlend / AUTHORED_CHARACTER_BLEND;
 }
 
+/**
+ * The emissive key rides in the output alpha as key / EMISSIVE_KEY_RANGE, where the key is the brightest channel of
+ * the surface's emissive light before the cap below (0 for anything that does not emit). The key stays uncapped so the
+ * bloomThreshold dial keeps its whole range. postprocessing's EffectPass clamps alpha to [0, 1] at the end of every
+ * pass (effect.frag), so a raw HDR key would reach the bloom as at most 1, under the default threshold plus its
+ * smoothing, and nothing would glow. 4 holds every threshold the dial allows (up to 3, plus 0.25 of smoothing) and M0c's
+ * energy, which is authored at emissive strength 4.
+ */
+export const EMISSIVE_KEY_RANGE = 4;
+
+/**
+ * The brightest channel an emissive surface may add to its lit colour, chosen on the hero frame. AgX walks bright energy
+ * toward white: uncapped, the stand-in heart (the palette's pale core at the placeholders' intensity 3) left the tone
+ * mapper at (238, 216, 184), a saturation of 0.23. Scaling all three channels by one factor keeps the hue. With the
+ * heart's amber-gold glow the crystal's median saturation measured 0.44 at a cap of 1.5, 0.47 at 1.25 and 0.51 at 1.0.
+ * 1.25 is the brightest cap that clears 0.45, and there the magenta nest and the cyan rails keep their hues (330 and 170
+ * degrees, from 337 and 176 uncapped).
+ */
+export const EMISSIVE_PEAK = 1.25;
+
+/** GLSL ES 3.0 has no implicit int to float conversion, so a whole number must still reach the shader as 4.0. */
+function glslFloat(value: number): string {
+  return Number.isInteger(value) ? value.toFixed(1) : String(value);
+}
+
 export interface PaintedOptions {
   map?: Texture | null;
   emissiveMap?: Texture | null;
@@ -265,11 +290,17 @@ void main() {
   #endif
 
   #ifdef USE_PAINT_EMISSIVE
-    color += texture2D(uEmissiveMap, vUv).rgb * uEmissiveColor * uEmissiveIntensity;
+    vec3 emissive = texture2D(uEmissiveMap, vUv).rgb * uEmissiveColor * uEmissiveIntensity;
   #else
-    color += uEmissiveColor * uEmissiveIntensity;
+    vec3 emissive = uEmissiveColor * uEmissiveIntensity;
   #endif
-  gl_FragColor = vec4(color, 1.0);
+  // Decided per pixel, because a real asset's gunmetal and its cyan channels share one mesh and one atlas.
+  float emissiveKey = max(emissive.r, max(emissive.g, emissive.b));
+  // One factor on all three channels stops the peak at EMISSIVE_PEAK and keeps the hue (see EMISSIVE_PEAK).
+  color += emissive * min(1.0, EMISSIVE_PEAK / max(emissiveKey, 1e-4));
+  // The bloom keys on this alpha, not on luminance. Keyed on Rec.709 luminance, magenta (about 0.83 at intensity 3)
+  // never glowed while cyan (about 2.2) did, and a lower threshold would have bloomed lit white (up to 1.08 with rim).
+  gl_FragColor = vec4(color, emissiveKey / EMISSIVE_KEY_RANGE);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
@@ -277,7 +308,10 @@ void main() {
 
 /** Cloning (ShaderMaterial.clone) clones the uniforms, detaching the copy from the shared dials; call this instead. */
 export function createPaintedMaterial(shared: PaintUniforms, options: PaintedOptions): ShaderMaterial {
-  const defines: Record<string, string> = {};
+  const defines: Record<string, string> = {
+    EMISSIVE_PEAK: glslFloat(EMISSIVE_PEAK),
+    EMISSIVE_KEY_RANGE: glslFloat(EMISSIVE_KEY_RANGE),
+  };
   if (options.map) defines['USE_PAINT_MAP'] = '';
   if (options.emissiveMap) defines['USE_PAINT_EMISSIVE'] = '';
   if (options.terrain) defines['PAINT_TERRAIN'] = '';

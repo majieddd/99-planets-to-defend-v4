@@ -56,3 +56,27 @@ test('the style lab renders every preset and passes its colour audit', async ({ 
   expect(mutation.rejected, line).toBe(true);
   expect(errors).toEqual([]);
 });
+
+// Every other browser test runs the low tier (forced, or SwiftShader detected as low), and the low tier has no edge
+// pass, so a GLSL error in the edge ink or in the normal pass's depth target passed CI unseen. three reports shader
+// compile and link errors through console.error when a program is first used, and ready comes after the third frame,
+// by which time every pass has drawn.
+test('the style lab draws the medium tier, edge ink included, without a console error', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  page.on('pageerror', (error) => errors.push(String(error)));
+  const started = Date.now();
+  await page.goto('./labs/style.html?tier=medium');
+  await page.waitForFunction(() => window.__P99__?.ready === true, undefined, { timeout: 180_000 });
+  // The query sets the tier past detection. A lab that fell back to low would pass here with no edge pass to compile.
+  const tier = await page.evaluate(() => window.__P99__?.['tier']);
+  const line =
+    `style lab medium tier [${test.info().project.name}]: tier ${String(tier)}, ` +
+    `ready in ${((Date.now() - started) / 1000).toFixed(1)} s, ${errors.length} console errors`;
+  console.log(line);
+  expect(tier, line).toBe('medium');
+  expect(errors, line).toEqual([]);
+});
