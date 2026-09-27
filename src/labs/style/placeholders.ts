@@ -9,6 +9,7 @@ import {
   IcosahedronGeometry,
   Mesh,
   MeshStandardMaterial,
+  SphereGeometry,
   type BufferGeometry,
 } from 'three';
 import { paintAndInk, type LoadedAsset, type MaterialContext } from '../../render/assets/loadAsset';
@@ -42,14 +43,22 @@ export function placeholderAssets(ctx: MaterialContext) {
   bulwark.add(bulwarkBody);
   const husk = new Group();
   const huskBody = part('husk', new IcosahedronGeometry(0.6, 1), '#3a2c52', '#000000');
-  huskBody.position.y = 0.8;
+  // The ball rests on the ground, as M0c's ground rule stands every asset the scene places. Centred 0.8 m up, it
+  // floated 0.2 m over the grass, its shadow apart from it in the strategic frame. The turrets still aim 0.8 m up the
+  // Husk, which is inside the ball.
+  huskBody.position.y = 0.6;
   husk.add(huskBody);
   const bolt = new Group();
   for (const level of [1, 2, 3]) {
     const baseHeight = 0.35 + 0.12 * (level - 1);
-    const base = part(`bolt_mk${level}`, new CylinderGeometry(0.7, 0.78, baseHeight, 8), '#3d4757');
-    // M0c's Bolt Sentinel (blender/recipes/bolt_sentinel.py) puts the base node half the base's height above the
-    // asset origin, so the base stands on the ground rather than half buried, and seats the yaw ring on its top.
+    // M0c's Bolt Sentinel (blender/recipes/bolt_sentinel.py) roots each mark at its ground contact point: bolt_mkN is an
+    // empty at the asset origin, and the plinth under it, bolt_mkN_base, has its node half the base's height up, so the
+    // scene places the mark on the ground as it does any other asset and the base stands there. The yaw ring sits on
+    // the base's top. The stand-in keeps the asset's tree (mark, base, yaw, pitch), so the scene places and aims both
+    // the same way.
+    const mark = new Group();
+    mark.name = `bolt_mk${level}`;
+    const base = part(`bolt_mk${level}_base`, new CylinderGeometry(0.7, 0.78, baseHeight, 8), '#3d4757');
     base.position.y = baseHeight / 2;
     const yaw = part(`bolt_mk${level}_yaw`, new CylinderGeometry(0.5, 0.5, 0.2, 12), '#566276');
     yaw.position.y = baseHeight / 2 + 0.1;
@@ -60,7 +69,8 @@ export function placeholderAssets(ctx: MaterialContext) {
     pitch.add(rail);
     yaw.add(pitch);
     base.add(yaw);
-    bolt.add(base);
+    mark.add(base);
+    bolt.add(mark);
   }
   const heart = new Group();
   const plinth = part('heart_plinth', new CylinderGeometry(1.05, 1.2, 0.4, 8), '#9c8a74');
@@ -78,7 +88,12 @@ export function placeholderAssets(ctx: MaterialContext) {
     heart.add(stage);
   }
   const nest = new Group();
-  nest.add(part('nest', new IcosahedronGeometry(1.4, 1), '#241a38', '#ff3fa6'));
+  // The mound is a dome standing on the ground. It was a whole ball centred on the root, which looked the same above
+  // the grass but put its lowest point 1.4 m underground, where M0c's nest beds its spikes 0.12 m at most. Unindexed,
+  // each facet keeps its own normal, so the dome shades faceted like the ball did.
+  const dome = new SphereGeometry(1.4, 10, 4, 0, Math.PI * 2, 0, Math.PI / 2).toNonIndexed();
+  dome.computeVertexNormals();
+  nest.add(part('nest', dome, '#241a38', '#ff3fa6'));
   const kit = new Group();
   const pieces: [string, BufferGeometry, string, number][] = [
     ['rock_a', new IcosahedronGeometry(0.8, 0), '#8a8378', 1.1],

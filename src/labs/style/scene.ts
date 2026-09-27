@@ -183,14 +183,12 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
     const mark = assets.bolt.root.getObjectByName(`bolt_mk${level}`);
     if (!mark) return;
     const angle = (degrees * Math.PI) / 180;
-    // The site stands on the ground and the mark keeps its authored offset from the asset origin inside it, because
-    // M0c's base node sits half the base's height up; placing the mark itself would overwrite that offset and sink
-    // half the base into the ground.
-    const site = new Group();
-    site.name = `bolt_mk${level}_site`;
-    place(site, patch, Math.cos(angle) * TURRET_RING_RADIUS, Math.sin(angle) * TURRET_RING_RADIUS, -angle + Math.PI / 2, 0.5);
-    site.add(mark);
-    root.add(site);
+    // M0c roots every placeable asset at its ground contact point (npm run assets:check holds it to 5 mm), so the mark
+    // is placed like every other asset, with its plinth, bolt_mkN_base, standing on it. The marks were once rooted at
+    // mid-plinth and stood inside site groups that kept that offset; on today's roots a site would add nothing, and an
+    // offset kept for one asset would hide the next asset that broke the contract instead of showing it.
+    place(mark, patch, Math.cos(angle) * TURRET_RING_RADIUS, Math.sin(angle) * TURRET_RING_RADIUS, -angle + Math.PI / 2, 0.5);
+    root.add(mark);
     const yaw = mark.getObjectByName(`bolt_mk${level}_yaw`);
     const pitch = mark.getObjectByName(`bolt_mk${level}_pitch`);
     if (yaw && pitch) turrets.push({ yaw, pitch });

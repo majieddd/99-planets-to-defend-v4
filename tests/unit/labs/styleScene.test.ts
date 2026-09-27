@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import {
   AnimationClip,
+  Box3,
   Color,
   InstancedMesh,
   Line3,
@@ -214,7 +215,7 @@ describe('placeholderAssets', () => {
     expect([inked, bare]).toEqual([34, 1]);
   });
 
-  it('stands the turret bases and the heart plinth on the ground, with the parts above seated on them', () => {
+  it('roots every stand-in at its ground contact point, the turret marks as empties, with the parts above seated on their bases', () => {
     const assets = placeholderAssets(ctx);
     const box = (root: Object3D, name: string) => {
       root.updateMatrixWorld(true);
@@ -223,8 +224,25 @@ describe('placeholderAssets', () => {
       return mesh.geometry.boundingBox!.clone().applyMatrix4(mesh.matrixWorld);
     };
     // Geometry positions are float32, so these hold to about 1e-8 m.
+    // M0c's ground rule for everything the scene places: the lowest point on the root, neither over the ground nor
+    // under it. The Husk's ball once floated 0.2 m, and the nest's ball reached 1.4 m underground.
+    const placed: [string, Object3D][] = [
+      ['bulwark', assets.bulwark.root],
+      ['husk', assets.husk.root],
+      ['nest', assets.nest.root],
+      ['heart', assets.heart.root],
+      ...[1, 2, 3].map((level): [string, Object3D] => [`bolt_mk${level}`, assets.bolt.root.getObjectByName(`bolt_mk${level}`) as Object3D]),
+    ];
+    for (const [name, root] of placed) expect(new Box3().setFromObject(root).min.y, name).toBeCloseTo(0, 6);
     for (const level of [1, 2, 3]) {
-      const base = box(assets.bolt.root, `bolt_mk${level}`);
+      // M0c's tree: the mark is an empty at the asset origin, which is its ground contact point, with the base, the
+      // yaw ring and the pitch head hung under it in that order. The scene aims each head in its parent's frame.
+      const mark = assets.bolt.root.getObjectByName(`bolt_mk${level}`) as Object3D;
+      expect(mark.type).toBe('Group');
+      expect([...mark.position.toArray(), ...mark.quaternion.toArray()]).toEqual([0, 0, 0, 0, 0, 0, 1]);
+      const parents = ['_base', '_yaw', '_pitch'].map((suffix) => assets.bolt.root.getObjectByName(`bolt_mk${level}${suffix}`)?.parent?.name);
+      expect(parents).toEqual(['', '_base', '_yaw'].map((suffix) => `bolt_mk${level}${suffix}`));
+      const base = box(assets.bolt.root, `bolt_mk${level}_base`);
       expect(base.min.y).toBeCloseTo(0, 6);
       expect(box(assets.bolt.root, `bolt_mk${level}_yaw`).min.y).toBeCloseTo(base.max.y, 6);
     }
@@ -414,19 +432,31 @@ describe('buildStyleScene', () => {
     expect(visible()).toEqual(Array.from({ length: 11 }, (_, level) => level === 7));
   });
 
-  it('stands each turret on a site on the ground, keeping the mark at its authored height inside it', () => {
+  it('places each turret mark on the ring at its ground contact point, its base on the ground and its pivots above', () => {
     const { style } = build();
     TURRET_ANGLES_DEG.forEach((degrees, index) => {
       const level = index + 1;
       const angle = (degrees * Math.PI) / 180;
-      const site = style.root.getObjectByName(`bolt_mk${level}_site`) as Object3D;
       const mark = style.root.getObjectByName(`bolt_mk${level}`) as Object3D;
-      expect(mark.parent).toBe(site);
-      const ground = patch.surfaceAt(Math.cos(angle) * TURRET_RING_RADIUS, Math.sin(angle) * TURRET_RING_RADIUS).position;
-      expect(site.position.distanceTo(ground)).toBeLessThan(1e-9);
-      // The base's bottom centre is on the ground under the site, not half the base below it.
+      // Nothing stands between the mark and the scene: place() alone sets it on the ground, as it does every asset.
+      expect(mark.parent).toBe(style.root);
+      const ground = patch.surfaceAt(Math.cos(angle) * TURRET_RING_RADIUS, Math.sin(angle) * TURRET_RING_RADIUS);
+      expect(worldPosition(mark).distanceTo(ground.position)).toBeLessThan(1e-9);
+      // Its up lies half way from the planet's up to the ground's normal, and it faces out from the heart. The heading
+      // is read across the ground because the 3.7 to 3.9 degree tilt moves the facing's bearing only at second order
+      // (measured 0.002 degrees at most), where a turn away from the ring's bearing would move it one for one.
+      const up = new Vector3(0, 1, 0).applyQuaternion(worldQuaternion(mark));
+      expect(up.distanceTo(ground.up.clone().lerp(ground.normal, 0.5).normalize())).toBeLessThan(1e-9);
+      const bearing = Math.atan2(facing(mark).z, facing(mark).x) - angle;
+      expect(Math.abs(Math.atan2(Math.sin(bearing), Math.cos(bearing)))).toBeLessThan((0.05 * Math.PI) / 180);
+      // The base's bottom centre is on the ground point, not half the base below it, and the pivots stand where the
+      // old site groups held them: the yaw ring's centre 0.1 m over the base's top and the pitch pivot 0.35 m over it.
       const baseHeight = 0.35 + 0.12 * index;
-      expect(mark.localToWorld(new Vector3(0, -baseHeight / 2, 0)).distanceTo(site.position)).toBeLessThan(1e-9);
+      const over = (height: number) => ground.position.clone().addScaledVector(up, height);
+      const base = mark.getObjectByName(`bolt_mk${level}_base`) as Object3D;
+      expect(base.localToWorld(new Vector3(0, -baseHeight / 2, 0)).distanceTo(ground.position)).toBeLessThan(1e-9);
+      expect(worldPosition(mark.getObjectByName(`bolt_mk${level}_yaw`) as Object3D).distanceTo(over(baseHeight + 0.1))).toBeLessThan(1e-9);
+      expect(worldPosition(mark.getObjectByName(`bolt_mk${level}_pitch`) as Object3D).distanceTo(over(baseHeight + 0.45))).toBeLessThan(1e-9);
     });
   });
 
@@ -507,7 +537,7 @@ describe('buildStyleScene', () => {
 
   it("stops the Husk for its attack clip's length when it has one", () => {
     const assets = placeholderAssets(ctx);
-    const hold = (duration: number) => new NumberKeyframeTrack('husk.position[y]', [0, duration], [0.8, 0.8]);
+    const hold = (duration: number) => new NumberKeyframeTrack('husk.position[y]', [0, duration], [0.6, 0.6]);
     const clips = [new AnimationClip('walk', 1, [hold(1)]), new AnimationClip('attack', 2.2, [hold(2.2)])];
     const { style } = build({ ...assets, husk: { root: assets.husk.root, animations: clips } });
     const pauses = huskPauses(style, assets.husk.root, 18);
