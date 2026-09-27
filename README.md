@@ -10,11 +10,12 @@ everything.*
 
 ## Status
 
-Design phase. The approved design, and the running document for the whole build, is
-[docs/blueprint.md](docs/blueprint.md). There is no code yet.
+Foundations are in place: the toolchain, checks, CI and a placeholder site. The approved design, and
+the running document for the whole build, is [docs/blueprint.md](docs/blueprint.md). There is no game
+code yet.
 
-When the first milestone ships, the game will be playable at
-https://majieddd.github.io/99-planets-to-defend-v4/.
+The site is live at https://majieddd.github.io/99-planets-to-defend-v4/; the game becomes playable
+there as the milestones ship.
 
 ## What this is
 

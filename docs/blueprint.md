@@ -1,7 +1,8 @@
 # 99 Planets To Defend (v4): game blueprint
 
-Status: design approved in brainstorming on 2026-09-23. No code yet. This file is both the approved
-spec and the running design document for the whole game. Check it before any build:
+Status: design approved in brainstorming on 2026-09-23. The M0a toolchain, checks, CI and Pages site
+and the M0b simulation kernel exist; no game systems yet. This file is both the approved spec and
+the running design document for the whole game. Check it before any build:
 
 ```bash
 node "<aegis-suite>/tools/blueprint.js" check docs/blueprint.md --gate
@@ -1188,9 +1189,9 @@ The order of construction:
 
 | Decision | Status | Evidence |
 |---|---|---|
-| Browser game: TypeScript, Three.js on WebGL2, Vite, GitHub Pages | not yet | owner choice, 2026-09-23 |
+| Browser game: TypeScript, Three.js on WebGL2, Vite, GitHub Pages | partial | toolchain, CI and Pages live (docs/evidence/m0/pages-placeholder.png); no game yet |
 | Repository majieddd/99-planets-to-defend-v4, public | partial | repository created holding this blueprint, 2026-09-23 |
-| Approach A: painted assets, shader lighting, two-pass ink | not yet | owner choice, 2026-09-23 |
+| Approach A: painted assets, shader lighting, two-pass ink | partial | renderer v1 and the Style Lab run on placeholders (docs/evidence/m0/style-placeholder-*.png); the owner style gate waits for M0c's assets |
 | Every asset built by script in Blender 5.2.1 | not yet | owner requirement, 2026-09-23 |
 | Stylized, visored commanders | not yet | owner choice, 2026-09-23 |
 | Every v3 system returns, staged by milestone for quality | not yet | owner choice, 2026-09-23 |
@@ -1224,29 +1225,40 @@ The order of construction:
 ## Task list
 
 - [x] Owner reviewed this blueprint and settled the eight additions (2026-09-23)
-- [ ] Write the M0 implementation plan (writing-plans), then dispatch through the Chief Orchestrator
-- [ ] Toolchain: Vite, strict TypeScript, Three.js, Vitest, Playwright, ESLint with the simulation
+- [x] Write the M0 implementation plan (writing-plans), then dispatch through the Chief Orchestrator
+- [x] Toolchain: Vite, strict TypeScript, Three.js, Vitest, Playwright, ESLint with the simulation
       boundary rule, an em dash check covering all four forms
-- [ ] CI workflow and the GitHub Pages deploy
+- [x] CI workflow and the GitHub Pages deploy
 - [ ] Blender pipeline: headless runner, shared libraries (paint bake, rig, animate, export),
       manifest, turntable sheets, asset checks
-- [ ] Renderer v1: painted lighting material, hull ink, screen-space edge ink, fog and sky, bloom and
+- [x] Renderer v1: painted lighting material, hull ink, screen-space edge ink, fog and sky, bloom and
       grade, quality tiers
 - [ ] Style scene assets: Bulwark (idle, run, attack), Bolt Sentinel marks I to III, Husk (walk,
       attack), Worldheart, nest, Verdant kit (rocks, flora, grass cards), brush atlas
-- [ ] Style Lab with live dials, the reference board and the colour audit
-- [ ] Simulation kernel: fixed tick, seeded RNG streams, event log, save envelope, bot harness
+- [x] Style Lab with live dials, the reference board and the colour audit
+- [x] Simulation kernel: fixed tick, seeded RNG streams, event log, save envelope, bot harness
 - [ ] Owner style gate; lock the Painted-Anime-Inkline 4.0 defaults
 - [ ] Owner: choose a license (none yet, so all rights are reserved by default)
 
 ## Where we are
 
 2026-09-23. The design was approved in brainstorming: the platform, approach A, design sections 1 to
-4, and the cargo cache death rule. The repository holds this blueprint and a README, and no code yet.
+4, and the cargo cache death rule. The repository held this blueprint and a README, and no code yet.
 Blender 5.2.1 LTS portable is installed at `C:\Users\Majied LaFleur\tools\blender-5.2.1` (checksum
 verified against blender.org, 915 MB); portable 4.5.1 and 4.3.2 installs were already present in the
 same folder. The local OpenViking knowledge base
 was not running. The owner then reviewed this written spec, kept five of the eight details added
 while writing it (auto-deposit, heart blows, terrain bonuses, a choice of two cards, target
 priority) and declined three (losing a cache on a second death, difficulty levels, wandering packs).
-Next: the M0 implementation plan is written and dispatched.
+2026-09-24. M0a is complete: the toolchain, checks, CI and the Pages site are live at
+https://majieddd.github.io/99-planets-to-defend-v4/. Next: M0b, M0c and M0d in parallel
+(docs/superpowers/plans/2026-09-23-m0-overview.md).
+M0b is complete: the simulation kernel is deterministic across seeds, commands and a mid-run save
+(tests/unit/sim/determinism.test.ts), and `npm run bot` prints a stable result line.
+2026-09-27. M0d's renderer and Style Lab are complete on placeholder assets: renderer v1 draws the
+style scene at all three quality tiers, and the lab's dials, reference board and colour audit run on
+it (docs/evidence/m0/style-placeholder-*.png). The browser tests render the lab at the low tier from
+all four cameras, at the root path and at the Pages base path; the hero frame passes the colour audit
+(concentration 1.90 x chance against a gate of 1.5) and the mutation proof rejects its hue-rotated
+copy. The lab will switch to M0c's Blender assets automatically once those merge. Next: the owner's
+style gate (M0d plan Task 11), after M0c.

@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --port 4173 --strictPort",
+    "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.sim.json",
     "lint": "eslint .",
     "check:emdash": "node tools/check-emdash.mjs",
@@ -20,9 +20,13 @@
     "assets:check": "node tools/assets/check.mjs",
     "test:blender": "node tools/assets/test-blender.mjs",
     "test": "vitest run",
+    "test:determinism": "vitest run tests/unit/sim/determinism.test.ts",
+    "bot": "tsx tools/bot/run.ts",
     "e2e": "playwright test"
   },
   "dependencies": {
+    "lil-gui": "0.21.0",
+    "postprocessing": "6.39.5",
     "three": "0.186.0"
   },
   "devDependencies": {
