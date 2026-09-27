@@ -10,9 +10,12 @@ export interface FogPlanet {
 }
 
 /**
- * The segments the height fog integrates each ray over. Against a 4000-step reference on rays from the style scene's
- * cameras (scale heights 3 to 20 m), 8 kept every ray within 2.8 percent (the strategic camera's grazing limb rays, 95
- * percent of them within 1.6) and 4 let the limb drift by up to 10 percent.
+ * The segments the height fog integrates each ray over. Measured against a 4000-step reference on the ground rays of the
+ * style scene's four cameras (the bare 160 m sphere), the worst ray is always the strategic camera's grazing limb, 40 to
+ * 120 m out. There 8 segments keep the fog-weighted length within 2.3 percent at a falloff of 0.3 from the default
+ * fogStart of 20 m and within 3.3 percent from a fogStart of 0, and within 3.9 and 5.5 percent at the dial's top falloff
+ * of 0.5, at most 0.018 of fog amount at density 0.02. 4 segments let the same rays drift by 8.9 and 12.5 percent at 0.3
+ * and by 14.4 and 19.9 percent at 0.5. The low cameras, whose ground ends within 34 m, stay under 0.5 percent with 8.
  */
 export const FOG_STEPS = 8;
 
@@ -36,20 +39,27 @@ float fogAltitude(vec3 p) {
 
 // The fog-weighted length of the ray from uStart to far, each metre counted at exp(-uHeightFalloff * altitude). Each
 // segment is integrated exactly for an altitude that changes linearly across it, which on this planet's curve is close
-// enough at FOG_STEPS segments (see fogEffect.ts). At a falloff of 0 every metre counts alike: the distance fog.
+// enough at FOG_STEPS segments (see FOG_STEPS). At a falloff of 0 every metre counts alike: the distance fog.
 float fogLength(vec3 origin, vec3 direction, float far) {
   float near = min(uStart, far);
   if (uHeightFalloff <= 0.0) return far - near;
   float segment = (far - near) / float(FOG_STEPS);
   float h0 = fogAltitude(origin + direction * near);
+  float e0 = exp(-uHeightFalloff * h0);
   float total = 0.0;
   for (int i = 1; i <= FOG_STEPS; i++) {
     float h1 = fogAltitude(origin + direction * (near + segment * float(i)));
+    float e1 = exp(-uHeightFalloff * h1);
     float x = uHeightFalloff * (h1 - h0);
-    // (1 - e^-x) / x, or its limit where the division would lose every digit.
-    float shape = abs(x) > 1e-3 ? (1.0 - exp(-x)) / x : 1.0 - 0.5 * x;
-    total += segment * exp(-uHeightFalloff * h0) * shape;
+    // A segment's weight, (e0 - e1) / x, is the mean of exp(-uHeightFalloff * altitude) across it, so it lies between
+    // e1 and e0 and never above 1. Written as e0 * (1 - e^-x) / x, it formed e^-x, which passes fp32's limit once x
+    // falls below -88.7 on a long descending segment: at a falloff of 0.5 from about 1.44 km up (1.8 km at 0.4), heights
+    // OrbitControls panning reaches, that was infinity times an e0 of 0, a NaN pixel that the bloom's blur spread. At
+    // |x| = 1e-3 e0 and e1 agree in their first 3 digits, so their difference keeps only about 4 of fp32's 7; below it
+    // the limit e0 * (1 - x / 2), off by x^2 / 6 of e0 there, takes over.
+    total += segment * (abs(x) > 1e-3 ? (e0 - e1) / x : e0 * (1.0 - 0.5 * x));
     h0 = h1;
+    e0 = e1;
   }
   return total;
 }

@@ -5,7 +5,20 @@ import { DEFAULT_DIALS, NUMERIC_RANGES } from '../../../src/render/defaults';
 import { LAYERS } from '../../../src/render/layers';
 import { EMISSIVE_KEY_RANGE, EMISSIVE_PEAK } from '../../../src/render/materials/painted';
 import { FogEffect } from '../../../src/render/post/fogEffect';
-import { BLOOM_SMOOTHING, BloomKeyMaterial, createPipeline, KeyedBloomEffect, OpaqueOutputEffect, type Pipeline, type PipelineOptions } from '../../../src/render/post/pipeline';
+import {
+  BLOOM_SMOOTHING,
+  BloomKeyMaterial,
+  createPipeline,
+  GLOW_LIFT_MAX,
+  INK_GATE_HIGH,
+  INK_GATE_LOW,
+  KeyedBloomEffect,
+  OpaqueOutputEffect,
+  WARM_BLUE_FULL,
+  WARM_BLUE_NONE,
+  type Pipeline,
+  type PipelineOptions,
+} from '../../../src/render/post/pipeline';
 import { InkEdgeEffect } from '../../../src/render/post/inkEdgeEffect';
 import { TIERS, type TierName } from '../../../src/render/quality';
 import { VERDANT } from '../../../src/render/themes';
@@ -58,7 +71,7 @@ function warmth(hex: string): number {
     const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
     return t * t * (3 - 2 * t);
   };
-  return (c.r >= Math.max(c.g, c.b) ? 1 : 0) * (1 - smoothstep(0.2, 0.35, c.b / peak));
+  return (c.r >= Math.max(c.g, c.b) ? 1 : 0) * (1 - smoothstep(WARM_BLUE_FULL, WARM_BLUE_NONE, c.b / peak));
 }
 
 describe('bloom key material', () => {
@@ -82,7 +95,7 @@ describe('bloom key material', () => {
 
   it('gives warm hue, the heart and its economy, the heart halo, and every other energy the energy strength', () => {
     const { fragmentShader } = new BloomKeyMaterial(dials);
-    expect(fragmentShader).toContain('float warm = step(max(texel.g, texel.b), texel.r) * (1.0 - smoothstep(0.2, 0.35, texel.b / peak));');
+    expect(fragmentShader).toContain('float warm = step(max(texel.g, texel.b), texel.r) * (1.0 - smoothstep(WARM_BLUE_FULL, WARM_BLUE_NONE, texel.b / peak));');
     // The palettes (blender/lib/palette.py): the heart's core, deep amber and inlay gold, against player cyan, Xeno
     // magenta and violet, and a warm white. The satellites' peach facet never reaches the threshold (key 0.66).
     for (const hex of ['#ffc36b', '#ff8a3d', '#ffc857']) expect(warmth(hex), hex).toBe(1);
@@ -121,8 +134,40 @@ describe('keyed bloom effect', () => {
 
   it('keeps its glow off the pixels that fed it, by the same key, threshold and ramp', () => {
     const shader = make().getFragmentShader();
+    expect(shader).toContain('vec4 glow = texture2D(map, uv) * intensity;');
     expect(shader).toContain('float emitter = smoothstep(threshold, threshold + smoothing, inputColor.a * keyRange);');
-    expect(shader).toContain('outputColor = texture2D(map, uv) * intensity * (1.0 - emitter);');
+    expect(shader).toContain('outputColor = glow * (1.0 - emitter) * inkGate * lift;');
+  });
+
+  it('keeps its glow off the ink and caps what it adds to any pixel at a multiple of the pixel\'s own luminance', () => {
+    // With the shield alone, the heart crystal's outline (key 0) took the whole glow and turned 119 luma lighter.
+    const bloom = make();
+    const shader = bloom.getFragmentShader();
+    expect(shader).toContain('float lum = luminance(inputColor.rgb);');
+    expect(shader).toContain('float inkGate = smoothstep(INK_GATE_LOW, INK_GATE_HIGH, lum);');
+    expect(shader).toContain('float lift = min(1.0, GLOW_LIFT_MAX * lum / max(luminance(glow.rgb), 1e-4));');
+    // GLSL ES 3.0 has no implicit int to float conversion, so each define must be a float literal.
+    expect([...bloom.defines.entries()]).toEqual([
+      ['INK_GATE_LOW', String(INK_GATE_LOW)],
+      ['INK_GATE_HIGH', String(INK_GATE_HIGH)],
+      ['GLOW_LIFT_MAX', `${GLOW_LIFT_MAX}.0`],
+    ]);
+    for (const [, literal] of bloom.defines) expect(literal).toMatch(/^\d+\.\d+$/);
+    // The hull ink, #0e0f14, is 0.0049 in linear light: under the gate's low edge, so it takes no glow at all.
+    const ink = new Color('#0e0f14');
+    expect(0.2126 * ink.r + 0.7152 * ink.g + 0.0722 * ink.b).toBeLessThan(INK_GATE_LOW);
+    expect(INK_GATE_LOW).toBeLessThan(INK_GATE_HIGH);
+    expect(GLOW_LIFT_MAX).toBeGreaterThan(0);
+  });
+
+  it('disposes its key material once, through the luminance pass', () => {
+    // Kept in a field of the effect, the key was disposed by Effect.dispose and again by the luminance pass.
+    const bloom = make();
+    expect(Object.keys(bloom)).not.toContain('key');
+    let disposals = 0;
+    bloom.key.addEventListener('dispose', () => disposals++);
+    bloom.dispose();
+    expect(disposals).toBe(1);
   });
 
   it('shares the key material\'s threshold, ramp and range uniforms, so one dial move reaches the mask and the shield', () => {
@@ -219,6 +264,25 @@ describe('createPipeline', () => {
     expect(effects.at(-1)).toBeInstanceOf(OpaqueOutputEffect);
     // The ink and fog pass comes before, so the bloom reads their output with the key still in alpha.
     expect(pipeline.composer.passes.indexOf(last)).toBeGreaterThan(pipeline.composer.passes.findIndex((pass) => pass instanceof EffectPass));
+  });
+
+  it('runs the bloom first in its pass, so its shield reads the key before any other effect touches the frame', () => {
+    // EffectPass merges its effects into one shader and sorts them by attributes, so an effect that gained one would run
+    // ahead of the bloom and hand it a frame whose alpha no longer holds the key. The merged shader is what the GPU runs.
+    for (const tier of ['high', 'medium', 'low'] as const) {
+      const pipeline = build(tier);
+      const pass = pipeline.composer.passes.at(-1) as EffectPass;
+      expect(effectsOf(pass)[0]).toBe(bloomOf(pipeline));
+      const merged = (pass.fullscreenMaterial as unknown as { fragmentShader: string }).fragmentShader;
+      expect(merged).toContain('float emitter = smoothstep(e0Threshold, e0Threshold + e0Smoothing, inputColor.a * e0KeyRange);');
+      expect(merged).toContain('float inkGate = smoothstep(e0INK_GATE_LOW, e0INK_GATE_HIGH, lum);');
+      expect(merged).toContain('outputColor = glow * (1.0 - emitter) * inkGate * lift;');
+      const main = merged.slice(merged.indexOf('void main()'));
+      expect(main.match(/e\dMainImage\(/g)?.[0]).toBe('e0MainImage(');
+      // The shield's key uniforms are the key material's own, merged under the bloom's prefix.
+      const uniforms = (pass.fullscreenMaterial as unknown as { uniforms: Record<string, unknown> }).uniforms;
+      expect(uniforms['e0Threshold']).toBe(pipeline.bloomKey.uniforms['threshold']);
+    }
   });
 
   it('gives each tier its own bloom depth', () => {

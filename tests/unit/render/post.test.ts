@@ -244,8 +244,14 @@ describe('height fog', () => {
   it('weights each metre by altitude above the sphere, integrating each segment exactly for a linear altitude', () => {
     expect(shader).toContain('return max(length(p - uPlanetCenter) - uPlanetRadius, 0.0);');
     expect(shader).toContain('float segment = (far - near) / float(FOG_STEPS);');
-    expect(shader).toContain('float shape = abs(x) > 1e-3 ? (1.0 - exp(-x)) / x : 1.0 - 0.5 * x;');
-    expect(shader).toContain('total += segment * exp(-uHeightFalloff * h0) * shape;');
+    // Each exponential is of a non-positive number, so neither can overflow; fog-length.test.ts runs these lines in fp32.
+    expect(shader).toContain('float e0 = exp(-uHeightFalloff * h0);');
+    expect(shader).toContain('float e1 = exp(-uHeightFalloff * h1);');
+    expect(shader).toContain('float x = uHeightFalloff * (h1 - h0);');
+    expect(shader).toContain('total += segment * (abs(x) > 1e-3 ? (e0 - e1) / x : e0 * (1.0 - 0.5 * x));');
+    expect(shader).toContain('h0 = h1;\n    e0 = e1;');
+    // e^-x of a long descending segment passed fp32's limit and made the fog NaN (the form this replaced).
+    expect(shader).not.toMatch(/exp\(-x\)/);
   });
 
   it('keeps its sunward warming on the sun it is given, at construction and when the sun moves', () => {
