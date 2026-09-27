@@ -30,20 +30,29 @@ GRASS_SMOOTH_DEG = 60.0
 BRUSH_SCALE = 0.25       # one 512 texel brush tile spans 4 m: a handful of strokes across a rock face or clump
 # Crown and bush clumps. At icosphere subdivision 2 (80 faces a clump) both read as low-poly polygons at distance in
 # the style gate frames, and the hull ink traced every corner of their outline: the proxy normals round the light,
-# never the outline, so the outline needs the finer mesh (320 faces). Measured on the preview renders with the three
-# values below, as the share of the outline in straight runs and its 95th percentile corner: crown 24% and 50 degrees
-# before, 14% and 22 after; bush 38% and 37, 25% and 19.
+# never the outline, so the outline needs the finer mesh (320 faces). The outline figures here and below are read off
+# each piece's 768 px preview render: its outline is traced (the crown's only above image row 425, which leaves out the
+# trunk), resampled every 3 px and measured as the turn across 12 px chords, where a straight run turns under 2
+# degrees, a corner is a convex turn and a kink is a sample turning concave by over 6 degrees. With the three values
+# below, the share of the outline in straight runs and its 95th percentile corner went from 24% and 50 degrees to 14%
+# and 22 on the crown, and from 38% and 37 to 25% and 19 on the bush.
 FOLIAGE_SUBDIVISIONS = 3
 # Neighbouring faces meet at 18 to 22 degrees at subdivision 2 and at 8 to 10.5 at 3 (before displacement), so the
-# facet angle halves with the level: 10 degrees sits on the finer clump's own neighbour angle and merged about 700 more
-# of the kit's triangles back into the flat panels the finer mesh removes.
+# facet angle halves with the level: 10 degrees sits on the finer clump's own neighbour angle, and with one octave it
+# merged 680 more of the kit's triangles back into the flat panels the finer mesh removes (4,037 against 4,717). That
+# pair, 10 degrees and one octave (variant F of the style gate trials), is the fallback if M2's scatter presses the
+# on-screen triangle budgets. Its outlines measured about as calm as the shipped ones except at the crown's underside:
+# with the cut lowered to image row 440 to take that in, 18.0% of the crown's outline ran straight against 15.7%.
 FOLIAGE_FACET_DEG = 5.0
-# The displacement keeps its strength, frequency and seeds but only its first noise octave. At subdivision 2 the
-# vertices sat about as far apart as the second octave's features or wider, so the finer octaves only jittered the
-# facet corners; at 3 they are close enough to draw those octaves as a crinkled outline, which is detail rather than a
-# calmer silhouette (concave kinks per 1,000 px of outline: crown 57 before, 82 with three octaves, 42 with one; bush
-# 24, 38 and 21). The crinkle also broke the clumps into small UV islands that packed poorly, which cut the painted
-# texel density of every piece in the kit by 16 to 23%; with one octave it drops by 2 to 3.5%.
+# The displacement keeps its strength, frequency and seeds but only its first noise octave. Dropping the finer octaves
+# also takes about a quarter off the clumps' relief, the rms of each vertex's radial offset from its clump's sphere
+# (at this subdivision and facet angle, 0.065 to 0.050 m on the crown and 0.035 to 0.025 on the bush). At subdivision
+# 2 the vertices sat about as far apart as the second octave's features or wider, so the finer octaves only jittered
+# the facet corners; at 3 they are close enough to draw those octaves as a crinkled outline, which is detail rather
+# than a calmer silhouette (concave kinks per 1,000 px of outline: crown 57 before, 82 with three octaves, 42 with one;
+# bush 24, 38 and 21). The crinkle also broke the clumps into small UV islands that packed poorly, which cut the painted
+# texel density of every piece in the kit (they share one atlas) by 19 to 20% at this facet angle, 16% at 10 degrees
+# and 22 to 23% with no facet pass; with one octave it drops by 2 to 3%.
 FOLIAGE_OCTAVES = 1
 # Rocks and clumps keep the old per-face cut points (0.6, 0.35). breakup 0.5 lets whole strokes cross the edge in
 # both directions, which reads as paint (0.3 reads as a wobbly line); softness 0.03 keeps each stroke's edge crisp

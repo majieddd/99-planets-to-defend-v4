@@ -12,7 +12,7 @@ const FRAME = 1 / 30;
 // the Bolt Sentinel's mid-plinth roots sank its marks.
 export const GROUND_TOLERANCE = 0.005;
 // The deepest sink a recipe may declare. A sink beds an edge into uneven ground (the Verdant rocks 0.05 m, the bush
-// 0.114, the nest's spikes 0.123, the deepest today); a deeper allowance would start to cover a misplaced origin
+// 0.119, the nest's spikes 0.123, the deepest today); a deeper allowance would start to cover a misplaced origin
 // instead. The cap was 0.15 m, which broke that promise: a sink passes GROUND_TOLERANCE either side of it, so a
 // declared 0.15 m passed the Bolt Sentinel's old mark I root, mid-plinth, 0.150 m over its lowest point. At 0.14 m the
 // deepest point any sink passes is 0.145 m down, 5 mm short of that root.

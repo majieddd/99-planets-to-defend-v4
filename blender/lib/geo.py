@@ -138,15 +138,17 @@ def ellipsoid_normals(ob, center, radii=(1.0, 1.0, 1.0)):
     normals: a faceted clump then takes light as one broad rounded zone instead of one flat tone per facet, while
     its silhouette keeps the facets. Call it on a part in its final space (transforms applied) and before the
     join. The join, the paint bake's edit-mode UV pass and the glTF export all keep these normals: what is left is
-    the precision of Blender's custom normal storage, within 0.005 degrees in the tests and 0.05 at most on the
+    the precision of Blender's custom normal storage, within 0.005 degrees in the tests and 0.13 at most on the
     Verdant clumps. Faces go smooth and sharp edges are cleared, because either one overrides a custom normal.
     That is also why shade_smooth must not run after this, on the part or on the joined mesh: it marks sharp edges
-    again and bends these normals (up to 47 degrees on a Verdant clump, over 100 on a conifer tier), and nothing
-    reports it, since has_custom_normals stays True. Smooth an asset's other parts before the join and never the
-    joined mesh. The runtime hull ink (M0d's computeInkNormals) pushes along the exported normals averaged over the
-    vertices that share a position, so these normals move the ink too: measured on the Verdant kit against its
-    faceted normals, by 7 degrees on average (22.5 at most) on the clumps and 22.5 (54 at most) on the conifer
-    tiers, most of it at their tips."""
+    again and bends these normals (over 100 degrees on a Verdant conifer tier), and nothing reports it, since
+    has_custom_normals stays True. Smooth an asset's other parts before the join and never the joined mesh. The
+    runtime hull ink (M0d's computeInkNormals) pushes along the exported normals averaged over the vertices that
+    share a position, so these normals move the ink too. Measured with that averaging on both the shipped Verdant
+    kit and the same geometry exported flat, which writes one normal per polygon, they move it by 9.8 degrees on
+    average (24.9 at most) on the crown's clumps, 8.5 (18.5) on the bush's and 22.5 (53.8) on the conifer tiers,
+    nine tenths of that at the tiers' tips. Averaging per triangle instead, as a measurement that reads only the GLB
+    does, overweights any polygon that is not planar, such as a tier's end cap, and reads 40.6 on the tiers."""
     mesh = ob.data
     c = Vector(center)
     normals = []
