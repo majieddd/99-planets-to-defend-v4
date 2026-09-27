@@ -54,7 +54,11 @@ class PaintStyle:
     emissive_brush: float = 0.25
 
 
-PLAYER_STYLE = PaintStyle(shadow_tint=(0.40, 0.58, 0.72), edge_light=0.5, cavity_dark=0.5, brush_strength=0.3)
-XENO_STYLE = PaintStyle(shadow_tint=(0.55, 0.35, 0.70), ao_strength=0.8, edge_light=0.3, edge_tint=(0.9, 0.8, 1.0), cavity_dark=0.6, brush_strength=0.35)
+# Cycles pointiness on low-poly hard surfaces sits off 0.5 across whole faces, not just at edges, so the default
+# gain of 8 lit entire panels. Measured on the plan's Bolt Sentinel bake (brush strength 0.3, brush scale 1.1, the
+# soft stroke field): gain 8 baked player gunmetal #3d4757 to about (96, 102, 112) with 72% of the trim clipping a
+# channel, and a gain of 2 keeps the edge light on the edges, (68, 77, 91) with 2% clipped.
+PLAYER_STYLE = PaintStyle(shadow_tint=(0.40, 0.58, 0.72), curv_gain=2.0, edge_light=0.5, cavity_dark=0.5, brush_strength=0.3)
+XENO_STYLE = PaintStyle(shadow_tint=(0.55, 0.35, 0.70), ao_strength=0.8, curv_gain=2.0, edge_light=0.3, edge_tint=(0.9, 0.8, 1.0), cavity_dark=0.6, brush_strength=0.35)
 NATURE_STYLE = PaintStyle(shadow_tint=(0.35, 0.60, 0.62), ao_strength=0.65, edge_light=0.25, cavity_dark=0.35, brush_strength=0.6, stroke_tint_mix=0.35)
 HEART_STYLE = PaintStyle(shadow_tint=(0.85, 0.55, 0.50), ao_strength=0.35, edge_light=0.7, edge_tint=(1.0, 0.95, 0.85), cavity_dark=0.2, brush_strength=0.25, emissive_brush=0.35)
