@@ -64,6 +64,9 @@ def apply_transforms(ob):
 
 def parent_keep(child, parent):
     """Parents without moving the child in world space."""
+    # matrix_world refreshes only when Blender re-evaluates the scene, so a parent placed or moved since then would
+    # hand over a stale matrix and the child would move by the difference.
+    bpy.context.view_layer.update()
     child.parent = parent
     child.matrix_parent_inverse = parent.matrix_world.inverted()
 
