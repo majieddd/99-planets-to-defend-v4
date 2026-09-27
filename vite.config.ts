@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 import { previewPort } from './tools/preview-port.ts';
@@ -18,6 +19,11 @@ export default defineConfig({
   base: process.env.P99_BASE ?? '/',
   define: {
     __BUILD_SHA__: JSON.stringify(buildSha()),
+    // The Style Lab fetched assets/manifest.json even before any asset was built. The dev and preview servers answer a
+    // missing file with index.html, but GitHub Pages answers 404, which Chromium logged as a console error on the live
+    // lab. The asset track commits public/assets, so the next build turns the fetch on with no code change. The dev
+    // server reads this once at start, so restart it after the first npm run assets.
+    __HAS_ASSET_MANIFEST__: JSON.stringify(existsSync(resolve(import.meta.dirname, 'public/assets/manifest.json'))),
   },
   build: {
     target: 'es2023',
