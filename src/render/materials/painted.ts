@@ -32,6 +32,7 @@ export interface PaintUniforms {
   uPaintStrength: IUniform<number>;
   uSaturation: IUniform<number>;
   uTerrainBrush: IUniform<number>;
+  uSoilBreakup: IUniform<number>;
   uStandardBlendScale: IUniform<number>;
 }
 
@@ -55,12 +56,14 @@ export function createPaintUniforms(theme: Theme, dials: RenderDials, brush: Tex
     uAmbientGround: { value: new Color(theme.ambient.ground) },
     uAmbientStrength: { value: dials.ambientStrength },
     uUp: { value: new Vector3(0, 1, 0) },
-    uRimColor: { value: new Color(theme.sun.color) },
+    // The rim is sunlight at a grazing angle, so it takes the sun colour dial, which defaults to the theme's sun.
+    uRimColor: { value: new Color(dials.sunColor) },
     uRimStrength: { value: dials.rimStrength },
     uRimPower: { value: dials.rimPower },
     uPaintStrength: { value: dials.paintStrength },
     uSaturation: { value: dials.saturation },
     uTerrainBrush: { value: dials.terrainBrush },
+    uSoilBreakup: { value: dials.soilBreakup },
     uStandardBlendScale: { value: dials.standardBlend / AUTHORED_CHARACTER_BLEND },
   };
   return uniforms;
@@ -76,12 +79,13 @@ export function applyPaintDials(u: PaintUniforms, dials: RenderDials, theme: The
   u.uAmbientSky.value.set(theme.ambient.sky);
   u.uAmbientGround.value.set(theme.ambient.ground);
   u.uAmbientStrength.value = dials.ambientStrength;
-  u.uRimColor.value.set(theme.sun.color);
+  u.uRimColor.value.set(dials.sunColor);
   u.uRimStrength.value = dials.rimStrength;
   u.uRimPower.value = dials.rimPower;
   u.uPaintStrength.value = dials.paintStrength;
   u.uSaturation.value = dials.saturation;
   u.uTerrainBrush.value = dials.terrainBrush;
+  u.uSoilBreakup.value = dials.soilBreakup;
   u.uStandardBlendScale.value = dials.standardBlend / AUTHORED_CHARACTER_BLEND;
 }
 
@@ -105,8 +109,19 @@ export const EMISSIVE_KEY_RANGE = 4;
  */
 export const EMISSIVE_PEAK = 1.25;
 
+/**
+ * How far the brush sample moves the soil edge's threshold, in soil weight, and the threshold's half-width. The brush
+ * atlas spans about 0.29 to 0.71 between its 5th and 95th percentiles, so a gain of 2.2 spreads the threshold over 0.04
+ * to 0.96 of the weight (the shader clamps it to 0.07 to 0.93): soil strokes reach across the whole of the old soft
+ * band and meadow strokes into the soil, where a gain of 1 would have jittered the edge by a fifth of the band. The
+ * half-width of 0.06 is about 10 cm of ground on the ring's 0.8 to 1 m ramps, a crisp stroke edge at hero distance that
+ * still anti-aliases from the strategic camera.
+ */
+export const SOIL_EDGE_GAIN = 2.2;
+export const SOIL_EDGE_SOFTNESS = 0.06;
+
 /** GLSL ES 3.0 has no implicit int to float conversion, so a whole number must still reach the shader as 4.0. */
-function glslFloat(value: number): string {
+export function glslFloat(value: number): string {
   return Number.isInteger(value) ? value.toFixed(1) : String(value);
 }
 
@@ -118,6 +133,11 @@ export interface PaintedOptions {
   baseColor?: Color;
   /** Terrain paints its brush in world space and scales it with the terrain brush dial. */
   terrain?: boolean;
+  /**
+   * The soil the geometry's soilWeight attribute mixes into its vertex colour. The mix happens here rather than in the
+   * vertex colour so the soilBreakup dial can break the soil's edge into the brush strokes.
+   */
+  soilColor?: Color;
   vertexColors?: boolean;
   /** 0 is pure cel banding; characters blend toward standard lighting, as Sifu does. */
   standardBlend?: number;
@@ -138,6 +158,10 @@ varying vec3 vViewPosition;
 varying vec3 vColor;
 varying vec3 vBrushPos;
 varying vec3 vBrushNormal;
+#ifdef PAINT_SOIL
+  attribute float soilWeight;
+  varying float vSoil;
+#endif
 
 void main() {
   vUv = uv;
@@ -145,6 +169,9 @@ void main() {
     vColor = color.rgb;
   #else
     vColor = vec3(1.0);
+  #endif
+  #ifdef PAINT_SOIL
+    vSoil = soilWeight;
   #endif
   #include <batching_vertex>
   #include <beginnormal_vertex>
@@ -207,6 +234,11 @@ uniform float uPaintStrength;
 uniform float uSaturation;
 uniform float uTerrainBrush;
 uniform float uStandardBlendScale;
+#ifdef PAINT_SOIL
+  uniform vec3 uSoilColor;
+  uniform float uSoilBreakup;
+  varying float vSoil;
+#endif
 
 varying vec2 vUv;
 varying vec3 vWorldNormal;
@@ -238,6 +270,14 @@ void main() {
     vec3 broad = textureLod(uMap, vUv, 6.0).rgb;
     albedo = mix(broad, texel.rgb, uPaintStrength) * vColor;
     alpha = texel.a;
+  #endif
+  #ifdef PAINT_SOIL
+    // Thresholded against the brush sample, the soil's edge breaks into the terrain's own strokes, darker strokes
+    // turning to soil first; at a breakup of 0 it is the smooth vertex-colour blend it has always been. The clamp keeps
+    // the threshold's ramp inside (0, 1), so weight 0 stays meadow and weight 1 stays soil.
+    float soilEdge = clamp(0.5 + (brush - 0.5) * SOIL_EDGE_GAIN, SOIL_EDGE_SOFTNESS + 0.01, 0.99 - SOIL_EDGE_SOFTNESS);
+    float soil = mix(vSoil, smoothstep(soilEdge - SOIL_EDGE_SOFTNESS, soilEdge + SOIL_EDGE_SOFTNESS, vSoil), uSoilBreakup);
+    albedo = mix(albedo, uBaseColor * uSoilColor, soil);
   #endif
   #ifdef PAINT_TERRAIN
     albedo *= 1.0 + (brush - 0.5) * uTerrainBrush;
@@ -315,6 +355,14 @@ export function createPaintedMaterial(shared: PaintUniforms, options: PaintedOpt
   if (options.map) defines['USE_PAINT_MAP'] = '';
   if (options.emissiveMap) defines['USE_PAINT_EMISSIVE'] = '';
   if (options.terrain) defines['PAINT_TERRAIN'] = '';
+  // Only a material given a soil colour declares the soilWeight attribute. A mesh without that attribute would read
+  // whatever constant WebGL last left at its location (three sets such constants for the colour attribute), which
+  // could paint a whole planet in soil.
+  if (options.soilColor) {
+    defines['PAINT_SOIL'] = '';
+    defines['SOIL_EDGE_GAIN'] = glslFloat(SOIL_EDGE_GAIN);
+    defines['SOIL_EDGE_SOFTNESS'] = glslFloat(SOIL_EDGE_SOFTNESS);
+  }
   const material = new ShaderMaterial({
     name: 'PaintedMaterial',
     lights: true,
@@ -333,6 +381,7 @@ export function createPaintedMaterial(shared: PaintUniforms, options: PaintedOpt
       uEmissiveIntensity: { value: options.emissiveIntensity ?? 1 },
       uStandardBlend: { value: options.standardBlend ?? 0.1 },
       uAlphaTest: { value: options.alphaTest ?? 0 },
+      uSoilColor: { value: options.soilColor ?? new Color(0, 0, 0) },
     },
     vertexShader,
     fragmentShader,

@@ -21,6 +21,11 @@ import { applyPreset, buildStyleScene, PRESETS, type PresetName, type StyleAsset
 
 const BASE = import.meta.env.BASE_URL;
 const theme = VERDANT;
+/**
+ * Metres from the scene centre to the sun. At every elevation the scatter (out to 48 m) stays past the shadow camera's
+ * 1 m near plane and the patch's far side inside its 220 m far plane.
+ */
+const SUN_DISTANCE = 90;
 
 // start() fills these in, so a failure at any point can stop the loop and word the banner for when it happened.
 let activeRenderer: WebGLRenderer | null = null;
@@ -167,9 +172,13 @@ async function start(): Promise<void> {
   camera.layers.enable(LAYERS.sky);
   camera.layers.enable(LAYERS.noEdge); // grass and flowers: drawn, and cast shadows (r186 tests this camera's layers)
 
-  const sunDir = new Vector3(...sunDirection(theme));
-  const sun = new DirectionalLight(theme.sun.color, theme.sun.intensity);
-  sun.position.copy(sunDir).multiplyScalar(90);
+  // The sun's elevation, colour and intensity are dials that default to the theme's light; the theme keeps the azimuth.
+  // The light rides a sphere of SUN_DISTANCE around the scene centre, where its target stays, so the shadow camera's
+  // 45 m box (1 to 220 m deep) frames the scene at every elevation the dial allows; syncSun moves it.
+  const sunDirectionAt = (elevationDeg: number): Vector3 => new Vector3(...sunDirection({ ...theme, sun: { ...theme.sun, elevationDeg } }));
+  const sunDir = sunDirectionAt(dials.sunElevation);
+  const sun = new DirectionalLight(dials.sunColor, dials.sunIntensity);
+  sun.position.copy(sunDir).multiplyScalar(SUN_DISTANCE);
   sun.castShadow = true;
   sun.shadow.mapSize.set(tier.shadowMapSize, tier.shadowMapSize);
   Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 220 });
@@ -190,8 +199,9 @@ async function start(): Promise<void> {
   // having loaded, not on the manifest listing it, so a listed atlas that fails to load cannot bring the slab back.
   const skyBrush = brushAtlas ?? flat(0);
   // Anchored to the planet, the painted horizon sits on its limb; without the planet it is flat and floats well above
-  // the limb seen from the patch.
-  const sky = createPaintedSky(theme, skyBrush, sunDir, { center: new Vector3(0, -STYLE_PLANET_RADIUS, 0), radius: STYLE_PLANET_RADIUS });
+  // the limb seen from the patch. The fog measures its height fog's altitude from the same sphere.
+  const planet = { center: new Vector3(0, -STYLE_PLANET_RADIUS, 0), radius: STYLE_PLANET_RADIUS };
+  const sky = createPaintedSky(theme, skyBrush, sunDir, planet);
   scene.add(sky.mesh);
   const patch = createStylePatch(theme, paint, tier.terrainSegments);
   scene.add(patch.mesh, patch.lowPlanet);
@@ -213,8 +223,21 @@ async function start(): Promise<void> {
   controls.maxDistance = 400;
   applyPreset(style, state.preset, camera, controls.target);
 
-  let pipeline: Pipeline = createPipeline({ renderer, scene, camera, tier, dials, theme, inkNoise, sunDirection: sunDir, reducedMotion });
+  let pipeline: Pipeline = createPipeline({ renderer, scene, camera, tier, dials, theme, inkNoise, sunDirection: sunDir, reducedMotion, planet });
   const drawing = new Vector2();
+
+  // Everything that reads the sun: the light (and so every painted material and the shadows), the sky's disc, glow and
+  // cloud light, and the fog's sunward warming. Run once here too, because the sky starts from the theme's sun colour
+  // and a dials link can open the lab with another.
+  function syncSun(): void {
+    sunDir.copy(sunDirectionAt(dials.sunElevation));
+    sun.position.copy(sunDir).multiplyScalar(SUN_DISTANCE);
+    sun.color.set(dials.sunColor);
+    sun.intensity = dials.sunIntensity;
+    sky.setSun(sunDir, dials.sunColor);
+    pipeline.setSunDirection(sunDir);
+  }
+  syncSun();
 
   function resize(): void {
     camera.aspect = stage.clientWidth / stage.clientHeight;
@@ -232,6 +255,7 @@ async function start(): Promise<void> {
     applyInkDials(inkUniforms, dials);
     syncHulls();
     pipeline.applyDials(dials, theme);
+    syncSun();
   }
 
   function setTier(name: TierName): void {
@@ -240,7 +264,7 @@ async function start(): Promise<void> {
       // Built before anything changes and before the old pipeline is disposed. Disposed first, a throw in
       // createPipeline left pipeline pointing at the disposed composer, which draws nothing, so the canvas froze
       // without a word.
-      const nextPipeline = createPipeline({ renderer, scene, camera, tier: next, dials, theme, inkNoise, sunDirection: sunDir, reducedMotion });
+      const nextPipeline = createPipeline({ renderer, scene, camera, tier: next, dials, theme, inkNoise, sunDirection: sunDir, reducedMotion, planet });
       tier = next;
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.pixelRatioMax));
       sun.shadow.mapSize.set(tier.shadowMapSize, tier.shadowMapSize);
@@ -268,7 +292,7 @@ async function start(): Promise<void> {
     return { report, mutation };
   }
 
-  createDialsPanel(dials, state, {
+  const gui = createDialsPanel(dials, state, {
     onDials: applyDials,
     onTier: setTier,
     onPreset: (preset) => applyPreset(style, preset, camera, controls.target),
@@ -306,6 +330,26 @@ async function start(): Promise<void> {
   });
   mountReferenceBoard(document.getElementById('board') as HTMLElement, theme);
 
+  /**
+   * Moves dials as the panel does, for browser tests and measured frames. Each value passes the dials codec's checks,
+   * so one a link would drop (a string for a number, a value outside its range, a colour that is not six-digit hex) is
+   * ignored here too; the dials after the move come back.
+   */
+  function setDials(changes: Record<string, unknown>): RenderDials {
+    const checked = decodeDials(encodeDials({ ...DEFAULT_DIALS, ...changes } as RenderDials));
+    const target = dials as unknown as Record<string, unknown>;
+    for (const key of Object.keys(changes)) {
+      if (key in DEFAULT_DIALS && checked[key as keyof RenderDials] === changes[key]) target[key] = changes[key];
+    }
+    applyDials();
+    for (const controller of gui.controllersRecursive()) controller.updateDisplay();
+    return { ...dials };
+  }
+
+  // Frozen, the scene, Bulwark's cycle and the film grain hold still while frames keep rendering, so two captures that
+  // differ in one dial differ only by what that dial does (the halo and fog measurements subtract such pairs). Opened
+  // with ?freeze=1 the scene never leaves the pose it is built in, so frames from separate page loads line up too.
+  let frozen = params.get('freeze') === '1';
   const fpsBox = document.getElementById('fps') as HTMLElement;
   let last = performance.now();
   let frames = 0;
@@ -318,6 +362,11 @@ async function start(): Promise<void> {
     audit: runAudit,
     preset: (name: PresetName) => applyPreset(style, name, camera, controls.target),
     frameMs: () => frameMs,
+    dials: () => ({ ...dials }),
+    setDials,
+    freeze: (on: boolean) => {
+      frozen = on;
+    },
   };
   loopStarted = true;
   renderer.setAnimationLoop(() => {
@@ -327,7 +376,7 @@ async function start(): Promise<void> {
       last = now;
       // Only the simulation step is clamped, so a stall does not jump the scene. The reading averaged that clamped
       // step, which capped it at 50 ms, so a slow GPU or a CI runner under-reported its frame interval.
-      const dt = Math.min(interval / 1000, 1 / 20);
+      const dt = frozen ? 0 : Math.min(interval / 1000, 1 / 20);
       frameMs = frameMs * 0.95 + interval * 0.05;
       style.update(dt);
       controls.update();

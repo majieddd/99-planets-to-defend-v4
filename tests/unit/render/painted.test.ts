@@ -7,6 +7,8 @@ import {
   createPaintUniforms,
   EMISSIVE_KEY_RANGE,
   EMISSIVE_PEAK,
+  SOIL_EDGE_GAIN,
+  SOIL_EDGE_SOFTNESS,
 } from '../../../src/render/materials/painted';
 import { VERDANT } from '../../../src/render/themes';
 
@@ -43,7 +45,9 @@ describe('painted materials', () => {
       paintStrength: 0.41,
       saturation: 0.72,
       terrainBrush: 1.27,
+      soilBreakup: 0.64,
       standardBlend: 0.56,
+      sunColor: '#ff8844',
     };
     const reaches = [
       ['brushScale', 'uBrushScale', changed.brushScale],
@@ -57,6 +61,7 @@ describe('painted materials', () => {
       ['paintStrength', 'uPaintStrength', changed.paintStrength],
       ['saturation', 'uSaturation', changed.saturation],
       ['terrainBrush', 'uTerrainBrush', changed.terrainBrush],
+      ['soilBreakup', 'uSoilBreakup', changed.soilBreakup],
       ['standardBlend', 'uStandardBlendScale', changed.standardBlend / 0.35],
     ] as const;
     expect(new Set(reaches.map(([, , value]) => value)).size).toBe(reaches.length);
@@ -74,7 +79,12 @@ describe('painted materials', () => {
     expect(changed.shadowTint).not.toBe(DEFAULT_DIALS.shadowTint);
     expect(created.uShadowTint.value.getHexString()).toBe('7a3d5c');
     expect(applied.uShadowTint.value.getHexString()).toBe('7a3d5c');
-    // Both paths above use VERDANT, so the theme-driven lines need a theme switch of their own to show.
+    // The rim is sunlight at a grazing angle, so it takes the sun colour dial, whose default is the theme's sun.
+    expect(created.uRimColor.value.getHexString()).toBe('ff8844');
+    expect(applied.uRimColor.value.getHexString()).toBe('ff8844');
+    expect(createPaintUniforms(VERDANT, DEFAULT_DIALS, null).uRimColor.value.getHexString()).toBe(VERDANT.sun.color.slice(1));
+    // Both paths above use VERDANT, so the theme-driven lines need a theme switch of their own to show. A theme's own
+    // sun colour no longer reaches the rim: the dial does.
     const dusk = {
       ...VERDANT,
       sun: { ...VERDANT.sun, color: '#ff9a6a' },
@@ -83,11 +93,11 @@ describe('painted materials', () => {
     applyPaintDials(applied, changed, dusk);
     expect(applied.uAmbientSky.value.getHexString()).toBe('7f95c8');
     expect(applied.uAmbientGround.value.getHexString()).toBe('5c4a6e');
-    expect(applied.uRimColor.value.getHexString()).toBe('ff9a6a');
+    expect(applied.uRimColor.value.getHexString()).toBe('ff8844');
     const fresh = createPaintUniforms(dusk, changed, null);
     expect(fresh.uAmbientSky.value.getHexString()).toBe('7f95c8');
     expect(fresh.uAmbientGround.value.getHexString()).toBe('5c4a6e');
-    expect(fresh.uRimColor.value.getHexString()).toBe('ff9a6a');
+    expect(fresh.uRimColor.value.getHexString()).toBe('ff8844');
   });
 
   it('enable lights and choose features by define', () => {
@@ -140,5 +150,38 @@ describe('the emissive key and cap', () => {
     for (const material of [createPaintedMaterial(shared, { terrain: true }), createPaintedMaterial(shared, { baseColor: new Color('#ffffff') })]) {
       expect((material.uniforms['uEmissiveColor']!.value as Color).getHex()).toBe(0);
     }
+  });
+});
+
+describe('the soil edge', () => {
+  const shared = createPaintUniforms(VERDANT, DEFAULT_DIALS, null);
+  const soil = createPaintedMaterial(shared, { terrain: true, vertexColors: true, soilColor: new Color('#8a6a4a') });
+
+  it('turns on only for a material given a soil colour, so no other mesh reads a soilWeight it lacks', () => {
+    expect(soil.defines['PAINT_SOIL']).toBe('');
+    expect((soil.uniforms['uSoilColor']!.value as Color).getHexString()).toBe('8a6a4a');
+    for (const material of [createPaintedMaterial(shared, { terrain: true }), createPaintedMaterial(shared, { map: new Texture() })]) {
+      expect(material.defines['PAINT_SOIL']).toBeUndefined();
+    }
+    expect(soil.vertexShader).toContain('#ifdef PAINT_SOIL\n  attribute float soilWeight;\n  varying float vSoil;\n#endif');
+    expect(soil.vertexShader).toContain('vSoil = soilWeight;');
+  });
+
+  it('hands its constants to GLSL as float literals', () => {
+    expect(soil.defines['SOIL_EDGE_GAIN']).toMatch(/^\d+\.\d+$/);
+    expect(Number(soil.defines['SOIL_EDGE_GAIN'])).toBe(SOIL_EDGE_GAIN);
+    expect(soil.defines['SOIL_EDGE_SOFTNESS']).toMatch(/^\d+\.\d+$/);
+    expect(Number(soil.defines['SOIL_EDGE_SOFTNESS'])).toBe(SOIL_EDGE_SOFTNESS);
+  });
+
+  it('thresholds the soil weight against the brush, and at a breakup of 0 mixes by the weight alone, as the vertex colour did', () => {
+    expect(DEFAULT_DIALS.soilBreakup).toBe(0);
+    const f = soil.fragmentShader;
+    expect(f).toContain('float soilEdge = clamp(0.5 + (brush - 0.5) * SOIL_EDGE_GAIN, SOIL_EDGE_SOFTNESS + 0.01, 0.99 - SOIL_EDGE_SOFTNESS);');
+    expect(f).toContain('float soil = mix(vSoil, smoothstep(soilEdge - SOIL_EDGE_SOFTNESS, soilEdge + SOIL_EDGE_SOFTNESS, vSoil), uSoilBreakup);');
+    expect(f).toContain('albedo = mix(albedo, uBaseColor * uSoilColor, soil);');
+    // Mixed before the terrain brush and the saturation dial, where the vertex colour it replaces came in.
+    expect(f.indexOf('albedo = mix(albedo, uBaseColor * uSoilColor, soil);')).toBeLessThan(f.indexOf('albedo *= 1.0 + (brush - 0.5) * uTerrainBrush;'));
+    expect(f.indexOf('albedo = mix(albedo, uBaseColor * uSoilColor, soil);')).toBeLessThan(f.indexOf('albedo = withSaturation(albedo, uSaturation);'));
   });
 });

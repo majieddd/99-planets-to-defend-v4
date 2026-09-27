@@ -55,6 +55,7 @@ describe('post effect dials', () => {
     normalThreshold: 0.62,
     fogDensity: 0.0185,
     fogStart: 73,
+    fogHeightFalloff: 0.215,
     exposure: 1.63,
     contrast: 1.27,
     grain: 0.135,
@@ -75,6 +76,7 @@ describe('post effect dials', () => {
     expect(value(inkEffect.uniforms, 'uNormalThreshold')).toBe(changed.normalThreshold);
     expect(value(fog.uniforms, 'uDensity')).toBe(changed.fogDensity);
     expect(value(fog.uniforms, 'uStart')).toBe(changed.fogStart);
+    expect(value(fog.uniforms, 'uHeightFalloff')).toBe(changed.fogHeightFalloff);
     expect(hex(fog.uniforms, 'uFogColor')).toBe(new Color(theme.fog.color).getHexString());
     expect(hex(fog.uniforms, 'uFogSunColor')).toBe(new Color(theme.fog.sunColor).getHexString());
     expect(value(grade.uniforms, 'uExposure')).toBe(changed.exposure);
@@ -206,5 +208,56 @@ describe('fog alpha', () => {
       'outputColor = inputColor;',
       'outputColor = vec4(mix(inputColor.rgb, mix(uFogColor, uFogSunColor, sun), amount), inputColor.a);',
     ]);
+  });
+});
+
+describe('height fog', () => {
+  const planet = { center: new Vector3(0, -160, 0), radius: 160 };
+  const fog = (withPlanet: boolean, dials: RenderDials = DEFAULT_DIALS): FogEffect =>
+    new FogEffect(new PerspectiveCamera(), VERDANT, new Vector3(0, 1, 0), dials, withPlanet ? planet : undefined);
+  // Only the GPU runs the shader, so these hold the lines that carry the behaviour.
+  const shader = fog(true).getFragmentShader();
+
+  it('turns on only for a planet, which it measures altitude from', () => {
+    const on = fog(true);
+    expect(on.defines.get('FOG_PLANET')).toBe('1');
+    expect((value(on.uniforms, 'uPlanetCenter') as Vector3).toArray()).toEqual([0, -160, 0]);
+    expect(value(on.uniforms, 'uPlanetRadius')).toBe(160);
+    // A clone: moving the caller's vector afterwards must not move the fog's planet.
+    planet.center.y = -1;
+    expect((value(on.uniforms, 'uPlanetCenter') as Vector3).y).toBe(-160);
+    planet.center.y = -160;
+    const off = fog(false);
+    expect(off.defines.has('FOG_PLANET')).toBe(false);
+    // GLSL loop bounds and the float() of the step count need an integer literal.
+    expect(off.defines.get('FOG_STEPS')).toMatch(/^\d+$/);
+  });
+
+  it('is the distance fog without a planet or at a falloff of 0, so the default look is unchanged', () => {
+    expect(DEFAULT_DIALS.fogHeightFalloff).toBe(0);
+    expect(shader).toContain('#ifdef FOG_PLANET\n    float travelled = fogLength(uViewInverse[3].xyz, direction, length(view.xyz));\n  #else\n    float travelled = max(length(view.xyz) - uStart, 0.0);\n  #endif');
+    expect(shader).toContain('float near = min(uStart, far);');
+    expect(shader).toContain('if (uHeightFalloff <= 0.0) return far - near;');
+    expect(shader).toContain('float amount = 1.0 - exp(-pow(travelled * uDensity, 1.5));');
+  });
+
+  it('weights each metre by altitude above the sphere, integrating each segment exactly for a linear altitude', () => {
+    expect(shader).toContain('return max(length(p - uPlanetCenter) - uPlanetRadius, 0.0);');
+    expect(shader).toContain('float segment = (far - near) / float(FOG_STEPS);');
+    expect(shader).toContain('float shape = abs(x) > 1e-3 ? (1.0 - exp(-x)) / x : 1.0 - 0.5 * x;');
+    expect(shader).toContain('total += segment * exp(-uHeightFalloff * h0) * shape;');
+  });
+
+  it('keeps its sunward warming on the sun it is given, at construction and when the sun moves', () => {
+    const effect = new FogEffect(new PerspectiveCamera(), VERDANT, new Vector3(0, 2, 0), DEFAULT_DIALS, planet);
+    expect((value(effect.uniforms, 'uSunDirection') as Vector3).toArray()).toEqual([0, 1, 0]);
+    effect.setSunDirection(new Vector3(0, 3, -4));
+    expect((value(effect.uniforms, 'uSunDirection') as Vector3).distanceTo(new Vector3(0, 0.6, -0.8))).toBeLessThan(1e-12);
+    expect(shader).toContain('float sun = pow(max(dot(direction, uSunDirection), 0.0), 6.0);');
+  });
+
+  it('declares every uniform it is given, and nothing else', () => {
+    const declared = [...shader.matchAll(/^\s*uniform\s+\w+\s+(\w+)\s*;/gm)].map((m) => m[1]);
+    expect(declared.sort()).toEqual([...fog(true).uniforms.keys()].sort());
   });
 });

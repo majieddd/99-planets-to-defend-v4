@@ -83,6 +83,7 @@ export function createStylePatch(theme: Theme, paint: PaintUniforms, segments: n
   const soil = new Color(theme.ground.soil);
   const lowPlanetColor = meadow.clone().multiplyScalar(0.92);
   const normals = geometry.getAttribute('normal');
+  const soilWeights = new Float32Array(count * count);
   const c = new Color();
   const p = new Vector3();
   const n = new Vector3();
@@ -96,14 +97,21 @@ export function createStylePatch(theme: Theme, paint: PaintUniforms, segments: n
     c.copy(meadow).lerp(meadowLight, smoothstep(0.45, 0.7, patchNoise));
     c.lerp(moss, smoothstep(0.2, -1.2, lift) * 0.8);
     const ring = Math.hypot(p.x, p.z);
-    c.lerp(soil, (smoothstep(2.6, 3.4, ring) - smoothstep(4.6, 5.6, ring)) * smoothstep(0.3, 0.6, patchNoise + 0.2));
-    c.lerp(stone, smoothstep(0.12, 0.3, slope));
-    c.lerp(lowPlanetColor, smoothstep(RELIEF_FADE_END, RIM_BLEND_END, ring));
+    const soilShare = (smoothstep(2.6, 3.4, ring) - smoothstep(4.6, 5.6, ring)) * smoothstep(0.3, 0.6, patchNoise + 0.2);
+    const stoneShare = smoothstep(0.12, 0.3, slope);
+    const rimShare = smoothstep(RELIEF_FADE_END, RIM_BLEND_END, ring);
+    c.lerp(stone, stoneShare);
+    c.lerp(lowPlanetColor, rimShare);
     c.toArray(colors, v * 3);
+    // The soil is mixed in by the painted shader, last, so the soilBreakup dial can break its edge into brush strokes.
+    // Stone and the rim were blended over the soil when it lived in this colour, so they still cover its share. The
+    // ring lies inside the level heart clearing, where both are 0, so the shader's mix equals the old vertex colour.
+    soilWeights[v] = soilShare * (1 - stoneShare) * (1 - rimShare);
   }
   geometry.setAttribute('color', new BufferAttribute(colors, 3));
+  geometry.setAttribute('soilWeight', new BufferAttribute(soilWeights, 1));
 
-  const mesh = new Mesh(geometry, createPaintedMaterial(paint, { terrain: true, vertexColors: true, standardBlend: 0 }));
+  const mesh = new Mesh(geometry, createPaintedMaterial(paint, { terrain: true, vertexColors: true, standardBlend: 0, soilColor: soil }));
   mesh.name = 'style_patch';
   mesh.receiveShadow = true;
 

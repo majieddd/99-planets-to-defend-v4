@@ -1,10 +1,11 @@
-import { BloomEffect, EffectPass, NormalPass, RenderPass, type Effect, type Pass } from 'postprocessing';
-import { DepthTexture, FloatType, PerspectiveCamera, Scene, SRGBColorSpace, Texture, Vector2, Vector3, type WebGLRenderer, type WebGLRenderTarget } from 'three';
+import { BlendFunction, BloomEffect, EffectPass, NormalPass, RenderPass, type Effect, type Pass } from 'postprocessing';
+import { Color, DepthTexture, FloatType, PerspectiveCamera, Scene, SRGBColorSpace, Texture, Vector2, Vector3, type WebGLRenderer, type WebGLRenderTarget } from 'three';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DIALS, NUMERIC_RANGES } from '../../../src/render/defaults';
 import { LAYERS } from '../../../src/render/layers';
-import { EMISSIVE_KEY_RANGE } from '../../../src/render/materials/painted';
-import { BLOOM_SMOOTHING, BloomKeyMaterial, createPipeline, OpaqueOutputEffect, type Pipeline } from '../../../src/render/post/pipeline';
+import { EMISSIVE_KEY_RANGE, EMISSIVE_PEAK } from '../../../src/render/materials/painted';
+import { FogEffect } from '../../../src/render/post/fogEffect';
+import { BLOOM_SMOOTHING, BloomKeyMaterial, createPipeline, KeyedBloomEffect, OpaqueOutputEffect, type Pipeline, type PipelineOptions } from '../../../src/render/post/pipeline';
 import { InkEdgeEffect } from '../../../src/render/post/inkEdgeEffect';
 import { TIERS, type TierName } from '../../../src/render/quality';
 import { VERDANT } from '../../../src/render/themes';
@@ -26,7 +27,7 @@ function stubRenderer(width = 1280, height = 720): WebGLRenderer {
   } as unknown as WebGLRenderer;
 }
 
-function build(tier: TierName, camera = new PerspectiveCamera(50, 16 / 9, 0.1, 2500)): Pipeline {
+function build(tier: TierName, camera = new PerspectiveCamera(50, 16 / 9, 0.1, 2500), extra: Partial<PipelineOptions> = {}): Pipeline {
   return createPipeline({
     renderer: stubRenderer(),
     scene: new Scene(),
@@ -37,6 +38,7 @@ function build(tier: TierName, camera = new PerspectiveCamera(50, 16 / 9, 0.1, 2
     inkNoise: new Texture(),
     sunDirection: new Vector3(0, 1, 0),
     reducedMotion: true,
+    ...extra,
   });
 }
 
@@ -45,32 +47,104 @@ function build(tier: TierName, camera = new PerspectiveCamera(50, 16 / 9, 0.1, 2
 const effectsOf = (pass: Pass): Effect[] => (pass as unknown as { effects: Effect[] }).effects;
 const targetOf = (pass: Pass): WebGLRenderTarget => (pass as unknown as { renderTarget: WebGLRenderTarget }).renderTarget;
 const cameraOf = (pass: Pass): PerspectiveCamera => (pass as unknown as { renderPass: { camera: PerspectiveCamera } }).renderPass.camera;
+const bloomOf = (pipeline: Pipeline): KeyedBloomEffect =>
+  effectsOf(pipeline.composer.passes.at(-1) as EffectPass).find((effect) => effect instanceof BloomEffect) as KeyedBloomEffect;
+
+/** The key material's warm test, as the shader runs it, for the colours the palettes name (sRGB hex). */
+function warmth(hex: string): number {
+  const c = new Color(hex);
+  const peak = Math.max(c.r, c.g, c.b, 1e-4);
+  const smoothstep = (a: number, b: number, x: number): number => {
+    const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
+    return t * t * (3 - 2 * t);
+  };
+  return (c.r >= Math.max(c.g, c.b) ? 1 : 0) * (1 - smoothstep(0.2, 0.35, c.b / peak));
+}
 
 describe('bloom key material', () => {
-  it('masks colour by the emissive key in alpha, never by luminance', () => {
-    const { fragmentShader } = new BloomKeyMaterial(1);
+  const dials = { bloomThreshold: 1.35, bloomIntensity: 0.55, heartHalo: 2.75 };
+
+  it('feeds each emissive pixel its hue at unit brightness, masked by the emissive key, never by luminance', () => {
+    const { fragmentShader } = new BloomKeyMaterial(dials);
     expect(fragmentShader).toContain('float mask = smoothstep(threshold, threshold + smoothing, texel.a * keyRange);');
-    expect(fragmentShader).toContain('gl_FragColor = vec4(texel.rgb * mask, 0.0);');
+    expect(fragmentShader).toContain('float peak = max(max(texel.r, texel.g), max(texel.b, 1e-4));');
+    expect(fragmentShader).toContain('vec3 energy = texel.rgb / max(peak, EMISSIVE_PEAK);');
+    expect(fragmentShader).toContain('gl_FragColor = vec4(energy * mask * mix(energyGain, heartGain, warm), 0.0);');
     expect(fragmentShader).not.toMatch(/luminance|0\.7152/);
   });
 
+  it('divides by the painted cap, so a pixel wholly covered by capped energy feeds unit brightness', () => {
+    const material = new BloomKeyMaterial(dials);
+    // GLSL ES 3.0 has no implicit int to float conversion, so the define must be a float literal.
+    expect(material.defines['EMISSIVE_PEAK']).toMatch(/^\d+\.\d+$/);
+    expect(Number(material.defines['EMISSIVE_PEAK'])).toBe(EMISSIVE_PEAK);
+  });
+
+  it('gives warm hue, the heart and its economy, the heart halo, and every other energy the energy strength', () => {
+    const { fragmentShader } = new BloomKeyMaterial(dials);
+    expect(fragmentShader).toContain('float warm = step(max(texel.g, texel.b), texel.r) * (1.0 - smoothstep(0.2, 0.35, texel.b / peak));');
+    // The palettes (blender/lib/palette.py): the heart's core, deep amber and inlay gold, against player cyan, Xeno
+    // magenta and violet, and a warm white. The satellites' peach facet never reaches the threshold (key 0.66).
+    for (const hex of ['#ffc36b', '#ff8a3d', '#ffc857']) expect(warmth(hex), hex).toBe(1);
+    for (const hex of ['#59f2ff', '#ff3fa6', '#d84dff', '#ffffff', '#fff0dc']) expect(warmth(hex), hex).toBe(0);
+  });
+
   it('decodes the key with the range the painted material encodes it in', () => {
-    const material = new BloomKeyMaterial(1.35);
+    const material = new BloomKeyMaterial(dials);
     expect(material.uniforms['keyRange']!.value).toBe(EMISSIVE_KEY_RANGE);
     expect(material.uniforms['smoothing']!.value).toBe(BLOOM_SMOOTHING);
-    expect(material.uniforms['threshold']!.value).toBe(1.35);
     // Every threshold the dial allows, plus the ramp, fits under the range an EffectPass keeps (alpha clamped to 1).
     expect(NUMERIC_RANGES.bloomThreshold[1] + BLOOM_SMOOTHING).toBeLessThanOrEqual(EMISSIVE_KEY_RANGE);
   });
 
+  it('takes its three dials at creation and on a live move', () => {
+    const created = new BloomKeyMaterial(dials);
+    expect([created.uniforms['threshold']!.value, created.uniforms['energyGain']!.value, created.uniforms['heartGain']!.value]).toEqual([1.35, 0.55, 2.75]);
+    const moved = new BloomKeyMaterial(DEFAULT_DIALS);
+    moved.setDials(dials);
+    expect([moved.uniforms['threshold']!.value, moved.uniforms['energyGain']!.value, moved.uniforms['heartGain']!.value]).toEqual([1.35, 0.55, 2.75]);
+  });
+
   it('takes the frame through the setter LuminancePass.render uses, and the threshold both ways', () => {
-    const material = new BloomKeyMaterial(1);
+    const material = new BloomKeyMaterial(DEFAULT_DIALS);
     const frame = new Texture();
     material.inputBuffer = frame;
     expect(material.uniforms['inputBuffer']!.value).toBe(frame);
     material.threshold = 2.2;
     expect(material.threshold).toBe(2.2);
     expect(material.uniforms['threshold']!.value).toBe(2.2);
+  });
+});
+
+describe('keyed bloom effect', () => {
+  const make = (): KeyedBloomEffect => new KeyedBloomEffect(new BloomKeyMaterial(DEFAULT_DIALS), { blendFunction: BlendFunction.ADD, levels: 8 });
+
+  it('keeps its glow off the pixels that fed it, by the same key, threshold and ramp', () => {
+    const shader = make().getFragmentShader();
+    expect(shader).toContain('float emitter = smoothstep(threshold, threshold + smoothing, inputColor.a * keyRange);');
+    expect(shader).toContain('outputColor = texture2D(map, uv) * intensity * (1.0 - emitter);');
+  });
+
+  it('shares the key material\'s threshold, ramp and range uniforms, so one dial move reaches the mask and the shield', () => {
+    const bloom = make();
+    for (const name of ['threshold', 'smoothing', 'keyRange']) expect(bloom.uniforms.get(name), name).toBe(bloom.key.uniforms[name]);
+    bloom.key.threshold = 2.4;
+    expect(bloom.uniforms.get('threshold')!.value).toBe(2.4);
+  });
+
+  it('reads its input through the key material and leaves the strength to it', () => {
+    const bloom = make();
+    expect(bloom.luminancePass.fullscreenMaterial).toBe(bloom.key);
+    expect(bloom.intensity).toBe(1);
+    expect(bloom.mipmapBlurPass.enabled).toBe(true);
+    expect(bloom.mipmapBlurPass.levels).toBe(8);
+  });
+
+  it('declares every uniform it is given, and nothing else', () => {
+    const bloom = make();
+    // map is declared twice, once per precision branch.
+    const declared = new Set([...bloom.getFragmentShader()!.matchAll(/^\s*uniform\s+(?:\w+\s+)?\w+\s+(\w+)\s*;/gm)].map((m) => m[1]));
+    expect([...declared].sort()).toEqual([...bloom.uniforms.keys()].sort());
   });
 });
 
@@ -134,21 +208,45 @@ describe('createPipeline', () => {
     const last = pipeline.composer.passes.at(-1) as EffectPass;
     expect(last).toBeInstanceOf(EffectPass);
     const effects = effectsOf(last);
-    const bloom = effects.find((effect) => effect instanceof BloomEffect) as BloomEffect;
+    const bloom = bloomOf(pipeline);
+    expect(bloom).toBeInstanceOf(KeyedBloomEffect);
+    expect(bloom.blendMode.blendFunction).toBe(BlendFunction.ADD);
     expect(bloom.luminancePass.fullscreenMaterial).toBe(pipeline.bloomKey);
     expect(pipeline.bloomKey).toBeInstanceOf(BloomKeyMaterial);
     expect(pipeline.bloomKey.threshold).toBe(DEFAULT_DIALS.bloomThreshold);
+    expect(pipeline.bloomKey.uniforms['energyGain']!.value).toBe(DEFAULT_DIALS.bloomIntensity);
+    expect(pipeline.bloomKey.uniforms['heartGain']!.value).toBe(DEFAULT_DIALS.heartHalo);
     expect(effects.at(-1)).toBeInstanceOf(OpaqueOutputEffect);
     // The ink and fog pass comes before, so the bloom reads their output with the key still in alpha.
     expect(pipeline.composer.passes.indexOf(last)).toBeGreaterThan(pipeline.composer.passes.findIndex((pass) => pass instanceof EffectPass));
   });
 
-  it('moves the key threshold with the bloomThreshold dial', () => {
+  it('gives each tier its own bloom depth', () => {
+    for (const tier of ['high', 'medium', 'low'] as const) expect(bloomOf(build(tier)).mipmapBlurPass.levels).toBe(TIERS[tier].bloomLevels);
+  });
+
+  it('moves the threshold and both halo strengths with their dials', () => {
     const pipeline = build('high');
-    // Off the default and inside the dial's range, so a dropped or cross-wired line fails.
-    pipeline.applyDials({ ...DEFAULT_DIALS, bloomThreshold: 1.85, bloomIntensity: 0.9 }, VERDANT);
+    // Off the defaults, inside the dials' ranges and apart from each other, so a dropped or cross-wired line fails.
+    pipeline.applyDials({ ...DEFAULT_DIALS, bloomThreshold: 1.85, bloomIntensity: 0.9, heartHalo: 6.5 }, VERDANT);
     expect(pipeline.bloomKey.threshold).toBe(1.85);
-    const bloom = effectsOf(pipeline.composer.passes.at(-1) as EffectPass).find((effect) => effect instanceof BloomEffect) as BloomEffect;
-    expect(bloom.intensity).toBe(0.9);
+    expect(pipeline.bloomKey.uniforms['energyGain']!.value).toBe(0.9);
+    expect(pipeline.bloomKey.uniforms['heartGain']!.value).toBe(6.5);
+    // The strengths live in the key material; the effect's own intensity would multiply them.
+    expect(bloomOf(pipeline).intensity).toBe(1);
+    expect(bloomOf(pipeline).uniforms.get('threshold')!.value).toBe(1.85);
+  });
+
+  it('hands the planet to the fog, and turns the fog\'s sunward warming with the sun', () => {
+    const planet = { center: new Vector3(0, -160, 0), radius: 160 };
+    const withPlanet = build('high', undefined, { planet });
+    expect(withPlanet.fog).toBeInstanceOf(FogEffect);
+    expect(withPlanet.fog.defines.get('FOG_PLANET')).toBe('1');
+    expect((withPlanet.fog.uniforms.get('uPlanetCenter')!.value as Vector3).toArray()).toEqual([0, -160, 0]);
+    expect(withPlanet.fog.uniforms.get('uPlanetRadius')!.value).toBe(160);
+    expect(build('high').fog.defines.has('FOG_PLANET')).toBe(false);
+    // Starts at the sun direction the options gave (0, 1, 0), so a dropped write fails.
+    withPlanet.setSunDirection(new Vector3(3, 4, 0));
+    expect((withPlanet.fog.uniforms.get('uSunDirection')!.value as Vector3).distanceTo(new Vector3(0.6, 0.8, 0))).toBeLessThan(1e-12);
   });
 });

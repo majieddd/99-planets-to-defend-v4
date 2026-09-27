@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_DIALS, NUMERIC_RANGES } from '../../../src/render/defaults';
+import { COLOR_DIALS, DEFAULT_DIALS, NUMERIC_RANGES } from '../../../src/render/defaults';
 import { decodeDials, encodeDials } from '../../../src/render/dialsCodec';
 import { sunDirection, VERDANT } from '../../../src/render/themes';
 
@@ -52,5 +52,41 @@ describe('dials', () => {
     expect(decodeDials(hostile)).toEqual(DEFAULT_DIALS);
     expect(decodeDials(toLink('{"bands":9,"edgeFadeFar":5,"grain":-0.1,"exposure":1e999,"inkColor":"#abc"}'))).toEqual(DEFAULT_DIALS);
     for (const json of ['null', '5', '"x"', '[1]']) expect(decodeDials(toLink(json))).toEqual(DEFAULT_DIALS);
+  });
+
+  it('gives every dial either a range or a colour, never both, and every colour default is six-digit hex', () => {
+    // A dial with neither never reaches a link: the codec writes it but reads only ranged numbers and listed colours.
+    for (const key of Object.keys(DEFAULT_DIALS) as (keyof typeof DEFAULT_DIALS)[]) {
+      const ranged = key in NUMERIC_RANGES;
+      const colour = (COLOR_DIALS as readonly string[]).includes(key);
+      expect(ranged !== colour, key).toBe(true);
+      if (colour) expect(DEFAULT_DIALS[key], key).toMatch(/^#[0-9a-f]{6}$/);
+    }
+    expect(COLOR_DIALS).toContain('sunColor');
+  });
+
+  it('round-trips the halo, height fog, sun and soil dials through a link', () => {
+    // Off their defaults, inside their ranges; the colour is the only way a sun colour reaches a link.
+    const changed = { ...DEFAULT_DIALS, heartHalo: 5.5, fogHeightFalloff: 0.2, sunElevation: 12.5, sunColor: '#ffaa55', sunIntensity: 2.4, soilBreakup: 0.7 };
+    const decoded = decodeDials(encodeDials(changed));
+    expect(decoded).toEqual(changed);
+    // Out of range, or not a colour: each is dropped as a link's bad value is, and the default stands.
+    const hostile = toLink(JSON.stringify({ heartHalo: 9, fogHeightFalloff: 0.6, sunElevation: 1, sunColor: 'orange', sunIntensity: 0.1, soilBreakup: 1.5 }));
+    expect(decodeDials(hostile)).toEqual(DEFAULT_DIALS);
+  });
+
+  it('starts every new capability at the look it replaced, except the heart halo', () => {
+    // The sun dials are the Verdant theme's light, so the default frame is lit as before.
+    expect(DEFAULT_DIALS.sunElevation).toBe(VERDANT.sun.elevationDeg);
+    expect(DEFAULT_DIALS.sunColor).toBe(VERDANT.sun.color);
+    expect(DEFAULT_DIALS.sunIntensity).toBe(VERDANT.sun.intensity);
+    // A falloff of 0 is the distance fog; a breakup of 0 is the smooth soil ring.
+    expect(DEFAULT_DIALS.fogHeightFalloff).toBe(0);
+    expect(DEFAULT_DIALS.soilBreakup).toBe(0);
+    // The fog's density and start keep the values the distance fog was tuned to.
+    expect(DEFAULT_DIALS.fogDensity).toBe(0.006);
+    expect(DEFAULT_DIALS.fogStart).toBe(20);
+    // The heart halo is the one capability that shows at the defaults, and it is stronger than the energy's glow.
+    expect(DEFAULT_DIALS.heartHalo).toBeGreaterThan(DEFAULT_DIALS.bloomIntensity);
   });
 });

@@ -16,6 +16,7 @@ export interface RenderDials {
   ambientStrength: number;
   brushScale: number;
   terrainBrush: number;
+  soilBreakup: number;
   inkWidthPx: number;
   inkColor: string;
   edgeStrength: number;
@@ -26,9 +27,14 @@ export interface RenderDials {
   edgeFadeFar: number;
   fogDensity: number;
   fogStart: number;
+  fogHeightFalloff: number;
+  sunElevation: number;
+  sunColor: string;
+  sunIntensity: number;
   exposure: number;
   contrast: number;
   bloomIntensity: number;
+  heartHalo: number;
   bloomThreshold: number;
   grain: number;
   vignette: number;
@@ -48,6 +54,8 @@ export const DEFAULT_DIALS: RenderDials = {
   ambientStrength: 0.45,
   brushScale: 0.35,
   terrainBrush: 0.5,
+  // 0 keeps the soil ring's smooth vertex-colour edge; 1 breaks it into the terrain's brush strokes.
+  soilBreakup: 0,
   inkWidthPx: 2.2,
   inkColor: '#0e0f14',
   edgeStrength: 0.9,
@@ -58,9 +66,21 @@ export const DEFAULT_DIALS: RenderDials = {
   edgeFadeFar: 180,
   fogDensity: 0.006,
   fogStart: 20,
+  // Per metre of altitude above the planet. At 0 every metre of the ray counts alike, which is the distance fog the
+  // renderer drew before height fog existed, so the default look is unchanged.
+  fogHeightFalloff: 0,
+  // The sun defaults to the Verdant theme's light (themes.ts), so a preset can lower and warm the key without
+  // editing the theme. The theme keeps the azimuth.
+  sunElevation: 35,
+  sunColor: '#ffd29a',
+  sunIntensity: 3.2,
   exposure: 0.77,
   contrast: 1.05,
-  bloomIntensity: 0.6,
+  // Halo strengths, in units of an emitter pixel's hue at full brightness (post/pipeline.ts). 0.8 gives the rails and
+  // the nest the glow they had when the bloom took 0.6 of the capped surface colour (whose peak is about 1.3); the
+  // heart's 4 is what makes its halo read at hero distance.
+  bloomIntensity: 0.8,
+  heartHalo: 4,
   bloomThreshold: 1.0,
   grain: 0.04,
   vignette: 0.35,
@@ -82,6 +102,7 @@ export const NUMERIC_RANGES: Record<NumericKey, [number, number, number]> = {
   ambientStrength: [0, 1.5, 0.01],
   brushScale: [0.05, 2, 0.01],
   terrainBrush: [0, 1.5, 0.01],
+  soilBreakup: [0, 1, 0.01],
   inkWidthPx: [0, 6, 0.1],
   edgeStrength: [0, 1, 0.01],
   edgeLineWidth: [0.5, 3, 0.05],
@@ -91,14 +112,24 @@ export const NUMERIC_RANGES: Record<NumericKey, [number, number, number]> = {
   // order before the shader sees it, because GLSL smoothstep is undefined when its edges are equal or inverted.
   edgeFadeNear: [5, 300, 1],
   edgeFadeFar: [10, 600, 1],
-  fogDensity: [0, 0.03, 0.0005],
+  // Height fog thins with altitude, so a ground density visible at the low cameras' 20 to 35 m horizon needs more than
+  // the 0.03 that capped the distance fog; old links stay inside the wider range.
+  fogDensity: [0, 0.08, 0.0005],
   fogStart: [0, 200, 1],
+  // 0.5 is a 2 m scale height, fog that lies on the ground; 0.02 is 50 m, close to the uniform fog at 0.
+  fogHeightFalloff: [0, 0.5, 0.005],
+  // At 3 degrees the key already grazes the level clearing (a 6 m tree throws a 114 m shadow), and on a 160 m planet
+  // the patch's far side has turned away from it (at 8 degrees the terminator already crosses the strategic view).
+  // 85 is a noon sun.
+  sunElevation: [3, 85, 0.5],
+  sunIntensity: [0.5, 8, 0.05],
   exposure: [0.2, 3, 0.01],
   contrast: [0.7, 1.5, 0.01],
   bloomIntensity: [0, 3, 0.01],
+  heartHalo: [0, 8, 0.05],
   bloomThreshold: [0.2, 3, 0.01],
   grain: [0, 0.2, 0.005],
   vignette: [0, 1, 0.01],
 };
 
-export const COLOR_DIALS = ['shadowTint', 'inkColor'] as const;
+export const COLOR_DIALS = ['shadowTint', 'inkColor', 'sunColor'] as const;

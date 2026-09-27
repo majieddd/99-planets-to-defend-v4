@@ -999,7 +999,12 @@ Starting values, replaced by the dial values the owner locks at the style check.
 | Hull ink width | 2.2 px at 1080p, clamped 1.2 to 4 px | Borderlands-bold at gameplay distance without swallowing small enemies |
 | Edge pass fade | 60 m to 180 m | Terrain creases read near, vanish before they become moire |
 | Rim light | 0.35 | Separates characters from terrain in coloured shadow |
-| Bloom threshold and intensity | 1.0 and 0.6 | Only energy and hazards bloom |
+| Bloom threshold and energy halo | 1.0 and 0.8 | Only energy and hazards bloom. The bloom takes each emitter pixel's hue at full brightness, and 0.8 gives the rails and the nest the glow they had at 0.6 of the capped surface colour (Bulwark's channels at the close-up camera: 5.8 luma added 1 to 4 px out, 5.6 before) |
+| Heart halo | 4 | Warm emitters, the heart and its economy (Pillar 5), feed the bloom at this strength instead of the energy's, so the heart reads without flaring every rail: 77, 35, 24 and 16 luma added 1 to 4, 4 to 8, 8 to 16 and 16 to 32 px outside the crystal at the hero camera, against 32, 12, 7 and 4 before |
+| Fog density and start | 0.006 and 20 m | Distance fog that leaves the low cameras' 20 to 35 m horizon clear and takes about half the strategic limb's colour |
+| Height fog falloff | 0 per metre | Every metre of the ray counts alike: the distance fog above. About 0.3, with density 0.02 and start 0, lays the haze on the ground: 0.4 to 0.5 of the fog colour at the low cameras' limbs while the strategic limb keeps 0.39 and its centre 0.06 |
+| Sun elevation, colour and intensity | 35 degrees, #ffd29a, 3.2 | The Verdant theme's light, as dials so a preset can lower and warm the key without editing the theme; the theme keeps the azimuth |
+| Soil edge breakup | 0 | The smooth soil ring. At 1 its edge breaks into the terrain's brush strokes: mixed pixels on the edge fall from 45 to 7 percent at the strategic camera |
 | Film grain | 0.04 | Painterly texture without noise |
 
 ## Content: planets and families

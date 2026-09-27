@@ -1,5 +1,5 @@
 import GUI from 'lil-gui';
-import { NUMERIC_RANGES, type RenderDials } from '../../render/defaults';
+import { COLOR_DIALS, NUMERIC_RANGES, type RenderDials } from '../../render/defaults';
 import type { TierName } from '../../render/quality';
 import { NARROW_SCREEN } from './referenceBoard';
 import { PRESETS, type BulwarkMode, type PresetName } from './scene';
@@ -25,12 +25,39 @@ export interface LabHandlers {
   screenshot(): void;
 }
 
-const GROUPS: Record<string, (keyof RenderDials)[]> = {
-  Paint: ['bands', 'bandSoftness', 'terminatorNoise', 'paintStrength', 'saturation', 'shadowDepth', 'shadowTint', 'rimStrength', 'rimPower', 'standardBlend', 'ambientStrength', 'brushScale', 'terrainBrush'],
+type ColorDial = (typeof COLOR_DIALS)[number];
+
+/** Every dial sits in exactly one folder, so none is missing from the panel (tests/unit/labs/dials.test.ts). */
+export const GROUPS: Record<string, (keyof RenderDials)[]> = {
+  Paint: [
+    'bands',
+    'bandSoftness',
+    'terminatorNoise',
+    'paintStrength',
+    'saturation',
+    'shadowDepth',
+    'shadowTint',
+    'rimStrength',
+    'rimPower',
+    'standardBlend',
+    'ambientStrength',
+    'brushScale',
+    'terrainBrush',
+    'soilBreakup',
+  ],
   Ink: ['inkWidthPx', 'inkColor', 'edgeStrength', 'edgeLineWidth', 'depthThreshold', 'normalThreshold', 'edgeFadeNear', 'edgeFadeFar'],
-  Atmosphere: ['fogDensity', 'fogStart'],
-  Post: ['exposure', 'contrast', 'bloomIntensity', 'bloomThreshold', 'grain', 'vignette'],
+  Light: ['sunElevation', 'sunColor', 'sunIntensity'],
+  Atmosphere: ['fogDensity', 'fogStart', 'fogHeightFalloff'],
+  Post: ['exposure', 'contrast', 'bloomIntensity', 'heartHalo', 'bloomThreshold', 'grain', 'vignette'],
 };
+
+/**
+ * The codec's list decides which dials are colours. A hard-coded pair of names here would have handed a new colour dial
+ * (sunColor) to the numeric branch, whose range lookup finds nothing for it, and the panel would have failed to build.
+ */
+export function isColorDial(key: keyof RenderDials): key is ColorDial {
+  return (COLOR_DIALS as readonly string[]).includes(key);
+}
 
 export function createDialsPanel(dials: RenderDials, state: LabState, handlers: LabHandlers): GUI {
   // On a phone the open panel covered most of the canvas, so there it starts closed and its title bar is the toggle,
@@ -58,10 +85,10 @@ export function createDialsPanel(dials: RenderDials, state: LabState, handlers: 
   for (const [group, keys] of Object.entries(GROUPS)) {
     const folder = gui.addFolder(group);
     for (const key of keys) {
-      if (key === 'shadowTint' || key === 'inkColor') {
+      if (isColorDial(key)) {
         folder.addColor(dials, key).onChange(() => handlers.onDials());
       } else {
-        const [min, max, step] = NUMERIC_RANGES[key as Exclude<keyof RenderDials, 'shadowTint' | 'inkColor'>];
+        const [min, max, step] = NUMERIC_RANGES[key];
         folder.add(dials, key, min, max, step).onChange(() => handlers.onDials());
       }
     }
