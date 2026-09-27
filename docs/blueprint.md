@@ -1,8 +1,9 @@
 # 99 Planets To Defend (v4): game blueprint
 
-Status: design approved in brainstorming on 2026-09-23. The M0a toolchain, checks, CI and Pages site
-and the M0b simulation kernel exist; no game systems yet. This file is both the approved spec and
-the running design document for the whole game. Check it before any build:
+Status: design approved in brainstorming on 2026-09-23. The M0a toolchain, checks, CI and Pages site,
+the M0b simulation kernel, the M0c Blender asset set, and the M0d renderer v1 and Style Lab exist; no
+game systems yet. This file is both the approved spec and the running design document for the whole
+game. Check it before any build:
 
 ```bash
 node "<aegis-suite>/tools/blueprint.js" check docs/blueprint.md --gate
@@ -219,26 +220,34 @@ Painted-Anime-Inkline 4.0 defaults, and no asset family is mass-produced before 
 The kit is not bought. It is built by script in Blender 5.2.1 LTS from recipes in
 `blender/recipes/`. The asset build finds Blender through the `BLENDER_PATH` environment variable
 (on the owner's machine, `C:\Users\Majied LaFleur\tools\blender-5.2.1\blender.exe`). The manifest is
-`public/assets/manifest.json`, written by `npm run assets` and counted from the exported files; the
-Content tables must equal its counts (`npm run assets:check`). Current count: 0 files, because
-nothing is built yet. Every design noun in Mechanics through Content must be in this catalogue before
-the milestone that uses it starts.
+`public/assets/manifest.json`, written by `npm run assets` and counted from the exported files. The
+Content tables must equal its counts, a rule kept by hand at each milestone. The current count (M0c)
+is 8 manifest entries: the `brush_strokes` and `ink_noise` textures, and the models `verdant_kit`
+(8 pieces), `worldheart` (plinth and 11 stages), `nest`, `bolt_sentinel` (marks I to III), `husk`
+and `bulwark`. Every placeable asset has its root at its ground contact point, so the bind-pose
+minimum Y of each tower mark, each Verdant piece and every other model as a whole is within 5 mm of
+0, unless its recipe names a designed sink of at most 0.14 m (rocks bury their base edge), which
+the measured depth must match within 5 mm.
+`npm run assets:check` holds each model in the manifest to its family budget (Performance budgets),
+the shared strike timings and this ground contract, using the numbers the build recorded; it never
+compares the manifest with the Content tables. Every design noun in Mechanics through Content must
+be in this catalogue before the milestone that uses it starts.
 
 | Class | Planned count | Recipe | First milestone |
 |---|---|---|---|
-| Commanders | 5 archetypes on one shared skeleton (Bulwark, Twinfang, Longsight, Kettle, Emberline) | `commanders.py` | M0 (Bulwark), M4 (all five) |
+| Commanders | 5 archetypes on one shared skeleton (Bulwark, Twinfang, Longsight, Kettle, Emberline) | `bulwark.py` (M0); one recipe per commander after | M0 (Bulwark), M4 (all five) |
 | Allies | 1 (Warden) | `allies.py` | M4 |
-| Xeno species | 4 (Mite, Husk, Aegis, Wisp) plus 4 evolution overlays (armour, speed, shield, split) | `xeno.py` | M0 (Husk), M2 (all four) |
-| Towers | 6 families x 3 marks = 18 models, plus 12 specialization variants | `towers.py` | M0 (Bolt Sentinel I to III), M2 (all) |
+| Xeno species | 4 (Mite, Husk, Aegis, Wisp) plus 4 evolution overlays (armour, speed, shield, split) | `husk.py` (M0); one recipe per species after | M0 (Husk), M2 (all four) |
+| Towers | 6 families x 3 marks = 18 models, plus 12 specialization variants | `bolt_sentinel.py` (M0); one recipe per family after | M0 (Bolt Sentinel I to III), M2 (all) |
 | Worldheart | 1 model with 11 growth stages | `heart.py` | M0 |
-| Nests | 1 base model plus a dressing per theme | `nests.py` | M0 |
+| Nests | 1 base model plus a dressing per theme | `nest.py` | M0 |
 | Weapon parts | 6 families x 5 slots x 4 manufacturers x 3 eras, about 360 parts | `weapons.py` | M5 |
 | Boss parts | 5 archetypes, each with body, limb, head, armour and weak-point sets | `bosses.py` | M6 |
 | Mounts | 3 (Ridge Strider, Tideback, Sky Ray) | `mounts.py` | M8 |
 | Structures and chests | 4 structure families, 5 chest rarities, 1 wall segment | `structures.py` | M5 (structures, chests), M8 (walls) |
 | Pickups and projectiles | crystal, scrap, coin, cargo cache, about 12 projectiles | `pickups.py` | M2 |
 | Props | drop pod, heart plinth, beacon, about 6 | `props.py` | M2 |
-| Environment kits | per theme: 6 to 10 rocks, 6 to 10 flora, 3 to 5 landmarks, grass cards | `env_<theme>.py` | M0 (Verdant), M2 (6 themes), M8 (12 or more) |
+| Environment kits | per theme: 6 to 10 rocks, 6 to 10 flora, 3 to 5 landmarks, grass cards | `verdant.py` (M0); one recipe per theme after | M0 (Verdant), M2 (6 themes), M8 (12 or more) |
 | Brush atlas | brush-stroke detail textures for terrain and paint bakes | `brushes.py` | M0 |
 | UI icons | rendered from the models in the painted style: towers, weapons, powers | `icons.py` | M9 |
 
@@ -951,6 +960,29 @@ the owner's playtests overrule the bot.
 | Live enemies | 400 | 250 | 120 | Vertex animation textures for crowds |
 | First load | under 25 MB | under 25 MB | under 25 MB | Themes and later families stream in |
 
+The asset budgets mirror `tools/assets/budgets.json`, and `npm run assets:check` holds every model in
+the manifest to its family's row. A triangle budget counts the whole GLB, including every mark, stage
+and piece in it; the texture budget caps the width and height of each texture; ink means the model
+carries the `_INK` width attribute the hull ink reads. `commanders` must also export idle, run and
+attack clips, and `xeno` idle, walk and attack.
+
+| Family | Triangles | Bones | Texture (px) | Ink | Rationale |
+|---|---|---|---|---|---|
+| `commanders` | 24,000 | 32 | 1,024 | yes | Seen closest, in third person and on the hangar turntable; one humanoid skeleton serves all five |
+| `xeno` | 9,000 | 24 | 1,024 | yes | Seen in crowds, so well under a commander |
+| `towers` | 36,000 | 0 | 1,024 | yes | One GLB holds a family's three marks, and a tower shows one |
+| `heart` | 30,000 | 0 | 1,024 | yes | One GLB holds the plinth and 11 stages, and the runtime shows the plinth and one stage |
+| `nests` | 8,000 | 0 | 512 | yes | A small static mound, and each wave adds one or two |
+| `env` | 20,000 | 0 | 1,024 | yes | One GLB holds a theme's whole kit, and each piece is instanced as scatter |
+
+The same check holds these tolerances.
+
+| Value | Number | Rationale |
+|---|---|---|
+| Ground contact, the bind-pose minimum Y of each placeable | within 5 mm of 0 | The runtime stands each root on the ground, so any miss floats or sinks the asset; 5 mm allows only rounding |
+| Designed sink, named by the recipe | at most 0.14 m, matched by the measured depth within 5 mm | Lets a rock bury its base edge; the cap stops a sink from hiding a misplaced root |
+| Clip length and strike time against `src/shared/timings.json` | within 1/30 s | One frame at the clips' 30 fps, so animation and simulation never disagree by more than a frame |
+
 ### Render defaults
 
 Starting values, replaced by the dial values the owner locks at the style check.
@@ -1179,7 +1211,7 @@ The order of construction:
 | Bot runs | `npm run bot -- --planets 20` | three policies (competent, idle, reckless) win and lose planets; the competent bot finishes in 25 to 35 simulated minutes | milestone and nightly |
 | Browser smoke | `npm run e2e` | every page boots without console errors; scripted input places a tower and runs a wave; frames saved | every pull request |
 | Captures | `npm run capture` | every inspection page captured for review | milestone |
-| Asset checks | `npm run assets:check` | triangle, bone and texture budgets; strike markers equal simulation timings; manifest counts equal Content | every asset change |
+| Asset checks | `npm run assets:check` | each model within its family's triangle, bone, texture and ink budget (Performance budgets); no double-sided material; required clips present, with durations and strike times within 1/30 s of `src/shared/timings.json`; every listed file present; placeable roots at ground contact (Kit); fails without a manifest; reads only the numbers the build recorded, never a GLB | every commit, in CI |
 | Performance | `npm run perf` | frame time along a fixed camera path per tier on the development laptop | milestone |
 | Blueprint gate | `blueprint.js check docs/blueprint.md --gate` | this document is complete | every commit |
 | Agent play | the built-in browser | the agent plays the change and attaches frames | every change |
@@ -1191,8 +1223,8 @@ The order of construction:
 |---|---|---|
 | Browser game: TypeScript, Three.js on WebGL2, Vite, GitHub Pages | partial | toolchain, CI and Pages live (docs/evidence/m0/pages-placeholder.png); no game yet |
 | Repository majieddd/99-planets-to-defend-v4, public | partial | repository created holding this blueprint, 2026-09-23 |
-| Approach A: painted assets, shader lighting, two-pass ink | partial | renderer v1 and the Style Lab run on placeholders (docs/evidence/m0/style-placeholder-*.png); the owner style gate waits for M0c's assets |
-| Every asset built by script in Blender 5.2.1 | not yet | owner requirement, 2026-09-23 |
+| Approach A: painted assets, shader lighting, two-pass ink | partial | renderer v1 and the Style Lab were verified on placeholders (docs/evidence/m0/style-placeholder-*.png) and now load M0c's assets (docs/evidence/assets/style_lab_hero.png); the owner style gate is next |
+| Every asset built by script in Blender 5.2.1 | partial | style-scene set built by npm run assets; assets:check pass=8 fail=0; sheets in docs/evidence/assets |
 | Stylized, visored commanders | not yet | owner choice, 2026-09-23 |
 | Every v3 system returns, staged by milestone for quality | not yet | owner choice, 2026-09-23 |
 | A planet takes 25 to 35 minutes | not yet | owner choice, 2026-09-23 |
@@ -1229,11 +1261,11 @@ The order of construction:
 - [x] Toolchain: Vite, strict TypeScript, Three.js, Vitest, Playwright, ESLint with the simulation
       boundary rule, an em dash check covering all four forms
 - [x] CI workflow and the GitHub Pages deploy
-- [ ] Blender pipeline: headless runner, shared libraries (paint bake, rig, animate, export),
+- [x] Blender pipeline: headless runner, shared libraries (paint bake, rig, animate, export),
       manifest, turntable sheets, asset checks
 - [x] Renderer v1: painted lighting material, hull ink, screen-space edge ink, fog and sky, bloom and
       grade, quality tiers
-- [ ] Style scene assets: Bulwark (idle, run, attack), Bolt Sentinel marks I to III, Husk (walk,
+- [x] Style scene assets: Bulwark (idle, run, attack), Bolt Sentinel marks I to III, Husk (walk,
       attack), Worldheart, nest, Verdant kit (rocks, flora, grass cards), brush atlas
 - [x] Style Lab with live dials, the reference board and the colour audit
 - [x] Simulation kernel: fixed tick, seeded RNG streams, event log, save envelope, bot harness
@@ -1262,3 +1294,9 @@ all four cameras, at the root path and at the Pages base path; the hero frame pa
 (concentration 1.90 x chance against a gate of 1.5) and the mutation proof rejects its hue-rotated
 copy. The lab will switch to M0c's Blender assets automatically once those merge. Next: the owner's
 style gate (M0d plan Task 11), after M0c.
+2026-09-27. M0c is complete: `npm run assets` builds the style-scene set in Blender 5.2.1,
+`npm run assets:check` passes (pass=8 fail=0) and runs in CI, and contact sheets are in
+docs/evidence/assets. The check now also holds the Kit's ground contract, which puts every placeable
+asset's root at its ground contact point. The Style Lab now loads these assets from the manifest,
+and `npm run e2e` renders all four camera presets with them (docs/evidence/assets/style_lab_hero.png).
+Next: the owner's style gate (M0d plan Task 11) on these assets.

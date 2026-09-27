@@ -29,6 +29,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      # Trusts what the build measured and recorded in the manifest; it never opens a GLB or runs Blender.
+      - run: npm run assets:check
       - run: npm test
       - run: npx playwright install --with-deps chromium
       - id: e2e
