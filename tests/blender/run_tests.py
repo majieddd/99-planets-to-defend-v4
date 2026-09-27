@@ -26,6 +26,21 @@ def glb_json(path):
     return json.loads(data[20:20 + length])
 
 
+def glb_vec3(path, gj, index):
+    """A float VEC3 accessor read from a GLB's binary chunk, back in Blender's Z-up axes."""
+    blob, acc = pathlib.Path(path).read_bytes(), gj['accessors'][index]
+    start = 28 + struct.unpack('<I', blob[12:16])[0] + gj['bufferViews'][acc['bufferView']].get('byteOffset', 0) + acc.get('byteOffset', 0)
+    v = np.frombuffer(blob, np.float32, acc['count'] * 3, start).reshape(-1, 3)
+    return np.stack([v[:, 0], -v[:, 2], v[:, 1]], axis=1)
+
+
+def ellipsoid_error_deg(points, normals, center, radii):
+    """Largest angle between each normal and normalize((p - center) / radii^2), the geo.ellipsoid_normals proxy."""
+    want = (np.asarray(points) - center) / np.square(radii)
+    cos = (want * normals).sum(1) / np.linalg.norm(want, axis=1) / np.linalg.norm(normals, axis=1)
+    return float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))).max())
+
+
 def test_png_round_trip(tmp):
     image = np.zeros((4, 6, 3))
     image[0, :, 0] = 1.0  # top row red
@@ -140,10 +155,19 @@ def test_rigid_binding_and_action_export(tmp):
     arm = rig.humanoid('rig')
     upper = geo.box('upper', (0.2, 0.2, 0.4), location=(0.12, 0, 0.78))
     lower = geo.box('lower', (0.18, 0.18, 0.4), location=(0.12, 0, 0.33))
+    # Custom normals must survive the join and the export. Radii equal to the box's half extents would reproduce
+    # area-weighted smooth normals at its corners; these differ, so normals recomputed on the way cannot pass.
+    proxy = ((0.12, 0, 0.78), (0.1, 0.14, 0.25))
+    scene.apply_transforms(upper)
+    geo.ellipsoid_normals(upper, *proxy)
     for part in (upper, lower):
         ink.set_ink(part, 1.0)
     body = rig.bind_rigid(arm, [(upper, 'thigh.L'), (lower, 'shin.L')], 'body')
     assert {g.name for g in body.vertex_groups} == {'thigh.L', 'shin.L'}
+    corners = np.array([body.data.vertices[loop.vertex_index].co[:] for loop in body.data.loops])
+    normals = np.array([n.vector[:] for n in body.data.corner_normals])
+    join_err = ellipsoid_error_deg(corners[corners[:, 2] > 0.55], normals[corners[:, 2] > 0.55], *proxy)
+    assert join_err < 0.05, f'the join must keep custom normals, off by {join_err:.2f} degrees'
     bind_lo, bind_hi = scene.world_bounds([body])
     walk = anim.make_action(arm, 'walk', [(1, {'thigh.L': (0, 0, -0.4)}), (11, {'thigh.L': (0, 0, 0.4)})])
     kick = anim.make_action(arm, 'kick', [(1, {}), (6, {'shin.L': (0, 0, 0.8)})])
@@ -157,6 +181,9 @@ def test_rigid_binding_and_action_export(tmp):
     assert abs(start) < 1e-6 and abs(end - 10 / 30) < 1e-4, f'walk must span clip time 0 to 10 frames, got {start} to {end}'
     attrs = gj['meshes'][0]['primitives'][0]['attributes']
     assert '_INK' in attrs and 'JOINTS_0' in attrs, attrs
+    points, normals = glb_vec3(path, gj, attrs['POSITION']), glb_vec3(path, gj, attrs['NORMAL'])
+    glb_err = ellipsoid_error_deg(points[points[:, 2] > 0.55], normals[points[:, 2] > 0.55], *proxy)
+    assert glb_err < 0.05, f'the GLB NORMAL must carry the custom normals, off by {glb_err:.2f} degrees'
     assert kick is not None
     # From frame 6 the NLA holds kick's bent knee (kick is the top track), yet a rest view must show the bind pose.
     bpy.context.scene.frame_set(6)
@@ -203,7 +230,9 @@ def test_paint_bakes_an_atlas_and_assigns_one_material(tmp):
     write_png(tmp / 'textures' / 'brush_strokes.png', np.full((16, 16), 0.5))
     a = geo.box('a', (1, 1, 1), material=palette.region('t_red', '#c03030'))
     b = geo.box('b', (1, 1, 1), location=(3, 0, 0), material=palette.region('t_glow', '#202020', emit_hex='#59f2ff'))
-    mat = paint.paint([a, b], name='t', out_dir=tmp, textures_dir=tmp / 'textures', size=64, ao_samples=4)
+    blue = paint.add_cap(palette.region('t_blue', '#3030c0'), '#30c030', threshold=0.35)
+    capped = geo.cap_factor(geo.box('capped', (1, 1, 1), location=(-3, 0, 0), material=blue))
+    mat = paint.paint([a, b, capped], name='t', out_dir=tmp, textures_dir=tmp / 'textures', size=64, ao_samples=4)
     assert (tmp / 't_albedo.png').exists() and (tmp / 't_emissive.png').exists()
     assert list(a.data.materials) == [mat] and list(b.data.materials) == [mat]
     # The bake-only height attribute must not stay behind: glTF export writes it as COLOR_0.
@@ -211,6 +240,11 @@ def test_paint_bakes_an_atlas_and_assigns_one_material(tmp):
     # glTF export writes only the maps linked to the BSDF; Workbench shows the active image node, a preview.
     gj = glb_json(export.export_glb([a, b], tmp / 't.glb'))
     assert sorted(image['name'] for image in gj['images']) == ['t_albedo', 't_emissive'], gj['images']
+    # Without backface culling the exporter writes doubleSided: true, and the runtime would draw and shadow both
+    # faces of every painted mesh; a mesh that needs both faces (grass) opts in through its own extras instead.
+    two_sided = [m.get('name') for m in gj['materials'] if m.get('doubleSided')]
+    assert mat.use_backface_culling and not two_sided, \
+        f'backface culling {mat.use_backface_culling}, double-sided materials in the GLB: {two_sided}'
     preview = mat.node_tree.nodes.active.image
     shown = pathlib.Path(preview.filepath).name if preview else None
     assert shown == 't_preview.png', f'the active image node shows {shown}'
@@ -239,6 +273,34 @@ def test_paint_bakes_an_atlas_and_assigns_one_material(tmp):
                 assert (glow > 0.5) == lit, f'{ob.name} texel at uv ({u:.3f}, {v:.3f}) has emission {glow:.3f}'
                 cyan = min(maps['preview'][texel][1:3]) > 0.8
                 assert cyan == lit, f'{ob.name} preview texel at uv ({u:.3f}, {v:.3f}) is {maps["preview"][texel][:3]}'
+    # A cap is opt-in and follows the up-facing factor: capped's top turns to the cap green while its bottom keeps
+    # the base blue, and a, uncapped in the same bake, stays red on both.
+    for ob, hues in ((a, 'rr'), (capped, 'gb')):
+        uv = np.empty(len(ob.data.loops) * 2)
+        ob.data.uv_layers.active.data.foreach_get('uv', uv)
+        for facing, hue in zip((1, -1), hues):
+            face = max(ob.data.polygons, key=lambda p: facing * p.normal.z)
+            u, v = uv.reshape(-1, 2)[list(face.loop_indices)].mean(axis=0)
+            colour = maps['albedo'][int(v * 64), int(u * 64)][:3]
+            assert 'rgb'[int(np.argmax(colour))] == hue, f'{ob.name} face facing z {facing:+d} is {colour}, not {hue}'
+    # A lone object takes another path through Blender's bake than a shared atlas does (use_clear rewrites the whole
+    # target, alpha 1 off the islands too), which once left its gutter black: the fill must reach it all the same.
+    solo = geo.box('solo', (1, 1, 1), location=(0, 4, 0), material=palette.region('t_solo', '#c0c030'))
+    paint.paint([solo], name='solo', out_dir=tmp, textures_dir=tmp / 'textures', size=64, ao_samples=4)
+    solo_albedo = np.empty(64 * 64 * 4, np.float32)
+    bpy.data.images.load(str(tmp / 'solo_albedo.png')).pixels.foreach_get(solo_albedo)
+    solo_black = int(np.all(solo_albedo.reshape(64, 64, 4)[..., :3] == 0.0, axis=2).sum())
+    assert solo_black == 0, f'{solo_black} albedo texels left unfilled around a single painted object'
+    # Caps follow world up. Recipes apply transforms only when they join, so a part tipped 90 degrees about X and not
+    # yet applied must cap what is now its top, not its own +z side. A cube corner's normal is the mean of its three
+    # face normals, so each corner reads +-1/sqrt(3) by which way it faces in the world.
+    tipped = geo.box('tipped', (1, 1, 1), location=(0, -4, 0), rotation=(np.pi / 2, 0, 0))
+    geo.cap_factor(tipped)
+    factor = np.empty(len(tipped.data.vertices), np.float32)
+    tipped.data.attributes[paint.CAP_ATTRIBUTE].data.foreach_get('value', factor)
+    world_z = np.array([(tipped.rotation_euler.to_matrix() @ v.co).z for v in tipped.data.vertices])
+    assert np.allclose(factor, np.sign(world_z) / np.sqrt(3), atol=1e-4), \
+        f'a part rotated but not applied must cap its world top: factors {factor.round(3)}, world z {world_z.round(3)}'
 
 
 def main():

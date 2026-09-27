@@ -10,10 +10,26 @@ import bpy
 import numpy as np
 
 from . import scene
-from .palette import PaintStyle
+from .palette import PaintStyle, hex_to_linear
 from .png import linear_to_srgb, write_png
 
 PASSES = ('region', 'ao', 'curv', 'height', 'brush', 'emit')
+# geo.cap_factor writes this attribute and imports its name from here, so paint must never import geo.
+CAP_ATTRIBUTE = 'p99_cap'
+
+
+def add_cap(mat, cap_hex, threshold, softness=0.03, breakup=0.5):
+    """Opts a region into a painted cap: in the region pass it turns from its base colour to cap_hex where the
+    mesh's CAP_ATTRIBUTE vertex attribute (geo.cap_factor) passes threshold. A per-face material split puts that
+    boundary on polygon edges; blending by a smooth per-vertex factor moves it off them, and the brush texture (the
+    same strokes as the brush pass) nudges the threshold by up to +-breakup/2, so the boundary follows stroke edges
+    like a painted one. softness is the half-width of the blend in factor units: small keeps the stroke edges
+    crisp instead of airbrushed. Regions without a cap bake exactly as before."""
+    mat['p99_cap_colour'] = list(hex_to_linear(cap_hex))
+    mat['p99_cap_threshold'] = float(threshold)
+    mat['p99_cap_softness'] = float(softness)
+    mat['p99_cap_breakup'] = float(breakup)
+    return mat
 
 
 def composite(region, ao, curv, height, brush, emit, style):
@@ -84,7 +100,9 @@ def _pass_tree(mat, pass_name, target, params):
     emission.inputs['Strength'].default_value = 1.0
     nt.links.new(emission.outputs['Emission'], out.inputs['Surface'])
     color = emission.inputs['Color']
-    if pass_name == 'region':
+    if pass_name == 'region' and 'p99_cap_colour' in mat:
+        _cap_region(nt, mat, color, params)
+    elif pass_name == 'region':
         color.default_value = (*mat['p99_base'], 1.0)
     elif pass_name == 'emit':
         color.default_value = (*mat['p99_emit'], 1.0)
@@ -102,20 +120,52 @@ def _pass_tree(mat, pass_name, target, params):
         attribute.attribute_name = 'p99_height'
         nt.links.new(attribute.outputs['Color'], color)
     elif pass_name == 'brush':
-        coords = nt.nodes.new('ShaderNodeTexCoord')
-        mapping = nt.nodes.new('ShaderNodeMapping')
-        s = params['brush_scale']
-        mapping.inputs['Scale'].default_value = (s, s, s)
-        image = nt.nodes.new('ShaderNodeTexImage')
-        image.image = params['brush_image']
-        image.projection = 'BOX'
-        image.projection_blend = 0.35
-        nt.links.new(coords.outputs['Object'], mapping.inputs['Vector'])
-        nt.links.new(mapping.outputs['Vector'], image.inputs['Vector'])
-        nt.links.new(image.outputs['Color'], color)
+        nt.links.new(_brush_texture(nt, params).outputs['Color'], color)
     target_node = nt.nodes.new('ShaderNodeTexImage')
     target_node.image = target
     nt.nodes.active = target_node
+
+
+def _brush_texture(nt, params):
+    coords = nt.nodes.new('ShaderNodeTexCoord')
+    mapping = nt.nodes.new('ShaderNodeMapping')
+    s = params['brush_scale']
+    mapping.inputs['Scale'].default_value = (s, s, s)
+    image = nt.nodes.new('ShaderNodeTexImage')
+    image.image = params['brush_image']
+    image.projection = 'BOX'
+    image.projection_blend = 0.35
+    nt.links.new(coords.outputs['Object'], mapping.inputs['Vector'])
+    nt.links.new(mapping.outputs['Vector'], image.inputs['Vector'])
+    return image
+
+
+def _cap_region(nt, mat, color, params):
+    """base -> cap by smoothstep(factor + breakup * (stroke - 0.5)) around the threshold. The stroke is sampled
+    exactly as the brush pass samples it, so a light stroke that carries the cap past the threshold is also the
+    stroke the composite lightens: the boundary reads as one layer of paint, not as a mask under the strokes."""
+    breakup = mat['p99_cap_breakup']
+    centre = mat['p99_cap_threshold'] + 0.5 * breakup
+    factor = nt.nodes.new('ShaderNodeAttribute')
+    factor.attribute_type = 'GEOMETRY'
+    factor.attribute_name = CAP_ATTRIBUTE
+    nudged = nt.nodes.new('ShaderNodeMath')
+    nudged.operation = 'MULTIPLY_ADD'
+    nudged.inputs[1].default_value = breakup
+    nt.links.new(_brush_texture(nt, params).outputs['Color'], nudged.inputs[0])
+    nt.links.new(factor.outputs['Fac'], nudged.inputs[2])
+    edge = nt.nodes.new('ShaderNodeMapRange')
+    edge.interpolation_type = 'SMOOTHSTEP'
+    edge.inputs['From Min'].default_value = centre - mat['p99_cap_softness']
+    edge.inputs['From Max'].default_value = centre + mat['p99_cap_softness']
+    nt.links.new(nudged.outputs['Value'], edge.inputs['Value'])
+    mix = nt.nodes.new('ShaderNodeMix')
+    mix.data_type = 'RGBA'
+    sockets = {s.identifier: s for s in mix.inputs}
+    sockets['A_Color'].default_value = (*mat['p99_base'], 1.0)
+    sockets['B_Color'].default_value = (*mat['p99_cap_colour'], 1.0)
+    nt.links.new(edge.outputs['Result'], sockets['Factor_Float'])
+    nt.links.new(next(s for s in mix.outputs if s.identifier == 'Result_Color'), color)
 
 
 _NEIGHBOURS = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
@@ -153,13 +203,18 @@ def _pad(pixels):
 
 
 def _bake(objs, pass_name, size, params):
-    # RGBA: the bake writes alpha 1 where it covers and use_clear leaves alpha 0 elsewhere (measured).
+    # RGBA, so the coverage _pad reads travels with the colour: the bake writes alpha 1 on the islands and leaves
+    # every other texel as it found it. use_clear zeroes the target only when two or more objects bake; with one,
+    # Blender copies its whole result in, alpha 1 off the islands too, and the gutter stayed black (54% of a lone
+    # mesh's atlas, measured). Zeroing the target here instead gives both cases the same alpha 0 gutter.
     target = bpy.data.images.new(f'p99_bake_{pass_name}', size, size, alpha=True, float_buffer=True)
     target.colorspace_settings.name = 'Non-Color'  # set before the bake writes, never after
+    # After the colour space, which regenerates a new image at alpha 1 and would undo the zeroing (measured).
+    target.pixels.foreach_set(np.zeros(size * size * 4, np.float32))
     for mat in _materials(objs):
         _pass_tree(mat, pass_name, target, params)
     scene.select_only(objs)
-    bpy.ops.object.bake(type='EMIT', margin=0, use_clear=True)
+    bpy.ops.object.bake(type='EMIT', margin=0, use_clear=False)
     buffer = np.empty(size * size * 4, np.float32)
     target.pixels.foreach_get(buffer)
     bpy.data.images.remove(target)
@@ -168,6 +223,10 @@ def _bake(objs, pass_name, size, params):
 
 def final_material(name, albedo_path, emissive_path, emissive_strength, preview_path):
     mat = bpy.data.materials.new(name)
+    # A new material leaves culling off, which Blender's glTF exporter writes as doubleSided: true, so the runtime
+    # would draw and cast shadows from both faces of every painted mesh. A mesh that must show both faces (the
+    # grass) opts in through its own extras instead.
+    mat.use_backface_culling = True
     nt = mat.node_tree
     bsdf = nt.nodes.get('Principled BSDF')
     bsdf.inputs['Roughness'].default_value = 1.0
@@ -199,6 +258,11 @@ def paint(objs, *, name, out_dir, textures_dir, size=1024, style=None, ao_distan
     objs = scene.meshes(objs)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    for ob in objs:
+        capped = [m.name for m in ob.data.materials if m is not None and 'p99_cap_colour' in m]
+        # Without the attribute every texel reads factor 0 and the cap silently vanishes: stop here instead.
+        if capped and ob.data.attributes.get(CAP_ATTRIBUTE) is None:
+            raise ValueError(f'{ob.name}: capped regions {capped} need the {CAP_ATTRIBUTE} attribute (geo.cap_factor)')
     prepare_uvs(objs)
     write_height_attribute(objs)
     brush = bpy.data.images.load(str(Path(textures_dir) / 'brush_strokes.png'), check_existing=True)
@@ -226,4 +290,8 @@ def paint(objs, *, name, out_dir, textures_dir, size=1024, style=None, ao_distan
         attr = ob.data.color_attributes.get('p99_height')
         if attr is not None:
             ob.data.color_attributes.remove(attr)
+        # The cap factor is baked in too; dropping it keeps the export identical to an uncapped asset's.
+        cap = ob.data.attributes.get(CAP_ATTRIBUTE)
+        if cap is not None:
+            ob.data.attributes.remove(cap)
     return mat
