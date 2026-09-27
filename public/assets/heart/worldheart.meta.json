@@ -1,0 +1,25 @@
+{
+  "name": "worldheart",
+  "family": "heart",
+  "file": "heart/worldheart.glb",
+  "kind": "model",
+  "recipe": "heart",
+  "nodes": [
+    "heart_plinth",
+    "heart_stage_00",
+    "heart_stage_01",
+    "heart_stage_02",
+    "heart_stage_03",
+    "heart_stage_04",
+    "heart_stage_05",
+    "heart_stage_06",
+    "heart_stage_07",
+    "heart_stage_08",
+    "heart_stage_09",
+    "heart_stage_10"
+  ],
+  "animations": [],
+  "tris": 4458,
+  "notes": {},
+  "placeables": []
+}

@@ -1,0 +1,8 @@
+{
+  "commanders": { "tris": 24000, "bones": 32, "texture": 1024, "ink": true, "animations": ["idle", "run", "attack"] },
+  "xeno": { "tris": 9000, "bones": 24, "texture": 1024, "ink": true, "animations": ["idle", "walk", "attack"] },
+  "towers": { "tris": 36000, "bones": 0, "texture": 1024, "ink": true },
+  "heart": { "tris": 30000, "bones": 0, "texture": 1024, "ink": true },
+  "nests": { "tris": 8000, "bones": 0, "texture": 512, "ink": true },
+  "env": { "tris": 20000, "bones": 0, "texture": 1024, "ink": true }
+}

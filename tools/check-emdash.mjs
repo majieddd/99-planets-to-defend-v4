@@ -2,8 +2,8 @@
 // The owner's standing rule: no em dash anywhere, in any of its four spellings. The patterns are
 // assembled from parts so this file, which the check also scans, never spells one itself.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { isMain } from './is-main.mjs';
 
 export const EM_DASH_FORMS = [
   { name: 'the character', token: String.fromCharCode(0x2014) },
@@ -59,7 +59,6 @@ function main() {
   if (total > 0) process.exit(1);
 }
 
-// Compare real paths: Node resolves symlinks and junctions in import.meta.url but not in argv[1],
-// so a plain comparison skipped the scan and exited 0 when the checkout sat behind a link.
-const entry = process.argv[1]; // absent under node -e, and realpathSync(undefined) throws
-if (entry && realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url))) main();
+// A plain argv[1] comparison skipped the scan and exited 0 when the checkout sat behind a link, so
+// the entry check compares real paths (is-main.mjs).
+if (isMain(import.meta.url)) main();

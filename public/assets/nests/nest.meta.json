@@ -1,0 +1,19 @@
+{
+  "name": "nest",
+  "family": "nests",
+  "file": "nests/nest.glb",
+  "kind": "model",
+  "recipe": "nest",
+  "nodes": [
+    "nest"
+  ],
+  "animations": [],
+  "tris": 426,
+  "notes": {},
+  "placeables": [
+    {
+      "node": null,
+      "sink": 0.123
+    }
+  ]
+}

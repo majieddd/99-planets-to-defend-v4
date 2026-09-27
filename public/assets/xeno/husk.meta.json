@@ -1,0 +1,34 @@
+{
+  "name": "husk",
+  "family": "xeno",
+  "file": "xeno/husk.glb",
+  "kind": "model",
+  "recipe": "husk",
+  "nodes": [
+    "husk_rig",
+    "husk"
+  ],
+  "animations": [
+    {
+      "name": "idle",
+      "duration": 2.0,
+      "loop": true,
+      "strike": null
+    },
+    {
+      "name": "walk",
+      "duration": 1.0,
+      "loop": true,
+      "strike": null
+    },
+    {
+      "name": "attack",
+      "duration": 1.4,
+      "loop": false,
+      "strike": 0.4
+    }
+  ],
+  "tris": 1740,
+  "notes": {},
+  "placeables": []
+}

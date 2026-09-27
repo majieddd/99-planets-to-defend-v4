@@ -16,6 +16,11 @@ artifacts/
 __pycache__/
 *.pyc
 
+# npm run assets intermediates (raw GLB exports, bakes, preview renders); what ships is written to
+# public/assets and docs/evidence/assets. Anchored to the root: "build" is also a game verb, so a
+# nested source folder of that name must stay tracked.
+/build/
+
 # Local environment
 .env
 .env.*

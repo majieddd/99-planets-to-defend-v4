@@ -1,0 +1,54 @@
+{
+  "name": "verdant_kit",
+  "family": "env",
+  "file": "env/verdant_kit.glb",
+  "kind": "model",
+  "recipe": "verdant",
+  "nodes": [
+    "rock_a",
+    "rock_b",
+    "rock_c",
+    "tree_broad",
+    "tree_conifer",
+    "bush",
+    "grass_tuft",
+    "flowers"
+  ],
+  "animations": [],
+  "tris": 2165,
+  "notes": {},
+  "placeables": [
+    {
+      "node": "rock_a",
+      "sink": 0.05
+    },
+    {
+      "node": "rock_b",
+      "sink": 0.05
+    },
+    {
+      "node": "rock_c",
+      "sink": 0.05
+    },
+    {
+      "node": "tree_broad",
+      "sink": 0.0
+    },
+    {
+      "node": "tree_conifer",
+      "sink": 0.0
+    },
+    {
+      "node": "bush",
+      "sink": 0.114
+    },
+    {
+      "node": "grass_tuft",
+      "sink": 0.0
+    },
+    {
+      "node": "flowers",
+      "sink": 0.0
+    }
+  ]
+}

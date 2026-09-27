@@ -1,0 +1,34 @@
+{
+  "name": "bulwark",
+  "family": "commanders",
+  "file": "commanders/bulwark.glb",
+  "kind": "model",
+  "recipe": "bulwark",
+  "nodes": [
+    "bulwark_rig",
+    "bulwark"
+  ],
+  "animations": [
+    {
+      "name": "idle",
+      "duration": 2.0,
+      "loop": true,
+      "strike": null
+    },
+    {
+      "name": "run",
+      "duration": 0.6,
+      "loop": true,
+      "strike": null
+    },
+    {
+      "name": "attack",
+      "duration": 0.85,
+      "loop": false,
+      "strike": 0.34
+    }
+  ],
+  "tris": 19596,
+  "notes": {},
+  "placeables": []
+}

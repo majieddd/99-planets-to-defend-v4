@@ -1,0 +1,483 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "name": "bulwark",
+      "family": "commanders",
+      "kind": "model",
+      "file": "commanders/bulwark.glb",
+      "nodes": [
+        "head",
+        "neck",
+        "hand.L",
+        "socket.L",
+        "forearm.L",
+        "upper_arm.L",
+        "shoulder.L",
+        "socket.R",
+        "hand.R",
+        "forearm.R",
+        "upper_arm.R",
+        "shoulder.R",
+        "chest",
+        "spine",
+        "foot.L",
+        "shin.L",
+        "thigh.L",
+        "foot.R",
+        "shin.R",
+        "thigh.R",
+        "hips",
+        "root",
+        "bulwark",
+        "bulwark_rig"
+      ],
+      "animations": [
+        {
+          "name": "idle",
+          "duration": 2,
+          "loop": true,
+          "strike": null,
+          "exportedDuration": 2
+        },
+        {
+          "name": "run",
+          "duration": 0.6,
+          "loop": true,
+          "strike": null,
+          "exportedDuration": 0.6000000238418579
+        },
+        {
+          "name": "attack",
+          "duration": 0.85,
+          "loop": false,
+          "strike": 0.34,
+          "exportedDuration": 0.8333333134651184
+        }
+      ],
+      "tris": 19596,
+      "bones": 22,
+      "textures": [
+        {
+          "width": 1024,
+          "height": 1024,
+          "mime": "image/webp"
+        },
+        {
+          "width": 1024,
+          "height": 1024,
+          "mime": "image/webp"
+        }
+      ],
+      "hasInk": true,
+      "doubleSided": false,
+      "ground": [
+        {
+          "node": null,
+          "minY": 0,
+          "sink": 0
+        },
+        {
+          "node": "bulwark_rig",
+          "minY": 0,
+          "sink": 0
+        }
+      ],
+      "bytes": 469684
+    },
+    {
+      "name": "verdant_kit",
+      "family": "env",
+      "kind": "model",
+      "file": "env/verdant_kit.glb",
+      "nodes": [
+        "bush",
+        "flowers",
+        "grass_tuft",
+        "rock_a",
+        "rock_b",
+        "rock_c",
+        "tree_broad",
+        "tree_conifer"
+      ],
+      "animations": [],
+      "tris": 2165,
+      "bones": 0,
+      "textures": [
+        {
+          "width": 1024,
+          "height": 1024,
+          "mime": "image/webp"
+        }
+      ],
+      "hasInk": true,
+      "doubleSided": false,
+      "ground": [
+        {
+          "node": "rock_a",
+          "minY": -0.05,
+          "sink": 0.05
+        },
+        {
+          "node": "rock_b",
+          "minY": -0.0501,
+          "sink": 0.05
+        },
+        {
+          "node": "rock_c",
+          "minY": -0.05,
+          "sink": 0.05
+        },
+        {
+          "node": "tree_broad",
+          "minY": 0,
+          "sink": 0
+        },
+        {
+          "node": "tree_conifer",
+          "minY": 0,
+          "sink": 0
+        },
+        {
+          "node": "bush",
+          "minY": -0.1138,
+          "sink": 0.114
+        },
+        {
+          "node": "grass_tuft",
+          "minY": 0,
+          "sink": 0
+        },
+        {
+          "node": "flowers",
+          "minY": 0,
+          "sink": 0
+        }
+      ],
+      "bytes": 179628
+    },
+    {
+      "name": "worldheart",
+      "family": "heart",
+      "kind": "model",
+      "file": "heart/worldheart.glb",
+      "nodes": [
+        "heart_plinth",
+        "heart_stage_00",
+        "heart_stage_01",
+        "heart_stage_02",
+        "heart_stage_03",
+        "heart_stage_04",
+        "heart_stage_05",
+        "heart_stage_06",
+        "heart_stage_07",
+        "heart_stage_08",
+        "heart_stage_09",
+        "heart_stage_10"
+      ],
+      "animations": [],
+      "tris": 4458,
+      "bones": 0,
+      "textures": [
+        {
+          "width": 1024,
+          "height": 1024,
+          "mime": "image/webp"
+        },
+        {
+          "width": 1024,
+          "height": 1024,
+          "mime": "image/webp"
+        }
+      ],
+      "hasInk": true,
+      "doubleSided": false,
+      "ground": [
+        {
+          "node": null,
+          "minY": 0,
+          "sink": 0
+        }
+      ],
+      "bytes": 271824
+    },
+    {
+      "name": "nest",
+      "family": "nests",
+      "kind": "model",
+      "file": "nests/nest.glb",
+      "nodes": [
+        "nest"
+      ],
+      "animations": [],
+      "tris": 426,
+      "bones": 0,
+      "textures": [
+        {
+          "width": 512,
+          "height": 512,
+          "mime": "image/webp"
+        },
+        {
+          "width": 512,
+          "height": 512,
+          "mime": "image/webp"
+        }
+      ],
+      "hasInk": true,
+      "doubleSided": false,
+      "ground": [
+        {
+          "node": null,
+          "minY": -0.122,
+          "sink": 0.123
+        }
+      ],
+      "bytes": 41016
+    },
+    {
+      "name": "brush_strokes",
+      "family": "textures",
+      "kind": "texture",
+      "file": "textures/brush_strokes.png",
+      "nodes": [],
+      "animations": [],
+      "tris": 0,
+      "bones": 0,
+      "textures": [],
+      "hasInk": false,
+      "doubleSided": false,
+      "ground": [],
+      "bytes": 0
+    },
+    {
+      "name": "ink_noise",
+      "family": "textures",
+      "kind": "texture",
+      "file": "textures/ink_noise.png",
+      "nodes": [],
+      "animations": [],
+      "tris": 0,
+      "bones": 0,
+      "textures": [],
+      "hasInk": false,
+      "doubleSided": false,
+      "ground": [],
+      "bytes": 0
+    },
+    {
+      "name": "bolt_sentinel",
+      "family": "towers",
+      "kind": "model",
+      "file": "towers/bolt_sentinel.glb",
+      "nodes": [
+        "bolt_mk1_foot0",
+        "bolt_mk1_foot1",
+        "bolt_mk1_foot2",
+        "bolt_mk1_foot3",
+        "bolt_mk1_trim",
+        "bolt_mk1_brow",
+        "bolt_mk1_coil0_0",
+        "bolt_mk1_coil0_1",
+        "bolt_mk1_coil1_0",
+        "bolt_mk1_coil1_1",
+        "bolt_mk1_muzzle0",
+        "bolt_mk1_muzzle1",
+        "bolt_mk1_rail0",
+        "bolt_mk1_rail1",
+        "bolt_mk1_railglow0",
+        "bolt_mk1_railglow1",
+        "bolt_mk1_pitch",
+        "bolt_mk1_yaw",
+        "bolt_mk1_base",
+        "bolt_mk1",
+        "bolt_mk2_foot0",
+        "bolt_mk2_foot1",
+        "bolt_mk2_foot2",
+        "bolt_mk2_foot3",
+        "bolt_mk2_ring",
+        "bolt_mk2_trim",
+        "bolt_mk2_collar",
+        "bolt_mk2_armorL",
+        "bolt_mk2_armorR",
+        "bolt_mk2_brow",
+        "bolt_mk2_critcoil",
+        "bolt_mk2_muzzle0",
+        "bolt_mk2_muzzle1",
+        "bolt_mk2_rail0",
+        "bolt_mk2_rail1",
+        "bolt_mk2_railglow0",
+        "bolt_mk2_railglow1",
+        "bolt_mk2_shroud",
+        "bolt_mk2_shroudglow",
+        "bolt_mk2_pitch",
+        "bolt_mk2_yaw",
+        "bolt_mk2_base",
+        "bolt_mk2",
+        "bolt_mk3_buttress0",
+        "bolt_mk3_buttress1",
+        "bolt_mk3_buttress2",
+        "bolt_mk3_buttress3",
+        "bolt_mk3_foot0",
+        "bolt_mk3_foot1",
+        "bolt_mk3_foot2",
+        "bolt_mk3_foot3",
+        "bolt_mk3_ring",
+        "bolt_mk3_trim",
+        "bolt_mk3_collar",
+        "bolt_mk3_armorL",
+        "bolt_mk3_armorR",
+        "bolt_mk3_brow",
+        "bolt_mk3_coil0_0",
+        "bolt_mk3_coil0_1",
+        "bolt_mk3_coil0_2",
+        "bolt_mk3_coil1_0",
+        "bolt_mk3_coil1_1",
+        "bolt_mk3_coil1_2",
+        "bolt_mk3_coil2_0",
+        "bolt_mk3_coil2_1",
+        "bolt_mk3_coil2_2",
+        "bolt_mk3_critcoil",
+        "bolt_mk3_finL",
+        "bolt_mk3_finR",
+        "bolt_mk3_muzzle0",
+        "bolt_mk3_muzzle1",
+        "bolt_mk3_muzzle2",
+        "bolt_mk3_rail0",
+        "bolt_mk3_rail1",
+        "bolt_mk3_rail2",
+        "bolt_mk3_railglow0",
+        "bolt_mk3_railglow1",
+        "bolt_mk3_railglow2",
+        "bolt_mk3_sensor",
+        "bolt_mk3_pitch",
+        "bolt_mk3_yaw",
+        "bolt_mk3_base",
+        "bolt_mk3",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "animations": [],
+      "tris": 7378,
+      "bones": 0,
+      "textures": [
+        {
+          "width": 1024,
+          "height": 1024,
+          "mime": "image/webp"
+        },
+        {
+          "width": 1024,
+          "height": 1024,
+          "mime": "image/webp"
+        }
+      ],
+      "hasInk": true,
+      "doubleSided": false,
+      "ground": [
+        {
+          "node": "bolt_mk1",
+          "minY": 0,
+          "sink": 0
+        },
+        {
+          "node": "bolt_mk2",
+          "minY": 0,
+          "sink": 0
+        },
+        {
+          "node": "bolt_mk3",
+          "minY": 0,
+          "sink": 0
+        }
+      ],
+      "bytes": 346356
+    },
+    {
+      "name": "husk",
+      "family": "xeno",
+      "kind": "model",
+      "file": "xeno/husk.glb",
+      "nodes": [
+        "carapace",
+        "leg_back_lower.L",
+        "leg_back_upper.L",
+        "leg_back_lower.R",
+        "leg_back_upper.R",
+        "claw_lower.L",
+        "claw_upper.L",
+        "claw_lower.R",
+        "claw_upper.R",
+        "head",
+        "leg_front_lower.L",
+        "leg_front_upper.L",
+        "leg_front_lower.R",
+        "leg_front_upper.R",
+        "thorax",
+        "body",
+        "root",
+        "husk",
+        "husk_rig"
+      ],
+      "animations": [
+        {
+          "name": "idle",
+          "duration": 2,
+          "loop": true,
+          "strike": null,
+          "exportedDuration": 2
+        },
+        {
+          "name": "walk",
+          "duration": 1,
+          "loop": true,
+          "strike": null,
+          "exportedDuration": 1
+        },
+        {
+          "name": "attack",
+          "duration": 1.4,
+          "loop": false,
+          "strike": 0.4,
+          "exportedDuration": 1.399999976158142
+        }
+      ],
+      "tris": 1740,
+      "bones": 17,
+      "textures": [
+        {
+          "width": 1024,
+          "height": 1024,
+          "mime": "image/webp"
+        },
+        {
+          "width": 1024,
+          "height": 1024,
+          "mime": "image/webp"
+        }
+      ],
+      "hasInk": true,
+      "doubleSided": false,
+      "ground": [
+        {
+          "node": null,
+          "minY": -0.0024,
+          "sink": 0
+        },
+        {
+          "node": "husk_rig",
+          "minY": -0.0024,
+          "sink": 0
+        }
+      ],
+      "bytes": 172804
+    }
+  ]
+}
