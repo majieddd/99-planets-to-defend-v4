@@ -57,6 +57,90 @@ test('the style lab renders every preset and passes its colour audit', async ({ 
   expect(errors).toEqual([]);
 });
 
+interface SetDialsResult {
+  dials: Record<string, unknown>;
+  rejected: string[];
+}
+
+// The measured frames in the look pass and the owner's gate move dials through window.__P99__.setDials and hold the
+// scene with freeze, so both are held to their word here: a move changes the frame, the old values bring the old frame
+// back, a bad value is refused by name instead of silently leaving a default, and a frozen scene does not move.
+test('the style lab test handle moves, restores, refuses and freezes', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  page.on('pageerror', (error) => errors.push(String(error)));
+  await page.goto('./labs/style.html?tier=low&freeze=1');
+  await page.waitForFunction(() => window.__P99__?.ready === true, undefined, { timeout: 180_000 });
+  // three asks for its next frame before the lab's loop runs, so the second frame to answer here has drawn any change.
+  const settle = () => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  // A small copy of the canvas: enough to see a lighting change, cheap to read back from SwiftShader.
+  const frame = () =>
+    page.evaluate(() => {
+      const source = document.querySelector('#stage canvas') as HTMLCanvasElement;
+      const small = document.createElement('canvas');
+      small.width = 160;
+      small.height = 90;
+      const context = small.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
+      context.drawImage(source, 0, 0, 160, 90);
+      return Array.from(context.getImageData(0, 0, 160, 90).data);
+    });
+  const meanDifference = (a: number[], b: number[]): number => a.reduce((sum, value, i) => sum + Math.abs(value - (b[i] as number)), 0) / a.length;
+  const setDials = (changes: Record<string, unknown>) =>
+    page.evaluate((c) => (window.__P99__!['setDials'] as (c: Record<string, unknown>) => SetDialsResult)(c), changes);
+
+  const original = await page.evaluate(() => (window.__P99__!['dials'] as () => Record<string, unknown>)());
+  await settle();
+  const before = await frame();
+
+  // The frozen scene holds its pose while frames keep drawing.
+  await settle();
+  await settle();
+  const still = await frame();
+
+  const moved = await setDials({ sunElevation: 8 });
+  await settle();
+  const lit = await frame();
+
+  const restored = await setDials(original);
+  await settle();
+  const back = await frame();
+
+  // One bad value of each kind next to one good move: out of range, not a colour, not a dial at all.
+  const refused = await setDials({ sunElevation: 200, shadowTint: 'teal', notADial: 1, exposure: 0.5 });
+  const cleaned = await setDials({ exposure: original['exposure'] });
+
+  const line =
+    `style lab test handle [${test.info().project.name}]: frozen difference ${meanDifference(before, still).toFixed(3)}, ` +
+    `sun move difference ${meanDifference(before, lit).toFixed(2)}, restored difference ${meanDifference(before, back).toFixed(3)}, ` +
+    `refused ${JSON.stringify(refused.rejected)}`;
+  console.log(line);
+  expect(meanDifference(before, still), line).toBeLessThanOrEqual(0.02);
+  expect(moved.rejected, line).toEqual([]);
+  expect(moved.dials['sunElevation'], line).toBe(8);
+  expect(meanDifference(before, lit), line).toBeGreaterThan(2);
+  expect(restored.rejected, line).toEqual([]);
+  expect(meanDifference(before, back), line).toBeLessThanOrEqual(0.02);
+  expect([...refused.rejected].sort(), line).toEqual(['notADial', 'shadowTint', 'sunElevation']);
+  expect(refused.dials['sunElevation'], line).toBe(original['sunElevation']);
+  expect(refused.dials['shadowTint'], line).toBe(original['shadowTint']);
+  expect(refused.dials['exposure'], line).toBe(0.5);
+  expect(cleaned.rejected, line).toEqual([]);
+
+  // Unfrozen, the scene moves (the Husk walks, Bulwark cycles, the grain turns over), which shows the freeze held it.
+  await page.evaluate(() => (window.__P99__!['freeze'] as (on: boolean) => void)(false));
+  await page.waitForTimeout(600);
+  await settle();
+  const running = await frame();
+  await page.evaluate(() => (window.__P99__!['freeze'] as (on: boolean) => void)(true));
+  const unfrozen = `${line}, unfrozen difference ${meanDifference(back, running).toFixed(3)}`;
+  console.log(unfrozen);
+  expect(meanDifference(back, running), unfrozen).toBeGreaterThan(0.02);
+  expect(errors).toEqual([]);
+});
+
 // Every other browser test runs the low tier (forced, or SwiftShader detected as low), and the low tier has no edge
 // pass, so a GLSL error in the edge ink or in the normal pass's depth target passed CI unseen. three reports shader
 // compile and link errors through console.error when a program is first used, and ready comes after the third frame,

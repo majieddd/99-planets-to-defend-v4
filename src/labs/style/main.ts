@@ -23,9 +23,26 @@ const BASE = import.meta.env.BASE_URL;
 const theme = VERDANT;
 /**
  * Metres from the scene centre to the sun. At every elevation the scatter (out to 48 m) stays past the shadow camera's
- * 1 m near plane and the patch's far side inside its 220 m far plane.
+ * 1 m near plane and the patch's far side (about 74 m out, so at most 164 m from the sun) inside its 220 m far plane.
  */
 const SUN_DISTANCE = 90;
+const SHADOW_NEAR = 1;
+const SHADOW_FAR = 220;
+/**
+ * Half the side of the sun's square shadow box, in metres. Near a noon sun the box lies on the ground plane, and there
+ * the outermost conifer's crown reaches 46.4 m from the scene centre (its bounding box in the light's view at 85 degrees),
+ * so the old 45 m cut the edge off its shadow; under a low sun the box's long axis runs along the ground and the widest
+ * caster sits 42.7 m out (at 15 degrees). 48 m holds every caster at every elevation the dial allows, for shadow texels
+ * 7 percent coarser: 4.7 cm at the high tier's 2048 map.
+ */
+const SHADOW_HALF_WIDTH = 48;
+/**
+ * A small constant bias and a 3 cm push along the normal keep lit ground free of self-shadowing at the tiers' map sizes.
+ * The strategic camera's crosshatch under preset B's low key was not acne: bias 0 or -0.002, normal bias 0 to 0.3 and PCF
+ * radius 0 to 3 each moved its fleck count by under 3 percent (see TERMINATOR_BAND_TILES in materials/painted.ts).
+ */
+const SHADOW_BIAS = -0.0004;
+const SHADOW_NORMAL_BIAS = 0.03;
 
 // start() fills these in, so a failure at any point can stop the loop and word the banner for when it happened.
 let activeRenderer: WebGLRenderer | null = null;
@@ -173,19 +190,27 @@ async function start(): Promise<void> {
   camera.layers.enable(LAYERS.noEdge); // grass and flowers: drawn, and cast shadows (r186 tests this camera's layers)
 
   // The sun's elevation, colour and intensity are dials that default to the theme's light; the theme keeps the azimuth.
-  // The light rides a sphere of SUN_DISTANCE around the scene centre, where its target stays, so the shadow camera's
-  // 45 m box (1 to 220 m deep) frames the scene at every elevation the dial allows; syncSun moves it.
+  // The light rides a sphere of SUN_DISTANCE around the scene centre, where its target stays, and syncSun moves it. The
+  // shadow camera's box, SHADOW_HALF_WIDTH to each side and SHADOW_NEAR to SHADOW_FAR deep, holds every shadow caster at
+  // every elevation the dial allows. The old 45 m box did not: at 85 degrees it cut the outermost conifer's shadow.
   const sunDirectionAt = (elevationDeg: number): Vector3 => new Vector3(...sunDirection({ ...theme, sun: { ...theme.sun, elevationDeg } }));
   const sunDir = sunDirectionAt(dials.sunElevation);
   const sun = new DirectionalLight(dials.sunColor, dials.sunIntensity);
   sun.position.copy(sunDir).multiplyScalar(SUN_DISTANCE);
   sun.castShadow = true;
   sun.shadow.mapSize.set(tier.shadowMapSize, tier.shadowMapSize);
-  Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 220 });
+  Object.assign(sun.shadow.camera, {
+    left: -SHADOW_HALF_WIDTH,
+    right: SHADOW_HALF_WIDTH,
+    top: SHADOW_HALF_WIDTH,
+    bottom: -SHADOW_HALF_WIDTH,
+    near: SHADOW_NEAR,
+    far: SHADOW_FAR,
+  });
   sun.shadow.camera.updateProjectionMatrix();
   sun.shadow.camera.layers.enable(LAYERS.noEdge); // flowers keep casting if a later three tests the shadow camera
-  sun.shadow.bias = -0.0004;
-  sun.shadow.normalBias = 0.03;
+  sun.shadow.bias = SHADOW_BIAS;
+  sun.shadow.normalBias = SHADOW_NORMAL_BIAS;
   // r186's PCF spreads five taps over shadow.radius texels and rotates them per pixel with screen-anchored noise. The
   // painted bands turned that faint dither into shadow, mid and lit speckle that crawled whenever the camera moved
   // (radius 3 measured 6.3 band changes per column across a straight shadow edge, against 2 for a clean edge). At 0
@@ -331,19 +356,23 @@ async function start(): Promise<void> {
   mountReferenceBoard(document.getElementById('board') as HTMLElement, theme);
 
   /**
-   * Moves dials as the panel does, for browser tests and measured frames. Each value passes the dials codec's checks,
-   * so one a link would drop (a string for a number, a value outside its range, a colour that is not six-digit hex) is
-   * ignored here too; the dials after the move come back.
+   * Moves dials as the panel does, for browser tests and measured frames. Each value passes the dials codec's checks, so
+   * one a link would drop (an unknown name, a string for a number, a value outside its range, a colour that is not
+   * six-digit hex) is refused here too, and named in `rejected`; the accepted ones still move. It used to drop them in
+   * silence, so a misspelt key left its dial at the default while the capture looked like it had changed. The test is
+   * Object.hasOwn, not `in`, which also answered true for names every object inherits (constructor, toString).
    */
-  function setDials(changes: Record<string, unknown>): RenderDials {
+  function setDials(changes: Record<string, unknown>): { dials: RenderDials; rejected: string[] } {
     const checked = decodeDials(encodeDials({ ...DEFAULT_DIALS, ...changes } as RenderDials));
     const target = dials as unknown as Record<string, unknown>;
+    const rejected: string[] = [];
     for (const key of Object.keys(changes)) {
-      if (key in DEFAULT_DIALS && checked[key as keyof RenderDials] === changes[key]) target[key] = changes[key];
+      if (Object.hasOwn(DEFAULT_DIALS, key) && checked[key as keyof RenderDials] === changes[key]) target[key] = changes[key];
+      else rejected.push(key);
     }
     applyDials();
     for (const controller of gui.controllersRecursive()) controller.updateDisplay();
-    return { ...dials };
+    return { dials: { ...dials }, rejected };
   }
 
   // Frozen, the scene, Bulwark's cycle and the film grain hold still while frames keep rendering, so two captures that

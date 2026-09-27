@@ -75,6 +75,30 @@ describe('dials', () => {
     expect(decodeDials(hostile)).toEqual(DEFAULT_DIALS);
   });
 
+  it('round-trips the prop brush, lit saturation, actor fill and shadow lift through a link', () => {
+    // Off their defaults, inside their ranges, and apart from each other.
+    const changed = { ...DEFAULT_DIALS, propBrush: 0.65, litSaturation: 0.82, actorFill: 0.9, shadowLift: 0.085 };
+    const text = encodeDials(changed);
+    expect(decodeDials(text)).toEqual(changed);
+    // Only the moved dials are written, so every link made before these dials existed still opens the same look.
+    expect(JSON.parse(atob(text.replace(/-/g, '+').replace(/_/g, '/')))).toEqual({ shadowLift: 0.085, propBrush: 0.65, litSaturation: 0.82, actorFill: 0.9 });
+    // Out of range or the wrong type: each is dropped and its default stands.
+    const hostile = toLink(JSON.stringify({ propBrush: 1.6, litSaturation: 0.3, actorFill: -0.1, shadowLift: '0.01' }));
+    expect(decodeDials(toLink(JSON.stringify({ shadowLift: 0.16 })))).toEqual(DEFAULT_DIALS);
+    expect(decodeDials(hostile)).toEqual(DEFAULT_DIALS);
+    const edges = { ...DEFAULT_DIALS, propBrush: 1.5, litSaturation: 0.4, actorFill: 2, shadowLift: 0.15 };
+    expect(decodeDials(encodeDials(edges))).toEqual(edges);
+  });
+
+  it('starts the look pass\'s dials at the look before them', () => {
+    // No brush on props, lit colour at its own saturation, no fill on actors and no lift in the darks.
+    expect(DEFAULT_DIALS.propBrush).toBe(0);
+    expect(DEFAULT_DIALS.litSaturation).toBe(1);
+    expect(DEFAULT_DIALS.actorFill).toBe(0);
+    expect(DEFAULT_DIALS.shadowLift).toBe(0);
+    for (const key of ['propBrush', 'litSaturation', 'actorFill', 'shadowLift'] as const) expect(NUMERIC_RANGES[key], key).toBeDefined();
+  });
+
   it('starts every new capability at the look it replaced, except the heart halo', () => {
     // The sun dials are the Verdant theme's light, so the default frame is lit as before.
     expect(DEFAULT_DIALS.sunElevation).toBe(VERDANT.sun.elevationDeg);

@@ -10,13 +10,17 @@ export interface RenderDials {
   saturation: number;
   shadowDepth: number;
   shadowTint: string;
+  shadowLift: number;
   rimStrength: number;
   rimPower: number;
   standardBlend: number;
   ambientStrength: number;
   brushScale: number;
   terrainBrush: number;
+  propBrush: number;
   soilBreakup: number;
+  litSaturation: number;
+  actorFill: number;
   inkWidthPx: number;
   inkColor: string;
   edgeStrength: number;
@@ -48,14 +52,26 @@ export const DEFAULT_DIALS: RenderDials = {
   saturation: 1.3,
   shadowDepth: 0.35,
   shadowTint: '#2f8f8c',
+  // A floor under every shadow, in the theme's shadow grade colour, as a fraction of full sun on white: the darkest note
+  // is a coloured dark, never black. At 0 the shadows are where the shadow depth and the grade's contrast leave them.
+  shadowLift: 0,
   rimStrength: 0.35,
   rimPower: 3,
   standardBlend: 0.35,
   ambientStrength: 0.45,
   brushScale: 0.35,
   terrainBrush: 0.5,
+  // 0 leaves everything but the terrain with its baked paint alone, the look before the dial existed; above 0 the brush
+  // atlas strokes the albedo of characters, towers and props as terrainBrush strokes the ground.
+  propBrush: 0,
   // 0 keeps the soil ring's smooth vertex-colour edge; 1 breaks it into the terrain's brush strokes.
   soilBreakup: 0,
+  // The saturation of lit colour, after the key has tinted it and before any emitter adds its light. At 1 it changes
+  // nothing; lower, it restrains the chroma a warm key adds to the meadow while the energy keeps its full colour.
+  litSaturation: 1,
+  // A fill from the camera's side on the unlit side of actors (materials with a standard blend above 0), so a backlit
+  // character keeps its form instead of reading as a black cut-out. At 0 it adds nothing.
+  actorFill: 0,
   inkWidthPx: 2.2,
   inkColor: '#0e0f14',
   edgeStrength: 0.9,
@@ -96,13 +112,22 @@ export const NUMERIC_RANGES: Record<NumericKey, [number, number, number]> = {
   paintStrength: [0, 1, 0.01],
   saturation: [0.5, 2, 0.01],
   shadowDepth: [0.05, 0.8, 0.01],
+  // At the default exposure and contrast, 0.15 of full sun lifts a black surface in shadow to about 0.1 in linear light
+  // before tone mapping, a mid-dark; more would flatten the shadows into haze.
+  shadowLift: [0, 0.15, 0.001],
   rimStrength: [0, 1.5, 0.01],
   rimPower: [1, 8, 0.1],
   standardBlend: [0, 1, 0.01],
   ambientStrength: [0, 1.5, 0.01],
   brushScale: [0.05, 2, 0.01],
   terrainBrush: [0, 1.5, 0.01],
+  propBrush: [0, 1.5, 0.01],
   soilBreakup: [0, 1, 0.01],
+  // Under preset B, 0.65 already took the meadow's HSV saturation from 0.63 to 0.42, a grey-green, so 0.4 is the floor;
+  // above 1 it only adds chroma the albedo saturation dial already gives.
+  litSaturation: [0.4, 1.5, 0.01],
+  // 2 gives a shadow side that faces the camera twice the sky light the ambient term gives at full strength.
+  actorFill: [0, 2, 0.01],
   inkWidthPx: [0, 6, 0.1],
   edgeStrength: [0, 1, 0.01],
   edgeLineWidth: [0.5, 3, 0.05],

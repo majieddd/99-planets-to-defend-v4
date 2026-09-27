@@ -22,6 +22,8 @@ export interface PaintUniforms {
   uBandSoftness: IUniform<number>;
   uShadowTint: IUniform<Color>;
   uShadowDepth: IUniform<number>;
+  uShadowLift: IUniform<number>;
+  uShadowLiftColor: IUniform<Color>;
   uAmbientSky: IUniform<Color>;
   uAmbientGround: IUniform<Color>;
   uAmbientStrength: IUniform<number>;
@@ -32,16 +34,30 @@ export interface PaintUniforms {
   uPaintStrength: IUniform<number>;
   uSaturation: IUniform<number>;
   uTerrainBrush: IUniform<number>;
+  uPropBrush: IUniform<number>;
   uSoilBreakup: IUniform<number>;
+  uLitSaturation: IUniform<number>;
+  uActorFill: IUniform<number>;
   uStandardBlendScale: IUniform<number>;
 }
 
 /**
  * Per-material standard blends are authored against Bulwark's character blend of 0.35, and the standardBlend dial
  * rescales them all, so the dial always equals the commander's blend and props and creatures follow in proportion
- * (terrain at 0 stays pure cel). Without this scale the dial goes unread and its Style Lab slider does nothing.
+ * (terrain at 0 stays pure cel). Without this scale the dial goes unread and its Style Lab slider does nothing. The actor
+ * fill is weighted by the same ratio, so a character takes all of it and a 0.1 structure 0.29.
  */
-const AUTHORED_CHARACTER_BLEND = 0.35;
+export const AUTHORED_CHARACTER_BLEND = 0.35;
+
+/**
+ * The shadow lift's colour: the theme's shadow grade colour at unit luminance, so the shadowLift dial reads as a fraction
+ * of full sun in any theme, and the grade, which tones darks with that same colour, deepens it into a coloured dark.
+ */
+export function shadowLiftColor(theme: Theme): Color {
+  const color = new Color(theme.grade.shadows);
+  const luma = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+  return luma > 0 ? color.multiplyScalar(1 / luma) : new Color(1, 1, 1);
+}
 
 export function createPaintUniforms(theme: Theme, dials: RenderDials, brush: Texture | null): PaintUniforms {
   const uniforms: PaintUniforms = {
@@ -52,6 +68,8 @@ export function createPaintUniforms(theme: Theme, dials: RenderDials, brush: Tex
     uBandSoftness: { value: dials.bandSoftness },
     uShadowTint: { value: new Color(dials.shadowTint) },
     uShadowDepth: { value: dials.shadowDepth },
+    uShadowLift: { value: dials.shadowLift },
+    uShadowLiftColor: { value: shadowLiftColor(theme) },
     uAmbientSky: { value: new Color(theme.ambient.sky) },
     uAmbientGround: { value: new Color(theme.ambient.ground) },
     uAmbientStrength: { value: dials.ambientStrength },
@@ -63,7 +81,10 @@ export function createPaintUniforms(theme: Theme, dials: RenderDials, brush: Tex
     uPaintStrength: { value: dials.paintStrength },
     uSaturation: { value: dials.saturation },
     uTerrainBrush: { value: dials.terrainBrush },
+    uPropBrush: { value: dials.propBrush },
     uSoilBreakup: { value: dials.soilBreakup },
+    uLitSaturation: { value: dials.litSaturation },
+    uActorFill: { value: dials.actorFill },
     uStandardBlendScale: { value: dials.standardBlend / AUTHORED_CHARACTER_BLEND },
   };
   return uniforms;
@@ -76,6 +97,8 @@ export function applyPaintDials(u: PaintUniforms, dials: RenderDials, theme: The
   u.uBandSoftness.value = dials.bandSoftness;
   u.uShadowTint.value.set(dials.shadowTint);
   u.uShadowDepth.value = dials.shadowDepth;
+  u.uShadowLift.value = dials.shadowLift;
+  u.uShadowLiftColor.value.copy(shadowLiftColor(theme));
   u.uAmbientSky.value.set(theme.ambient.sky);
   u.uAmbientGround.value.set(theme.ambient.ground);
   u.uAmbientStrength.value = dials.ambientStrength;
@@ -85,7 +108,10 @@ export function applyPaintDials(u: PaintUniforms, dials: RenderDials, theme: The
   u.uPaintStrength.value = dials.paintStrength;
   u.uSaturation.value = dials.saturation;
   u.uTerrainBrush.value = dials.terrainBrush;
+  u.uPropBrush.value = dials.propBrush;
   u.uSoilBreakup.value = dials.soilBreakup;
+  u.uLitSaturation.value = dials.litSaturation;
+  u.uActorFill.value = dials.actorFill;
   u.uStandardBlendScale.value = dials.standardBlend / AUTHORED_CHARACTER_BLEND;
 }
 
@@ -119,6 +145,30 @@ export const EMISSIVE_PEAK = 1.25;
  */
 export const SOIL_EDGE_GAIN = 2.2;
 export const SOIL_EDGE_SOFTNESS = 0.06;
+
+/**
+ * The widest the terrain's brush-broken terminator may spread, in brush tiles to each side of the true terminator. The
+ * brush can flip a pixel wherever ndl is smaller than the terminator noise, and under a low key that band follows how
+ * slowly ndl changes: across the 160 m planet's far side it changes by about 1/160 per metre, so under preset B's 15
+ * degree key the band ran tens of metres wide and the brush atlas, repeating every tile, printed a lattice of dark
+ * strokes over the lit meadow (the crosshatch on the strategic camera's right half: 127 dark flecks per thousand ground
+ * pixels by the limb, 80 with the noise off). Capping the noise at the ground's own rate of change of ndl times this
+ * width keeps a relief terminator broken over a tile to each side while a gently curved field keeps a clean edge (84
+ * flecks per thousand; at an 8 degree key, 197 before and 71 after). Characters, towers and props are not capped: their
+ * forms turn fast enough.
+ */
+export const TERMINATOR_BAND_TILES = 1;
+
+/** The standard blend a painted material gets when its creator names none: a prop's. */
+export const DEFAULT_STANDARD_BLEND = 0.1;
+
+/**
+ * Whether a material is an actor's, which takes the actorFill dial. The test is the authored standard blend, decided once
+ * at creation (the shader branch is a define), so it needs nothing from the loader: every asset already passes its blend.
+ */
+export function isActorBlend(standardBlend: number, terrain: boolean): boolean {
+  return !terrain && standardBlend > 0;
+}
 
 /** GLSL ES 3.0 has no implicit int to float conversion, so a whole number must still reach the shader as 4.0. */
 export function glslFloat(value: number): string {
@@ -223,6 +273,8 @@ uniform float uBands;
 uniform float uBandSoftness;
 uniform vec3 uShadowTint;
 uniform float uShadowDepth;
+uniform float uShadowLift;
+uniform vec3 uShadowLiftColor;
 uniform vec3 uAmbientSky;
 uniform vec3 uAmbientGround;
 uniform float uAmbientStrength;
@@ -233,6 +285,9 @@ uniform float uRimPower;
 uniform float uPaintStrength;
 uniform float uSaturation;
 uniform float uTerrainBrush;
+uniform float uPropBrush;
+uniform float uLitSaturation;
+uniform float uActorFill;
 uniform float uStandardBlendScale;
 #ifdef PAINT_SOIL
   uniform vec3 uSoilColor;
@@ -281,9 +336,26 @@ void main() {
   #endif
   #ifdef PAINT_TERRAIN
     albedo *= 1.0 + (brush - 0.5) * uTerrainBrush;
+  #else
+    // The baked paint is broad at hero distance (Bulwark's plates read smooth), so the brush atlas strokes it too, in
+    // object space so the strokes ride the body; the terminator had been the only place the brush reached a prop.
+    albedo *= 1.0 + (brush - 0.5) * uPropBrush;
   #endif
   if (alpha < uAlphaTest) discard;
   albedo = withSaturation(albedo, uSaturation);
+
+  #ifdef USE_PAINT_EMISSIVE
+    vec3 emissive = texture2D(uEmissiveMap, vUv).rgb * uEmissiveColor * uEmissiveIntensity;
+  #else
+    vec3 emissive = uEmissiveColor * uEmissiveIntensity;
+  #endif
+  // Decided per pixel, because a real asset's gunmetal and its cyan channels share one mesh and one atlas.
+  float emissiveKey = max(emissive.r, max(emissive.g, emissive.b));
+  // Glow is information (Pillar 5), so the look dials that re-light and restrain lit colour (actor fill, shadow lift,
+  // lit saturation) leave emitting pixels as authored, fading in over the key's first unit. Restrained along with the
+  // stone, the heart crystal's lit gold took its glowing pixels' saturation from 0.58 to 0.49 at the hero camera; spared,
+  // it keeps 0.57.
+  float spare = 1.0 - clamp(emissiveKey, 0.0, 1.0);
 
   vec3 N = normalize(vViewNormal);
   vec3 worldN = normalize(vWorldNormal);
@@ -308,7 +380,24 @@ void main() {
   float shadow = getShadowMask();
 
   // The terminator breaks up like a brush stroke, and a cast shadow drops the surface into the shadow band.
-  float t = ndl + (brush - 0.5) * 2.0 * uTerminatorNoise;
+  float breakup = uTerminatorNoise;
+  #ifdef PAINT_TERRAIN
+    // On the ground the noise is capped by how fast ndl changes per metre, so the broken band stays at most
+    // TERMINATOR_BAND_TILES brush tiles to each side of the terminator (see the constant for the crosshatch it ends). The
+    // rate is read along both screen axes and the larger kept: at a grazing view one axis stretches over metres. Only
+    // the terminator is capped: the noise can flip light into shadow only where |ndl| is under it, so the cap fades out
+    // by twice the noise and the brush keeps breaking the edges between the lit bands (the default's three-band meadow
+    // under its 35 degree key lies on the mid-to-lit edge, and capped there it lost its broken strokes).
+    float ndlRate = max(
+      abs(dFdx(ndl)) / max(length(dFdx(vBrushPos)), 1e-5),
+      abs(dFdy(ndl)) / max(length(dFdy(vBrushPos)), 1e-5)
+    );
+    // The floor keeps smoothstep's edges apart at a noise of 0, where GLSL leaves equal edges undefined.
+    float reach = max(uTerminatorNoise, 1e-4);
+    float nearTerminator = 1.0 - smoothstep(reach, 2.0 * reach, abs(ndl));
+    breakup = mix(breakup, min(breakup, ndlRate * TERMINATOR_BAND_TILES / uBrushScale), nearTerminator);
+  #endif
+  float t = ndl + (brush - 0.5) * 2.0 * breakup;
   t = min(t, shadow * 2.0 - 1.0);
   // Exactly uBands light levels with the first step on the terminator, so the whole form-shadow side takes the
   // shadow tint. The bands dial starts at 2, so uBands - 1.0 is never 0.
@@ -320,8 +409,29 @@ void main() {
 
   // Shadows take the theme's colour instead of going grey.
   vec3 direct = mix(uShadowTint * uShadowDepth, sunColor, lit);
-  vec3 ambient = mix(uAmbientGround, uAmbientSky, dot(worldN, uUp) * 0.5 + 0.5) * uAmbientStrength;
+  vec3 hemisphere = mix(uAmbientGround, uAmbientSky, dot(worldN, uUp) * 0.5 + 0.5);
+  vec3 ambient = hemisphere * uAmbientStrength;
   vec3 color = albedo * (direct + ambient);
+
+  #ifdef PAINT_ACTOR
+    // Seen against the light, an actor's whole visible side is in the shadow band, and preset B's hero camera showed
+    // Bulwark's back at a median luma of 14 against 72 to 81 of ground (every blow must read, Pillar 4). This fill comes
+    // from the camera's side, so it reaches whatever the camera sees whatever the key does; it takes the sky and
+    // ground-bounce colour of the ambient hemisphere, only where the key does not light (1 - lit), so the lit side and
+    // the hard terminator stay the key's; and it falls off with dot(N, V), so the shadow side keeps its roundness. It
+    // follows the authored standard blend, full on characters (Bulwark's 0.35) and 0.29 of it on the towers, heart and
+    // nest at 0.1: at full strength the sky light greyed the heart's stone around its warm crystal (saturation 0.40
+    // without the fill, 0.30 with it and 0.36 weighted, at the hero camera), and the towers read at 0.59 of their ground
+    // with no fill at all.
+    float actorWeight = clamp(uStandardBlend / AUTHORED_CHARACTER_BLEND, 0.0, 1.0);
+    color += albedo * hemisphere * uActorFill * actorWeight * clamp(dot(N, V), 0.0, 1.0) * (1.0 - lit) * spare;
+  #endif
+
+  // A coloured floor under the shadow band, whatever the albedo: the grade's contrast pivots at mid grey, and preset B's
+  // 1.35 crushed every shadow toward navy-black. It lives here rather than in the grade because the grade cannot tell ink
+  // from a dark it should lift once fog has touched the ink: keyed on the ink's luminance, a grade lift raised the hull
+  // ink beside Bulwark from 5 to 27 luma at the hero camera. The ink is never drawn with this material, so it stays black.
+  color += uShadowLiftColor * uShadowLift * (1.0 - lit) * spare;
 
   // The rim separates characters and props from the ground; on terrain, at grazing angles, it lifts the whole field.
   #ifndef PAINT_TERRAIN
@@ -329,13 +439,14 @@ void main() {
     color += pow(facing, uRimPower) * uRimStrength * smoothstep(-0.1, 0.4, ndl) * shadow * uRimColor * sunColor;
   #endif
 
-  #ifdef USE_PAINT_EMISSIVE
-    vec3 emissive = texture2D(uEmissiveMap, vUv).rgb * uEmissiveColor * uEmissiveIntensity;
-  #else
-    vec3 emissive = uEmissiveColor * uEmissiveIntensity;
-  #endif
-  // Decided per pixel, because a real asset's gunmetal and its cyan channels share one mesh and one atlas.
-  float emissiveKey = max(emissive.r, max(emissive.g, emissive.b));
+  // The saturation dial works on albedo, so the key's own tint still raised the meadow's chroma (preset B's amber key
+  // took the ground's HSV saturation from 0.56 to 0.66). This restrains the lit colour itself, before the emitters add
+  // their light and away from emitting pixels, so the energy, the heart and the bloom that reads them keep their full
+  // colour. The grade would have greyed the halo too: it runs after the bloom. At 1 it is skipped rather than computed,
+  // so the default frame stays the one it was bit for bit (mix(luma, c, 1.0) need not return c exactly).
+  float restraint = mix(1.0, uLitSaturation, spare);
+  if (restraint != 1.0) color = withSaturation(color, restraint);
+
   // One factor on all three channels stops the peak at EMISSIVE_PEAK and keeps the hue (see EMISSIVE_PEAK).
   color += emissive * min(1.0, EMISSIVE_PEAK / max(emissiveKey, 1e-4));
   // The bloom keys on this alpha, not on luminance. Keyed on Rec.709 luminance, magenta (about 0.83 at intensity 3)
@@ -354,7 +465,17 @@ export function createPaintedMaterial(shared: PaintUniforms, options: PaintedOpt
   };
   if (options.map) defines['USE_PAINT_MAP'] = '';
   if (options.emissiveMap) defines['USE_PAINT_EMISSIVE'] = '';
-  if (options.terrain) defines['PAINT_TERRAIN'] = '';
+  if (options.terrain) {
+    defines['PAINT_TERRAIN'] = '';
+    defines['TERMINATOR_BAND_TILES'] = glslFloat(TERMINATOR_BAND_TILES);
+  }
+  const standardBlend = options.standardBlend ?? DEFAULT_STANDARD_BLEND;
+  // Actors are the materials authored with some standard lighting: Bulwark, the Husk, the towers, the heart and the nest
+  // (and their placeholders, through paintAndInk). The terrain and the Verdant kit are pure cel at 0 and take no fill.
+  if (isActorBlend(standardBlend, options.terrain === true)) {
+    defines['PAINT_ACTOR'] = '';
+    defines['AUTHORED_CHARACTER_BLEND'] = glslFloat(AUTHORED_CHARACTER_BLEND);
+  }
   // Only a material given a soil colour declares the soilWeight attribute. A mesh without that attribute would read
   // whatever constant WebGL last left at its location (three sets such constants for the colour attribute), which
   // could paint a whole planet in soil.
@@ -379,7 +500,7 @@ export function createPaintedMaterial(shared: PaintUniforms, options: PaintedOpt
       uEmissiveMap: { value: options.emissiveMap ?? null },
       uEmissiveColor: { value: options.emissiveColor ?? new Color(0, 0, 0) },
       uEmissiveIntensity: { value: options.emissiveIntensity ?? 1 },
-      uStandardBlend: { value: options.standardBlend ?? 0.1 },
+      uStandardBlend: { value: standardBlend },
       uAlphaTest: { value: options.alphaTest ?? 0 },
       uSoilColor: { value: options.soilColor ?? new Color(0, 0, 0) },
     },

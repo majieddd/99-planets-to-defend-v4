@@ -11,10 +11,18 @@ describe('dials panel', () => {
   });
 
   it('files the sun under Light, the height fog under Atmosphere, the halos under Post and the soil under Paint', () => {
-    expect(GROUPS['Light']).toEqual(['sunElevation', 'sunColor', 'sunIntensity']);
+    expect(GROUPS['Light']).toEqual(['sunElevation', 'sunColor', 'sunIntensity', 'actorFill']);
     expect(GROUPS['Atmosphere']).toEqual(['fogDensity', 'fogStart', 'fogHeightFalloff']);
     expect(GROUPS['Post']).toEqual(expect.arrayContaining(['bloomIntensity', 'heartHalo', 'bloomThreshold']));
     expect(GROUPS['Paint']).toContain('soilBreakup');
+  });
+
+  it("files the look pass's dials where they act: brush, lift and lit colour under Paint, the fill under Light", () => {
+    expect(GROUPS['Paint']).toEqual(expect.arrayContaining(['propBrush', 'litSaturation', 'shadowLift']));
+    // The prop brush sits beside the terrain brush it mirrors, and the lift beside the shadow colour it floors.
+    expect(GROUPS['Paint']!.indexOf('propBrush')).toBe(GROUPS['Paint']!.indexOf('terrainBrush') + 1);
+    expect(GROUPS['Paint']!.indexOf('shadowLift')).toBe(GROUPS['Paint']!.indexOf('shadowTint') + 1);
+    expect(GROUPS['Light']).toContain('actorFill');
   });
 
   it('builds a colour control for exactly the codec\'s colour dials', () => {
