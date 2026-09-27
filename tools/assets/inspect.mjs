@@ -27,5 +27,6 @@ export async function inspectGlb(path) {
     return { width: size?.[0] ?? 0, height: size?.[1] ?? 0, mime: texture.getMimeType() };
   });
   const nodes = root.listNodes().map((node) => node.getName());
-  return { tris: Math.round(tris), bones, animations, textures, nodes, hasInk, bytes: statSync(path).size };
+  const doubleSided = root.listMaterials().some((material) => material.getDoubleSided());
+  return { tris: Math.round(tris), bones, animations, textures, nodes, hasInk, doubleSided, bytes: statSync(path).size };
 }

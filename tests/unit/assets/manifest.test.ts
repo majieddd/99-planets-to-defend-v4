@@ -21,6 +21,7 @@ describe('manifestEntry', () => {
       textures: [{ width: 1024, height: 1024, mime: 'image/webp' }],
       nodes: ['rig', 'husk'],
       hasInk: true,
+      doubleSided: true,
       bytes: 123456,
     };
     expect(manifestEntry(meta, stats)).toEqual({
@@ -34,12 +35,13 @@ describe('manifestEntry', () => {
       bones: 17,
       textures: [{ width: 1024, height: 1024, mime: 'image/webp' }],
       hasInk: true,
+      doubleSided: true,
       bytes: 123456,
     });
   });
 
   it('keeps texture entries without GLB stats', () => {
     const entry = manifestEntry({ name: 'ink_noise', family: 'textures', kind: 'texture', file: 'textures/ink_noise.png', nodes: [], animations: [] }, null);
-    expect(entry).toMatchObject({ name: 'ink_noise', kind: 'texture', tris: 0, bytes: 0 });
+    expect(entry).toMatchObject({ name: 'ink_noise', kind: 'texture', tris: 0, doubleSided: false, bytes: 0 });
   });
 });

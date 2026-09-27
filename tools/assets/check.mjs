@@ -19,6 +19,9 @@ export function evaluateAsset(entry, budgets, timings) {
     }
   }
   if (budget.ink && !entry.hasInk) failures.push('missing _INK attribute');
+  // Blender exports any material without backface culling as double-sided, and the runtime would then draw and
+  // shadow both faces of every mesh using it; a mesh that needs both faces says so in its own extras.
+  if (entry.doubleSided) failures.push('double-sided material');
   for (const name of budget.animations ?? []) {
     const animation = entry.animations.find((a) => a.name === name);
     if (!animation) {

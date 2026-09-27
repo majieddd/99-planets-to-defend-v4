@@ -60,6 +60,10 @@ describe('evaluateAsset', () => {
     expect(evaluateAsset(entry, budgets, timings)).toEqual([]);
   });
 
+  it('fails a double-sided material', () => {
+    expect(evaluateAsset(husk({ doubleSided: true }), budgets, timings)).toEqual(['double-sided material']);
+  });
+
   it('skips textures and flags unknown families', () => {
     expect(evaluateAsset({ ...husk(), kind: 'texture' }, budgets, timings)).toEqual([]);
     expect(evaluateAsset({ ...husk(), family: 'nope' }, budgets, timings)).toEqual(["no budget for family 'nope'"]);

@@ -19,6 +19,7 @@ export function manifestEntry(meta, stats) {
     bones: stats?.bones ?? 0,
     textures: stats?.textures ?? [],
     hasInk: stats?.hasInk ?? false,
+    doubleSided: stats?.doubleSided ?? false,
     bytes: stats?.bytes ?? 0,
   };
 }
