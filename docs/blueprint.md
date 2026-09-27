@@ -220,9 +220,10 @@ Painted-Anime-Inkline 4.0 defaults, and no asset family is mass-produced before 
 The kit is not bought. It is built by script in Blender 5.2.1 LTS from recipes in
 `blender/recipes/`. The asset build finds Blender through the `BLENDER_PATH` environment variable
 (on the owner's machine, `C:\Users\Majied LaFleur\tools\blender-5.2.1\blender.exe`). The manifest is
-`public/assets/manifest.json`, written by `npm run assets` and counted from the exported files. The
-Content tables must equal its counts, a rule kept by hand at each milestone. The current count (M0c)
-is 8 manifest entries: the `brush_strokes` and `ink_noise` textures, and the models `verdant_kit`
+`public/assets/manifest.json`, written by `npm run assets` and counted from the exported files. Once
+a milestone's assets are built, the Content entries for that milestone must equal the manifest's
+counts, a rule kept by hand; later milestones' entries are plans until then. The current count
+(M0c) is 8 manifest entries: the `brush_strokes` and `ink_noise` textures, and the models `verdant_kit`
 (8 pieces), `worldheart` (plinth and 11 stages), `nest`, `bolt_sentinel` (marks I to III), `husk`
 and `bulwark`. Every placeable asset has its root at its ground contact point, so the bind-pose
 minimum Y of each tower mark, each Verdant piece and every other model as a whole is within 5 mm of
@@ -843,6 +844,7 @@ the owner's playtests overrule the bot.
 |---|---|---|
 | Hit-stop, light and heavy | 55 ms and 90 ms | Readable contact without stalling the flow |
 | Strike frame, cleave, twin strike, lob | 0.40, 0.34, 0.42 of the swing | v3 timings |
+| Cleave swing (Bulwark attack) | 0.85 s, strike at 0.34 s | v3: the cleave's 0.40 strike frame above, in seconds; the Bulwark's attack clip is keyed to both times |
 | Commander skill cooldowns | Bulwark ward 24 s, Twinfang dash 16 s, Longsight focus 22 s, Kettle blast 28 s, Emberline field 30 s | v3 |
 | Weapon skill cooldowns | sword cleave 12 s, spear lunge 13 s, twinblade cadence 18 s, carbine railshot 14 s, lobber siege shell 18 s, scepter heat vent 20 s | v3 |
 | Enemy attack multiplier in the campaign | 2.8 | v3 |
@@ -1005,7 +1007,8 @@ Starting values, replaced by the dial values the owner locks at the style check.
 ## Content: planets and families
 
 Every family has an inspection view that shows all of it at once and can open any one member,
-reachable by URL. Counts in these tables must equal `public/assets/manifest.json`.
+reachable by URL. Once a milestone's assets are built, its entries in these tables must equal
+`public/assets/manifest.json` (Kit).
 
 ### Planet themes
 
@@ -1211,7 +1214,7 @@ The order of construction:
 | Bot runs | `npm run bot -- --planets 20` | three policies (competent, idle, reckless) win and lose planets; the competent bot finishes in 25 to 35 simulated minutes | milestone and nightly |
 | Browser smoke | `npm run e2e` | every page boots without console errors; scripted input places a tower and runs a wave; frames saved | every pull request |
 | Captures | `npm run capture` | every inspection page captured for review | milestone |
-| Asset checks | `npm run assets:check` | each model within its family's triangle, bone, texture and ink budget (Performance budgets); no double-sided material; required clips present, with durations and strike times within 1/30 s of `src/shared/timings.json`; every listed file present; placeable roots at ground contact (Kit); fails without a manifest; reads only the numbers the build recorded, never a GLB | every commit, in CI |
+| Asset checks | `npm run assets:check` | each model within its family's triangle, bone, texture and ink budget (Performance budgets); no double-sided material; required clips present, with durations and strike times within 1/30 s of `src/shared/timings.json`; every listed file present, each model at the byte length the manifest records; placeable roots at ground contact (Kit); fails without a manifest; reads only the numbers the build recorded, never a GLB | every commit, in CI |
 | Performance | `npm run perf` | frame time along a fixed camera path per tier on the development laptop | milestone |
 | Blueprint gate | `blueprint.js check docs/blueprint.md --gate` | this document is complete | every commit |
 | Agent play | the built-in browser | the agent plays the change and attaches frames | every change |
