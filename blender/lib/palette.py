@@ -63,7 +63,10 @@ class PaintStyle:
 # 90th percentile luminance spread from 14 (the plan's 0.3) to 18 sRGB levels and reads as strokes in the previews,
 # while the clipped share of the trim grows from 7.9% to 14%; 1.0 mottled the pale trim, 18% of which then clipped.
 PLAYER_STYLE = PaintStyle(shadow_tint=(0.40, 0.58, 0.72), curv_gain=2.0, edge_light=0.5, cavity_dark=0.5, brush_strength=0.8)
-XENO_STYLE = PaintStyle(shadow_tint=(0.55, 0.35, 0.70), ao_strength=0.8, curv_gain=2.0, edge_light=0.3, edge_tint=(0.9, 0.8, 1.0), cavity_dark=0.6, brush_strength=0.35)
+# The chitin is darker still: at 0.35 the strokes shifted it by about 3 sRGB levels, invisible. At 1.6 they read and
+# the chitin stays dark: the Husk's body spans L* 10.2 to 16.7 (10th to 90th percentile) and nothing clips. The nest
+# paints with this style too, so a change here repaints both.
+XENO_STYLE = PaintStyle(shadow_tint=(0.55, 0.35, 0.70), ao_strength=0.8, curv_gain=2.0, edge_light=0.3, edge_tint=(0.9, 0.8, 1.0), cavity_dark=0.6, brush_strength=1.6)
 # Warm light tops against cool, darker bases, strong enough to read before any runtime light, and deeper occlusion.
 NATURE_STYLE = PaintStyle(shadow_tint=(0.35, 0.60, 0.62), ao_strength=0.85, edge_light=0.25, cavity_dark=0.35,
                           warm=(1.16, 1.06, 0.86), cool=(0.52, 0.64, 0.80), brush_strength=0.85, stroke_tint_mix=0.35)
