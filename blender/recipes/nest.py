@@ -13,11 +13,19 @@ import bpy
 from mathutils import Vector
 
 from lib import export, geo, ink, paint, palette, scene
-from lib.ctx import AssetRecord
+from lib.ctx import AssetRecord, Placeable
 
 X = palette.XENO
 MOUND_RADII = (1.6, 1.6, 1.6 * 0.62)
 BASE_SINK = 0.03        # the flattened base sits this far into the ground, as the Verdant rocks' bases do
+# The nest's designed sink (lib.ctx.Placeable), which the spikes set rather than the mound's BASE_SINK. Each spike
+# leans 0.35 rad inward with its centre at z 0.55, which puts the outer edge of its tilted base on the ground just
+# outside the mound's rim (0.55 - 0.65 cos 0.35 + 0.18 sin 0.35 = +0.001 m; the hexagons' corners measure -0.007 to
+# +0.001), so no gap opens under a spike. The inner edge, hidden under the mound, then lies 2 x 0.18 sin 0.35 = 0.123 m
+# lower, at -0.122 m (-0.1220 measured on the shipped GLB); the sink rounds that up to the millimetre. The recipe set
+# z 0.55 without saying why; the outer edges meeting the ground to a few millimetres is what marks the depth as
+# designed.
+SPIKE_SINK = 0.123
 CRATER_DEPTH = 0.3      # the crater's floor under its lowest rim vertex: steep walls keep the light inside
 MAW_INSET = 0.03        # the maw's light sits this far under the lowest rim vertex and reaches this far past the widest
 VENT_PROUD = 0.02       # flush enough to read as an opening, clear enough of the chitin not to z-fight with it
@@ -101,4 +109,6 @@ def build(ctx):
     if ctx.previews_enabled:
         export.render_views([nest], ctx.preview_dir('nest'), 'nest', views=4)
     export.export_glb([nest], ctx.raw_path('nests', 'nest'))
-    return [AssetRecord(name='nest', family='nests', file='nests/nest.glb', nodes=['nest'], tris=scene.tri_count([nest]))]
+    # The runtime places the whole nest.
+    return [AssetRecord(name='nest', family='nests', file='nests/nest.glb', nodes=['nest'],
+                        tris=scene.tri_count([nest]), placeables=[Placeable(sink=SPIKE_SINK)])]

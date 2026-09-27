@@ -9,5 +9,11 @@
   ],
   "animations": [],
   "tris": 426,
-  "notes": {}
+  "notes": {},
+  "placeables": [
+    {
+      "node": null,
+      "sink": 0.123
+    }
+  ]
 }

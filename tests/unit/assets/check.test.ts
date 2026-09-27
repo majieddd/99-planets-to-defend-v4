@@ -21,6 +21,7 @@ function husk(overrides: Record<string, unknown> = {}) {
       { name: 'walk', duration: 1, loop: true, strike: null, exportedDuration: 1 },
       { name: 'attack', duration: 1.4, loop: false, strike: 0.4, exportedDuration: 1.4 },
     ],
+    ground: [{ node: null, minY: -0.0024, sink: 0 }],
     ...overrides,
   };
 }
@@ -67,5 +68,73 @@ describe('evaluateAsset', () => {
   it('skips textures and flags unknown families', () => {
     expect(evaluateAsset({ ...husk(), kind: 'texture' }, budgets, timings)).toEqual([]);
     expect(evaluateAsset({ ...husk(), family: 'nope' }, budgets, timings)).toEqual(["no budget for family 'nope'"]);
+  });
+});
+
+describe('the ground contact rule', () => {
+  function standing(minY: number | null, sink = 0, node = 'rock_a') {
+    return husk({ ground: [{ node, minY, sink }] });
+  }
+
+  it('passes a placeable whose lowest point is on its origin or within 5 mm of it', () => {
+    for (const minY of [0, 0.005, -0.005]) expect(evaluateAsset(standing(minY), budgets, timings)).toEqual([]);
+  });
+
+  it('passes a declared 0.05 m sink at -0.05 and fails it at -0.06', () => {
+    expect(evaluateAsset(standing(-0.05, 0.05), budgets, timings)).toEqual([]);
+    expect(evaluateAsset(standing(-0.06, 0.05), budgets, timings)).toEqual([
+      "ground 'rock_a': lowest point -0.0600 m sinks (limit -0.0550)",
+    ]);
+  });
+
+  it('fails a placeable floating 2 cm above its origin', () => {
+    expect(evaluateAsset(standing(0.02), budgets, timings)).toEqual([
+      "ground 'rock_a': lowest point +0.0200 m floats (limit +0.005)",
+    ]);
+  });
+
+  it('fails a declared sink deeper than the geometry reaches, as the bush declared 0.12 m over 0.1138 m', () => {
+    // A sink is the depth the geometry has. As a bound, 0.12 passed any lowest point from -0.125 m to +0.005 m, so the
+    // declared depth said almost nothing about the geometry.
+    expect(evaluateAsset(standing(-0.1138, 0.12, 'bush'), budgets, timings)).toEqual([
+      "ground 'bush': lowest point -0.1138 m is shallower than its declared sink of 0.12 m (limit -0.1150)",
+    ]);
+    expect(evaluateAsset(standing(-0.1138, 0.114, 'bush'), budgets, timings)).toEqual([]);
+  });
+
+  it('caps a declared sink at 0.14 m: 0.15 fails even where the geometry matches it, and 0.14 matched passes', () => {
+    // A 0.15 m cap let a declared sink pass the old Bolt mark I, whose root sat 0.150 m over its plinth's bottom.
+    expect(evaluateAsset(standing(-0.15, 0.15), budgets, timings)).toEqual(["ground 'rock_a': sink 0.15 m > 0.14 m"]);
+    expect(evaluateAsset(standing(-0.14, 0.14), budgets, timings)).toEqual([]);
+  });
+
+  it('fails a model entry without ground data, as in a manifest written before the rule', () => {
+    const { ground: _ground, ...stale } = husk();
+    const missing = ['no ground data (the manifest predates the ground rule; run npm run assets)'];
+    expect(evaluateAsset(stale, budgets, timings)).toEqual(missing);
+    expect(evaluateAsset(husk({ ground: [] }), budgets, timings)).toEqual(missing);
+  });
+
+  it('fails a placeable the GLB could not measure', () => {
+    expect(evaluateAsset(standing(null), budgets, timings)).toEqual([
+      "ground 'rock_a': not measured (no such top-level node, or no geometry under it)",
+    ]);
+  });
+
+  it('checks every placeable of an asset: the old Bolt passes as a whole and fails at its mark roots', () => {
+    const ground = [
+      { node: null, minY: 0, sink: 0 },
+      { node: 'bolt_mk1', minY: -0.15, sink: 0 },
+      { node: 'bolt_mk2', minY: -0.21, sink: 0 },
+    ];
+    expect(evaluateAsset(husk({ ground }), budgets, timings)).toEqual([
+      "ground 'bolt_mk1': lowest point -0.1500 m sinks (limit -0.0050)",
+      "ground 'bolt_mk2': lowest point -0.2100 m sinks (limit -0.0050)",
+    ]);
+  });
+
+  it('exempts textures, which carry no ground data', () => {
+    const texture = { name: 'ink_noise', family: 'textures', kind: 'texture', file: 'textures/ink_noise.png', ground: [] };
+    expect(evaluateAsset(texture, budgets, timings)).toEqual([]);
   });
 });

@@ -13,6 +13,29 @@ class AnimRecord:
 
 
 @dataclass
+class Placeable:
+    """Something the runtime stands on the ground by itself: the whole asset (node None) or one top-level node of the
+    GLB. assets:check measures the lowest point of its geometry in the bind pose against its placement origin and fails
+    unless that point lies within 5 mm of the origin or, with a `sink`, within 5 mm of `sink` metres under it. A sink is
+    a designed burial, such as a rock bedding its base into uneven ground. It is the depth the geometry has, not a bound
+    on it, and the recipe that declares one says why beside it.
+
+    The placement origin is the point the runtime puts on the ground. For a top-level empty it is the empty's own
+    origin, since the runtime sets the empty's position and rotation; the build refuses such an empty that carries a
+    rotation, which placing it would discard. For the whole asset and for a top-level mesh node it is the asset origin:
+    the optimizer's quantizer replaces a mesh node's authored origin with its quantization box, and the runtime
+    composes that node's transform into each placement instead of overwriting it.
+
+    Empty and mesh are told apart on the shipped GLB, so the split relies on the quantizer (glTF-Transform 4.5) moving
+    the mesh of any node that has children onto a new unnamed child: a Blender mesh object with children ships as an
+    empty at its authored origin and is measured from there, which is how the old Bolt Sentinel roots, plinths carrying
+    their yaw rings, were measured from mid-plinth and failed. A recipe that wants a mesh placed by an origin of its own
+    parents it under an empty at that origin, as bolt_sentinel.py does, instead of counting on that split."""
+    node: str | None = None
+    sink: float = 0.0          # metres
+
+
+@dataclass
 class AssetRecord:
     name: str                  # e.g. 'bulwark'
     family: str                # commanders | xeno | towers | heart | nests | env | textures
@@ -23,6 +46,11 @@ class AssetRecord:
     animations: list = field(default_factory=list)
     tris: int = 0
     notes: dict = field(default_factory=dict)
+    # What the runtime places by itself (Placeable). Empty means the whole asset, with no sink. assets:check also
+    # measures every top-level empty of the GLB that has geometry under it as a placement handle, declared or not, so
+    # a root left above or below the ground fails without its recipe declaring anything. An empty with no geometry
+    # under it, such as a marker, is skipped: it has no lowest point to stand on the ground.
+    placeables: list = field(default_factory=list)
 
 
 @dataclass

@@ -6,6 +6,7 @@
   "recipe": "bolt_sentinel",
   "nodes": [
     "bolt_mk1",
+    "bolt_mk1_base",
     "bolt_mk1_foot0",
     "bolt_mk1_foot1",
     "bolt_mk1_foot2",
@@ -25,6 +26,7 @@
     "bolt_mk1_railglow0",
     "bolt_mk1_railglow1",
     "bolt_mk2",
+    "bolt_mk2_base",
     "bolt_mk2_foot0",
     "bolt_mk2_foot1",
     "bolt_mk2_foot2",
@@ -47,6 +49,7 @@
     "bolt_mk2_shroud",
     "bolt_mk2_shroudglow",
     "bolt_mk3",
+    "bolt_mk3_base",
     "bolt_mk3_buttress0",
     "bolt_mk3_buttress1",
     "bolt_mk3_buttress2",
@@ -88,5 +91,19 @@
   ],
   "animations": [],
   "tris": 7378,
-  "notes": {}
+  "notes": {},
+  "placeables": [
+    {
+      "node": "bolt_mk1",
+      "sink": 0.0
+    },
+    {
+      "node": "bolt_mk2",
+      "sink": 0.0
+    },
+    {
+      "node": "bolt_mk3",
+      "sink": 0.0
+    }
+  ]
 }

@@ -1,9 +1,10 @@
 """Bolt Sentinel, marks I to III: rapid single-target rails that also hit air. Each mark is a node tree the
-runtime drives: bolt_mkN (base) > bolt_mkN_yaw (turns) > bolt_mkN_pitch (elevates) > rails and
-bolt_mkN_muzzle<i> empties at the rail tips. Upgrades change the silhouette, not just the size (v3 creative rule): mark
-I is compact, a low plinth and yaw ring under a small head with twin rails; mark II rises on a neck under a silver
-collar, stands on a taller plinth and sheathes its twin rails in a shroud with the crit coil at the mouth; mark III adds
-a third rail, the sensor dome, swept fins and buttresses, and keeps a crit coil on its bare rails.
+runtime drives: bolt_mkN (the root, on the ground, where the runtime places the mark) > bolt_mkN_base (the plinth) >
+bolt_mkN_yaw (turns) > bolt_mkN_pitch (elevates) > rails and bolt_mkN_muzzle<i> empties at the rail tips. Upgrades
+change the silhouette, not just the size (v3 creative rule): mark I is compact, a low plinth and yaw ring under a small
+head with twin rails; mark II rises on a neck under a silver collar, stands on a taller plinth and sheathes its twin
+rails in a shroud with the crit coil at the mouth; mark III adds a third rail, the sensor dome, swept fins and
+buttresses, and keeps a crit coil on its bare rails.
 
 Towers are the most numerous player objects on screen, so they speak the commander's plate language (bulwark.py):
 slate plates, ivory trim and armour, silver rails and collar, a warm rim painted on every chamfer and a warm cap painted
@@ -24,7 +25,7 @@ import bpy
 from mathutils import Vector
 
 from lib import export, geo, ink, paint, palette, scene
-from lib.ctx import AssetRecord
+from lib.ctx import AssetRecord, Placeable
 
 # The three marks share one 1024 px atlas at about 63 texels per metre (measured after the paint UV pass; the rim
 # strips and the crit coils' ring walls add many small islands), so brush_scale 0.3, one brush tile over 3.3 m, paints
@@ -292,9 +293,15 @@ def mark(level, r):
     m = MARKS[level]
     p = f'bolt_mk{level}'
     R, H, s = m['base_r'], m['base_h'], m['head']
-    # The base node keeps its origin at mid-plinth, as before, since the runtime places the node. The octagon's sides
-    # meet at 45 degrees, over the 30 degree limit, so each corner takes a warm rim line as well as the top and bottom.
-    base = geo.cylinder(p, R, H, segments=8, radius_top=R - 0.09, location=(0, 0, H / 2), material=r['plate'])
+    # The mark's root is an empty on the ground under the plinth's lowest point: every placeable asset keeps its root at
+    # its ground contact point, so the runtime's place() sets this root straight to a ground point, as it does any other
+    # asset's. The root used to be the plinth itself, whose origin sits at mid-plinth, and placing it on the ground sank
+    # half the plinth, 0.15 to 0.26 m (measured on the shipped GLB). The plinth keeps that origin under the root as
+    # bolt_mkN_base, so the driven nodes (yaw, pitch, muzzles) keep their names, parents and pivots.
+    root = scene.link(bpy.data.objects.new(p, None))
+    # The octagon's sides meet at 45 degrees, over the 30 degree limit, so each corner takes a warm rim line as well as
+    # the top and bottom.
+    base = geo.cylinder(f'{p}_base', R, H, segments=8, radius_top=R - 0.09, location=(0, 0, H / 2), material=r['plate'])
     base = _machined(_rimmed(base, 0.018))
     geo.cap_factor(base)
     ink.set_ink(base, 1.2)
@@ -364,7 +371,8 @@ def mark(level, r):
         dome_z = prof[1][1] + (dome_y - prof[1][0]) * (prof[2][1] - prof[1][1]) / (prof[2][0] - prof[1][0])
         dome = _rounded(_leaf(geo.uv_sphere(f'{p}_sensor', 0.16 * s, segments=12, rings=6, hemisphere=True, location=(0, dome_y, head_z + dome_z), material=r['glow'])))
         parts.append(_child(dome, pitch, 0.6))
-    return base, parts
+    scene.parent_keep(base, root)
+    return root, parts
 
 
 def build(ctx):
@@ -372,9 +380,9 @@ def build(ctx):
     roots = []
     meshes = []
     for level in (1, 2, 3):
-        base, parts = mark(level, r)
-        base.location.x = (level - 1) * 4.0  # apart for the bake; children follow their parents
-        roots.append(base)
+        root, parts = mark(level, r)
+        root.location.x = (level - 1) * 4.0  # apart for the bake; children follow their parents
+        roots.append(root)
         meshes.extend(parts)
     bpy.context.view_layer.update()
     paint.paint(meshes, name='bolt_sentinel', out_dir=ctx.bake_dir('towers'), textures_dir=ctx.textures, size=1024,
@@ -400,4 +408,5 @@ def build(ctx):
     everything = [ob for root in roots for ob in scene.descendants(root)]
     export.export_glb(everything, ctx.raw_path('towers', 'bolt_sentinel'))
     return [AssetRecord(name='bolt_sentinel', family='towers', file='towers/bolt_sentinel.glb',
-                        nodes=[ob.name for ob in everything], tris=scene.tri_count(meshes))]
+                        nodes=[ob.name for ob in everything], tris=scene.tri_count(meshes),
+                        placeables=[Placeable(root.name) for root in roots])]

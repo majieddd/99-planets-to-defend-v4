@@ -19,7 +19,7 @@ import bpy
 from mathutils import Matrix, Vector
 
 from lib import export, geo, ink, paint, palette, scene
-from lib.ctx import AssetRecord
+from lib.ctx import AssetRecord, Placeable
 
 P = palette.VERDANT
 ROCK_SMOOTH_DEG = 38.0   # breaks sharper than this stay as planes; smaller facets shade as one surface
@@ -35,6 +35,16 @@ ROCK_CAP = {'threshold': 0.6, 'softness': 0.03, 'breakup': 0.5}
 # conifer lost the light balance chosen for V5b_dome; 0.15 keeps only a painted dark rim.
 CONIFER_CAP = {'threshold': 0.15, 'softness': 0.03, 'breakup': 0.5}
 ROCK_CAP_SMOOTHING = 3   # neighbour-averaging rounds, so the moss drapes over plane breaks instead of stopping at them
+# Designed sinks: how far a piece reaches under its origin on purpose (lib.ctx.Placeable). assets:check holds each
+# piece's lowest point to its sink within 5 mm either way, so a sink states the depth the geometry has.
+# A rock beds its flat base this far into the ground, so the uneven ground of a planet never shows a gap under its edge
+# (0.0500 to 0.0501 m, measured on the shipped kit).
+ROCK_SINK = 0.05
+# The bush's four clumps sit 0.05 to 0.10 m deeper than their radii (each centre lies lower than its radius), so the
+# foliage meets the ground as a wide mound instead of resting on the point of a ball. The leaf displacement (0.1 m)
+# moves the deepest point, under the clump at x -0.4, on to 0.1138 m under the origin (measured on the shipped kit),
+# which the sink gives to the millimetre. It was 0.12, a bound rather than the depth, which the check now refuses.
+BUSH_SINK = 0.114
 
 
 def _regions():
@@ -65,7 +75,7 @@ def rock(name, seed, scale, r):
     geo.facet(ob, 14.0)
     floor = -0.35 * scale[2]
     for vertex in ob.data.vertices:
-        vertex.co.z = max(vertex.co.z, floor) - floor - 0.05  # flat base, sunk 5 cm
+        vertex.co.z = max(vertex.co.z, floor) - floor - ROCK_SINK  # flat base, bedded ROCK_SINK into the ground
     geo.shade_smooth(ob, ROCK_SMOOTH_DEG)
     geo.cap_factor(ob, ROCK_CAP_SMOOTHING)
     ink.set_ink(ob, 1.1)
@@ -214,4 +224,9 @@ def build(ctx):
     for piece in pieces:
         piece.location = (0, 0, 0)
     export.export_glb(pieces, ctx.raw_path('env', 'verdant_kit'))
-    return [AssetRecord(name='verdant_kit', family='env', file='env/verdant_kit.glb', nodes=[p.name for p in pieces], tris=scene.tri_count(pieces))]
+    # The runtime scatters each piece by itself, so each is a placeable that stands on its origin unless it sinks by
+    # design.
+    sinks = {'rock_a': ROCK_SINK, 'rock_b': ROCK_SINK, 'rock_c': ROCK_SINK, 'bush': BUSH_SINK}
+    placeables = [Placeable(p.name, sinks.get(p.name, 0.0)) for p in pieces]
+    return [AssetRecord(name='verdant_kit', family='env', file='env/verdant_kit.glb', nodes=[p.name for p in pieces],
+                        tris=scene.tri_count(pieces), placeables=placeables)]

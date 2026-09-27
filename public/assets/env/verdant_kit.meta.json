@@ -16,5 +16,39 @@
   ],
   "animations": [],
   "tris": 2165,
-  "notes": {}
+  "notes": {},
+  "placeables": [
+    {
+      "node": "rock_a",
+      "sink": 0.05
+    },
+    {
+      "node": "rock_b",
+      "sink": 0.05
+    },
+    {
+      "node": "rock_c",
+      "sink": 0.05
+    },
+    {
+      "node": "tree_broad",
+      "sink": 0.0
+    },
+    {
+      "node": "tree_conifer",
+      "sink": 0.0
+    },
+    {
+      "node": "bush",
+      "sink": 0.114
+    },
+    {
+      "node": "grass_tuft",
+      "sink": 0.0
+    },
+    {
+      "node": "flowers",
+      "sink": 0.0
+    }
+  ]
 }
