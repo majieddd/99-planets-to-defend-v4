@@ -70,4 +70,7 @@ XENO_STYLE = PaintStyle(shadow_tint=(0.55, 0.35, 0.70), ao_strength=0.8, curv_ga
 # Warm light tops against cool, darker bases, strong enough to read before any runtime light, and deeper occlusion.
 NATURE_STYLE = PaintStyle(shadow_tint=(0.35, 0.60, 0.62), ao_strength=0.85, edge_light=0.25, cavity_dark=0.35,
                           warm=(1.16, 1.06, 0.86), cool=(0.52, 0.64, 0.80), brush_strength=0.85, stroke_tint_mix=0.35)
-HEART_STYLE = PaintStyle(shadow_tint=(0.85, 0.55, 0.50), ao_strength=0.35, edge_light=0.7, edge_tint=(1.0, 0.95, 0.85), cavity_dark=0.2, brush_strength=0.25, emissive_brush=0.35)
+# Strokes only scale value: at the plan's 0.25 they moved the heart's texels about 3 sRGB levels either way (10th to
+# 90th percentile, 5.7 levels on the stone and 3.6 on the satellites), lost in the 26 levels the bake's shading already
+# spreads across the stone; 0.45 doubles that (10.3 and 6.5), and the stone reads as brushed.
+HEART_STYLE = PaintStyle(shadow_tint=(0.85, 0.55, 0.50), ao_strength=0.35, curv_gain=2.0, edge_light=0.7, edge_tint=(1.0, 0.95, 0.85), cavity_dark=0.2, cool=(0.82, 0.74, 0.66), brush_strength=0.45, stroke_tint_mix=0.15, emissive_brush=0.35)
