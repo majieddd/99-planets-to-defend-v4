@@ -1,0 +1,20 @@
+{
+  "name": "verdant_kit",
+  "family": "env",
+  "file": "env/verdant_kit.glb",
+  "kind": "model",
+  "recipe": "verdant",
+  "nodes": [
+    "rock_a",
+    "rock_b",
+    "rock_c",
+    "tree_broad",
+    "tree_conifer",
+    "bush",
+    "grass_tuft",
+    "flowers"
+  ],
+  "animations": [],
+  "tris": 2165,
+  "notes": {}
+}

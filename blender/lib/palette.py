@@ -60,5 +60,7 @@ class PaintStyle:
 # channel, and a gain of 2 keeps the edge light on the edges, (68, 77, 91) with 2% clipped.
 PLAYER_STYLE = PaintStyle(shadow_tint=(0.40, 0.58, 0.72), curv_gain=2.0, edge_light=0.5, cavity_dark=0.5, brush_strength=0.3)
 XENO_STYLE = PaintStyle(shadow_tint=(0.55, 0.35, 0.70), ao_strength=0.8, curv_gain=2.0, edge_light=0.3, edge_tint=(0.9, 0.8, 1.0), cavity_dark=0.6, brush_strength=0.35)
-NATURE_STYLE = PaintStyle(shadow_tint=(0.35, 0.60, 0.62), ao_strength=0.65, edge_light=0.25, cavity_dark=0.35, brush_strength=0.6, stroke_tint_mix=0.35)
+# Warm light tops against cool, darker bases, strong enough to read before any runtime light, and deeper occlusion.
+NATURE_STYLE = PaintStyle(shadow_tint=(0.35, 0.60, 0.62), ao_strength=0.85, edge_light=0.25, cavity_dark=0.35,
+                          warm=(1.16, 1.06, 0.86), cool=(0.52, 0.64, 0.80), brush_strength=0.85, stroke_tint_mix=0.35)
 HEART_STYLE = PaintStyle(shadow_tint=(0.85, 0.55, 0.50), ao_strength=0.35, edge_light=0.7, edge_tint=(1.0, 0.95, 0.85), cavity_dark=0.2, brush_strength=0.25, emissive_brush=0.35)
