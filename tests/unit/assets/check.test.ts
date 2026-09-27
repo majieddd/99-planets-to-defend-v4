@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateAsset } from '../../../tools/assets/check.mjs';
+import { evaluateAsset, fileFailures } from '../../../tools/assets/check.mjs';
 
 const budgets = {
   xeno: { tris: 9000, bones: 24, texture: 1024, ink: true, animations: ['idle', 'walk', 'attack'] },
@@ -136,5 +136,31 @@ describe('the ground contact rule', () => {
   it('exempts textures, which carry no ground data', () => {
     const texture = { name: 'ink_noise', family: 'textures', kind: 'texture', file: 'textures/ink_noise.png', ground: [] };
     expect(evaluateAsset(texture, budgets, timings)).toEqual([]);
+  });
+});
+
+describe('the committed file against the manifest', () => {
+  const texture = { name: 'ink_noise', family: 'textures', kind: 'texture', file: 'textures/ink_noise.png', bytes: 0 };
+
+  it('passes a model whose file is exactly the length the build recorded', () => {
+    expect(fileFailures(husk({ bytes: 172804 }), 172804)).toEqual([]);
+  });
+
+  it('fails a model whose file changed after the manifest was written, even by one byte', () => {
+    // A build that published a nest.glb inspect.mjs then refused left the old manifest's 41016 bytes over a 41108-byte
+    // file, and every other number in the manifest still passed.
+    expect(fileFailures(husk({ file: 'nests/nest.glb', bytes: 41016 }), 41108)).toEqual([
+      'nests/nest.glb is 41108 bytes, the manifest records 41016 (changed without npm run assets)',
+    ]);
+    expect(fileFailures(husk({ bytes: 172804 }), 172805)).toHaveLength(1);
+  });
+
+  it('fails a missing file, model or texture', () => {
+    expect(fileFailures(husk({ bytes: 172804 }), null)).toEqual(['file missing: xeno/husk.glb']);
+    expect(fileFailures(texture, null)).toEqual(['file missing: textures/ink_noise.png']);
+  });
+
+  it('exempts textures from the length rule: the manifest records their bytes as 0', () => {
+    expect(fileFailures(texture, 43226)).toEqual([]);
   });
 });

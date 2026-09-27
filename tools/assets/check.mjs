@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // npm run assets:check: every exported asset against its family budget, the shared strike timings and the ground
-// contact rule.
-import { existsSync, readFileSync } from 'node:fs';
+// contact rule, and every listed file against the manifest.
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isMain } from '../is-main.mjs';
 
 const FRAME = 1 / 30;
 // How far a placeable's lowest point may sit from its placement origin, or from its declared sink under it, on either
@@ -94,6 +94,27 @@ export function evaluateAsset(entry, budgets, timings) {
   return failures;
 }
 
+/**
+ * The listed file against its manifest entry, where `size` is the committed file's length in bytes, or null when there
+ * is no such file. The check reads the numbers the build recorded, never the GLB, so a model rebuilt or edited without
+ * rewriting the manifest used to pass on the numbers of the file it replaced. A model must now be exactly the length
+ * the build recorded, the one fact about the file itself that can be compared without reading it. Textures record no
+ * length (bytes 0), so only their presence is checked.
+ */
+export function fileFailures(entry, size) {
+  if (size === null) return [`file missing: ${entry.file}`];
+  if (entry.kind === 'model' && size !== entry.bytes) {
+    return [`${entry.file} is ${size} bytes, the manifest records ${entry.bytes} (changed without npm run assets)`];
+  }
+  return [];
+}
+
+// Anything at the path but a file, a directory say, is as missing as no entry at all.
+function fileSize(path) {
+  const stats = statSync(path, { throwIfNoEntry: false });
+  return stats?.isFile() ? stats.size : null;
+}
+
 function main() {
   const root = resolve(import.meta.dirname, '..', '..');
   const manifestPath = join(root, 'public', 'assets', 'manifest.json');
@@ -110,7 +131,7 @@ function main() {
   let fail = 0;
   for (const entry of manifest.assets) {
     const failures = evaluateAsset(entry, budgets, timings);
-    if (!existsSync(join(root, 'public', 'assets', entry.file))) failures.push(`file missing: ${entry.file}`);
+    failures.push(...fileFailures(entry, fileSize(join(root, 'public', 'assets', entry.file))));
     if (failures.length) {
       fail += 1;
       console.log(`ASSET ${entry.name} FAIL: ${failures.join('; ')}`);
@@ -123,4 +144,6 @@ function main() {
   if (fail) process.exit(1);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+// This compared argv[1], the path as typed, with the module's own path, which Node resolves through links, so run
+// through a junction or symlink the check printed nothing and exited 0, even with the manifest missing.
+if (isMain(import.meta.url)) main();
