@@ -1,7 +1,13 @@
 import { Color, Texture } from 'three';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DIALS, NUMERIC_RANGES, type RenderDials } from '../../../src/render/defaults';
-import { applyPaintDials, createPaintedMaterial, createPaintUniforms } from '../../../src/render/materials/painted';
+import {
+  applyPaintDials,
+  createPaintedMaterial,
+  createPaintUniforms,
+  EMISSIVE_KEY_RANGE,
+  EMISSIVE_PEAK,
+} from '../../../src/render/materials/painted';
 import { VERDANT } from '../../../src/render/themes';
 
 describe('painted materials', () => {
@@ -97,5 +103,42 @@ describe('painted materials', () => {
     // scenes (and, spread uncloned, would be three's global UniformsLib objects).
     expect(terrain.uniforms['directionalLights']).not.toBe(mapped.uniforms['directionalLights']);
     expect(terrain.uniforms['directionalLightShadows']).not.toBe(mapped.uniforms['directionalLightShadows']);
+  });
+});
+
+describe('the emissive key and cap', () => {
+  const shared = createPaintUniforms(VERDANT, DEFAULT_DIALS, null);
+  // Only the GPU runs the shader, so these hold the lines that carry the behaviour.
+  const { fragmentShader } = createPaintedMaterial(shared, { emissiveMap: new Texture() });
+
+  it('writes the brightest emissive channel, before the cap, into alpha as the bloom key', () => {
+    // Both the map path and the colour-only path build the one emissive the key reads.
+    expect(fragmentShader.match(/vec3 emissive = /g)).toHaveLength(2);
+    expect(fragmentShader).toContain('float emissiveKey = max(emissive.r, max(emissive.g, emissive.b));');
+    expect(fragmentShader).toContain('gl_FragColor = vec4(color, emissiveKey / EMISSIVE_KEY_RANGE);');
+    // The cap scales what is added and leaves the key alone, so the threshold dial keeps its whole range.
+    expect(fragmentShader).not.toMatch(/emissiveKey\s*=\s*min|emissive\s*\*=|emissive\s*=\s*emissive/);
+    expect(fragmentShader).not.toContain('vec4(color, 1.0)');
+  });
+
+  it('caps the emissive light it adds with one factor on all three channels, which keeps the hue', () => {
+    expect(fragmentShader).toContain('color += emissive * min(1.0, EMISSIVE_PEAK / max(emissiveKey, 1e-4));');
+  });
+
+  it('hands both constants to GLSL as float literals', () => {
+    // GLSL ES 3.0 has no implicit int to float conversion, so "4" would not compile in the divide.
+    for (const material of [createPaintedMaterial(shared, {}), createPaintedMaterial(shared, { terrain: true })]) {
+      expect(material.defines['EMISSIVE_PEAK']).toMatch(/^\d+\.\d+$/);
+      expect(material.defines['EMISSIVE_KEY_RANGE']).toMatch(/^\d+\.\d+$/);
+      expect(Number(material.defines['EMISSIVE_PEAK'])).toBe(EMISSIVE_PEAK);
+      expect(Number(material.defines['EMISSIVE_KEY_RANGE'])).toBe(EMISSIVE_KEY_RANGE);
+    }
+  });
+
+  it('keeps anything created without an emissive colour out of the bloom', () => {
+    // Terrain and plain props get a black emissive, so their key is 0: decoration does not emit.
+    for (const material of [createPaintedMaterial(shared, { terrain: true }), createPaintedMaterial(shared, { baseColor: new Color('#ffffff') })]) {
+      expect((material.uniforms['uEmissiveColor']!.value as Color).getHex()).toBe(0);
+    }
   });
 });

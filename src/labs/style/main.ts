@@ -165,6 +165,7 @@ async function start(): Promise<void> {
   const camera = new PerspectiveCamera(50, stage.clientWidth / stage.clientHeight, 0.1, 2500);
   camera.layers.enable(LAYERS.hull);
   camera.layers.enable(LAYERS.sky);
+  camera.layers.enable(LAYERS.noEdge); // grass and flowers: drawn, and cast shadows (r186 tests this camera's layers)
 
   const sunDir = new Vector3(...sunDirection(theme));
   const sun = new DirectionalLight(theme.sun.color, theme.sun.intensity);
@@ -173,6 +174,7 @@ async function start(): Promise<void> {
   sun.shadow.mapSize.set(tier.shadowMapSize, tier.shadowMapSize);
   Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 220 });
   sun.shadow.camera.updateProjectionMatrix();
+  sun.shadow.camera.layers.enable(LAYERS.noEdge); // flowers keep casting if a later three tests the shadow camera
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.03;
   // r186's PCF spreads five taps over shadow.radius texels and rotates them per pixel with screen-anchored noise. The

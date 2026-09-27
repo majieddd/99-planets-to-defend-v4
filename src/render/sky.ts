@@ -53,7 +53,9 @@ void main() {
   color = mix(color, cloudColor, cloud);
   float sunward = max(dot(d, uSunDirection), 0.0);
   color += uSunColor * (pow(sunward, 900.0) * 8.0 + pow(sunward, 14.0) * 0.3) * (1.0 - cloud * 0.8);
-  gl_FragColor = vec4(color, 1.0);
+  // Alpha is the emissive key the bloom reads (see materials/painted.ts). The sky is painted backdrop, not energy, so
+  // even the sun disc, which reaches eight times the sun colour, stays out of the bloom.
+  gl_FragColor = vec4(color, 0.0);
   #include <colorspace_fragment>
 }
 `;

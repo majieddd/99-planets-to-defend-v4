@@ -15,6 +15,7 @@ import {
 import { Rng, seedRng } from '../../sim/rng';
 import type { LoadedAsset, MaterialContext } from '../../render/assets/loadAsset';
 import { attachHull } from '../../render/ink/hull';
+import { LAYERS } from '../../render/layers';
 import type { StylePatch } from '../../render/terrain/stylePatch';
 
 export type BulwarkMode = 'cycle' | 'idle' | 'run' | 'attack';
@@ -66,6 +67,12 @@ export const SCATTER_PLAN: readonly ScatterEntry[] = [
   ['grass_tuft', 420, 2.5, 40],
   ['flowers', 70, 3, 36],
 ];
+
+/**
+ * Meadow pieces drawn on LAYERS.noEdge alone, out of the screen-space edge pass: on the world layer it outlined every
+ * grass cone, silhouette and base line alike, and the open meadow read as scribble. The flowers keep their own hull.
+ */
+export const NO_EDGE_PIECES: readonly string[] = ['grass_tuft', 'flowers'];
 
 const UP = new Vector3(0, 1, 0);
 const HOME_ANGLE = Math.atan2(BULWARK_HOME.z, BULWARK_HOME.x);
@@ -131,6 +138,7 @@ function scatter(root: Group, patch: StylePatch, kit: LoadedAsset, ctx: Material
     instanced.name = `${name}_instances`;
     instanced.castShadow = name !== 'grass_tuft';
     instanced.receiveShadow = true;
+    if (NO_EDGE_PIECES.includes(name)) instanced.layers.set(LAYERS.noEdge);
     // Every tier draws the high tier's whole layout from the one stream and keeps the first `count` of each piece,
     // so the stream reaches each piece in the same state at every tier and a lower tier's scatter is part of the
     // high tier's. Drawing only what a tier keeps would shift every later piece whenever the counts change.

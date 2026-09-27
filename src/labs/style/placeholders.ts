@@ -68,8 +68,12 @@ export function placeholderAssets(ctx: MaterialContext) {
   // stands on the origin; centred on it, the plinth would be half buried with the crystal hanging 0.2 m above it.
   plinth.position.y = 0.2;
   heart.add(plinth);
+  // The crystal glows amber-gold at full chroma (#ffaf1a, near-zero blue) over the same gold at 0.55 in linear light,
+  // M0c's albedo strength for the heart's glowing regions. With the palette's pale core (#ffc36b) over the facet peach
+  // (#ffb38a) the heart left AgX near white, (238, 216, 184) at saturation 0.23, and still at 0.32 under the emissive
+  // cap: the blue in a pale glow turns to white under AgX before its gold does. This gold measures 0.47 at hue 36.
   for (let level = 0; level <= 10; level++) {
-    const stage = part(`heart_stage_${String(level).padStart(2, '0')}`, new ConeGeometry(0.3 + 0.012 * level, 1.4 + 0.14 * level, 6), '#ffb38a', '#ffc36b', 0.9);
+    const stage = part(`heart_stage_${String(level).padStart(2, '0')}`, new ConeGeometry(0.3 + 0.012 * level, 1.4 + 0.14 * level, 6), '#c48511', '#ffaf1a', 0.9);
     stage.position.y = 0.4 + (1.4 + 0.14 * level) / 2;
     heart.add(stage);
   }

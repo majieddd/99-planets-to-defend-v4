@@ -79,7 +79,8 @@ void main() {
 const fragmentShader = /* glsl */ `
 uniform vec3 uInkColor;
 void main() {
-  gl_FragColor = vec4(uInkColor, 1.0);
+  // Alpha is the emissive key the bloom reads (see materials/painted.ts), and ink emits nothing.
+  gl_FragColor = vec4(uInkColor, 0.0);
   #include <colorspace_fragment>
 }
 `;
