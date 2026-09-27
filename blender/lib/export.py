@@ -44,9 +44,14 @@ def _workbench(size):
     scn.render.resolution_x = size
     scn.render.resolution_y = size
     scn.render.film_transparent = False
+    # The default AgX view transform measurably dulls the painted atlas (about 14% chroma on foliage), and the
+    # owner judges the look from these previews.
+    scn.view_settings.view_transform = 'Standard'
     shading = scn.display.shading
     shading.light = 'STUDIO'
     shading.color_type = 'TEXTURE'
+    # The runtime shader has no specular term; Workbench's studio sheen on smooth normals reads as plastic.
+    shading.show_specular_highlight = False
     shading.show_object_outline = True
     shading.object_outline_color = (0.05, 0.05, 0.07)
 
