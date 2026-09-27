@@ -58,7 +58,11 @@ class PaintStyle:
 # gain of 8 lit entire panels. Measured on the plan's Bolt Sentinel bake (brush strength 0.3, brush scale 1.1, the
 # soft stroke field): gain 8 baked player gunmetal #3d4757 to about (96, 102, 112) with 72% of the trim clipping a
 # channel, and a gain of 2 keeps the edge light on the edges, (68, 77, 91) with 2% clipped.
-PLAYER_STYLE = PaintStyle(shadow_tint=(0.40, 0.58, 0.72), curv_gain=2.0, edge_light=0.5, cavity_dark=0.5, brush_strength=0.3)
+# Strokes only scale value, so dark gunmetal needs more strength than pale trim to carry visible paint. Measured on
+# the Bolt Sentinel recipe's atlas (brush scale 0.3, the painted-over strokes): 0.8 widens the gunmetal's 10th to
+# 90th percentile luminance spread from 14 (the plan's 0.3) to 18 sRGB levels and reads as strokes in the previews,
+# while the clipped share of the trim grows from 7.9% to 14%; 1.0 mottled the pale trim, 18% of which then clipped.
+PLAYER_STYLE = PaintStyle(shadow_tint=(0.40, 0.58, 0.72), curv_gain=2.0, edge_light=0.5, cavity_dark=0.5, brush_strength=0.8)
 XENO_STYLE = PaintStyle(shadow_tint=(0.55, 0.35, 0.70), ao_strength=0.8, curv_gain=2.0, edge_light=0.3, edge_tint=(0.9, 0.8, 1.0), cavity_dark=0.6, brush_strength=0.35)
 # Warm light tops against cool, darker bases, strong enough to read before any runtime light, and deeper occlusion.
 NATURE_STYLE = PaintStyle(shadow_tint=(0.35, 0.60, 0.62), ao_strength=0.85, edge_light=0.25, cavity_dark=0.35,
