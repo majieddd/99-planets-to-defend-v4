@@ -106,9 +106,191 @@
   color: var(--gold);
 }
 
-@media (max-width: 720px) {
+/* Phones. At 313 px wide the open panels covered 82 percent of the canvas, the board was cut off, and the audit and
+   frame interval boxes overlapped. NARROW_SCREEN in referenceBoard.ts is this same query; it starts both panels closed
+   at load, so the two must change together. Nothing here reaches 768 px and wider. */
+@media (max-width: 767px) {
+  :root {
+    /* 12 px chip text at line-height 1.4. */
+    --chip-line: 16.8px;
+    /* The bottom strip kept clear for the chips: gutter, frame interval chip, gap, audit chip at its four-line cap,
+       gap. Open panels stop above it, so a colour audit run from the dials shows its verdict at once instead of under
+       the panel that ran it. */
+    --chip-reserve: calc(8px + var(--chip-line) + 10px + 4px + 4 * var(--chip-line) + 10px + 8px);
+    /* The height open panels are capped by. 100vh is the height with the browser's toolbars hidden, so while they show,
+       a panel sized by it would run past the bottom of the screen; 100dvh follows the toolbars. The fallback lives in
+       this property because a 100vh declaration before a 100dvh one never applied: a declaration holding var() always
+       parses, so in a browser without dvh it still won the cascade, failed only at computed-value time and left the
+       panel uncapped. */
+    --view-h: 100vh;
+  }
+
+  @supports (height: 100dvh) {
+    :root {
+      --view-h: 100dvh;
+    }
+  }
+
+  /* Open panels take the full width of a phone. The desktop's 340 px left slivers of the other toggle and the banner
+     showing past an open panel on the common 360 to 450 px phones. */
   .board {
-    width: calc(100vw - 24px);
-    max-height: 45vh;
+    top: 8px;
+    left: 8px;
+    width: min(480px, calc(100vw - 16px));
+    max-height: calc(var(--view-h) - 8px - var(--chip-reserve));
+    /* The body scrolls instead of the whole board. When the board scrolled, its toggle scrolled away with the text, and
+       closing the board meant scrolling back to the top first. */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0 16px 12px;
+  }
+
+  .board.board-closed {
+    width: auto;
+    padding: 0 14px;
+  }
+
+  .board-body {
+    min-height: 0;
+    overflow-y: auto;
+    /* A drag past the end of the text otherwise passes to the page, where a phone browser reads it as pull to
+       refresh. */
+    overscroll-behavior: contain;
+  }
+
+  .board-toggle {
+    flex: none;
+    align-self: flex-start;
+    font-size: 16px;
+    letter-spacing: 0.04em;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* The press feedback of the dials title bar, standing in for the grey tap highlight turned off above. */
+  .board-toggle:active {
+    opacity: 0.75;
+  }
+
+  /* The same open and closed marks as the dials title bar beside it, in lil-gui's own icon font. The empty alternative
+     text keeps the mark out of the button's name, which aria-expanded already states; a browser without that syntax
+     drops the second line and keeps the first. */
+  .board-toggle::before {
+    display: inline-block;
+    padding-right: 4px;
+    font-family: 'lil-gui';
+    content: '\25BE';
+    content: '\25BE' / '';
+  }
+
+  .board-toggle[aria-expanded='false']::before {
+    content: '\25B8';
+    content: '\25B8' / '';
+  }
+
+  /* lil-gui's title bar is the dials toggle, a button the size of the board's in the top right corner. Open, the panel
+     is as wide as the board, even though that covers the board toggle: lil-gui never wraps a control's name, so every
+     pixel taken from the panel to keep that toggle clear would come out of the sliders. */
+  .lil-gui.lil-root.lil-auto-place {
+    top: 8px;
+    right: 8px;
+    width: min(480px, calc(100vw - 16px));
+    max-height: calc(var(--view-h) - 8px - var(--chip-reserve));
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    overflow: hidden;
+    --title-background-color: rgba(20, 22, 29, 0.9);
+  }
+
+  /* Closed, the panel shrinks to its title. The full width holds through lil-gui's close animation: lil-closed arrives
+     as the animation starts, and a shrink-to-fit width would reflow the folding controls for all of its 300 ms. */
+  .lil-gui.lil-root.lil-auto-place.lil-closed:not(.lil-transition) {
+    width: auto;
+  }
+
+  .lil-gui.lil-root > .lil-title {
+    /* The panel is a flex column, and under its height cap the title shrank along with the controls: open, the 48 px
+       bar measured 24.5 px at 313 x 640 with touch controls and 18 px on a 667 x 375 landscape phone. Now only the
+       controls give way, and they scroll. */
+    flex: none;
+    height: 48px;
+    padding: 0 14px;
+    font: 700 16px/1 var(--font-display);
+    letter-spacing: 0.04em;
+    color: var(--paper);
+  }
+
+  /* lil-gui's own marks, with the empty alternative text the board's marks carry, so this button's name is "Dials". */
+  .lil-gui.lil-root > .lil-title::before {
+    padding-right: 4px;
+    content: '\25BE';
+    content: '\25BE' / '';
+  }
+
+  .lil-gui.lil-root.lil-closed > .lil-title::before {
+    content: '\25B8';
+    content: '\25B8' / '';
+  }
+
+  .lil-gui.lil-root > .lil-children {
+    overscroll-behavior: contain;
+  }
+
+  /* lil-gui removes the focus outline from its buttons; the interface accent marks keyboard focus on both toggles. */
+  .board-toggle:focus-visible,
+  .lil-gui.lil-root > .lil-title:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .audit,
+  .fps,
+  .banner {
+    padding: 4px 8px;
+    font-size: 12px;
+    line-height: var(--chip-line);
+  }
+
+  /* The two chips stack in the bottom left corner. Side by side they needed about 380 px on a 313 px screen and
+     overlapped. The frame interval takes the bottom row because the audit grows upward when a report arrives. */
+  .fps {
+    left: 8px;
+    right: auto;
+    bottom: 8px;
+    white-space: nowrap;
+  }
+
+  .audit {
+    left: 8px;
+    bottom: calc(8px + var(--chip-line) + 10px + 4px);
+    max-width: calc(100vw - 16px);
+    /* A full report is about seven lines at phone width. Capped at four, with the verdict on the first, it scrolls
+       instead of climbing over the canvas. */
+    max-height: calc(4 * var(--chip-line) + 10px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* One centred strip under the toggles. Centred by left 50 percent alone, the banner could use only half the width,
+     which folded its one sentence into a column three lines tall. */
+  .banner {
+    top: 64px;
+    left: 8px;
+    right: 8px;
+    width: fit-content;
+    margin: 0 auto;
+    transform: none;
+    text-align: center;
+  }
+
+  /* An open panel hides the banner instead of half covering it. The open board's backdrop is 90 percent opaque, and the
+     gold sentence showed through behind its first heading; on screens wider than about 500 px the open dials panel is
+     narrower than the screen, and the banner's end stuck out beside it. dials.ts keeps dials-open on the body while the
+     panel is open. It replaced a :has() test for the open panel, which Vite's minifier merged into this selector list,
+     so a browser without :has() dropped the whole rule and the banner painted over an open board. Both selectors here
+     parse in every browser, so the minifier may merge them safely. */
+  .board:not(.board-closed) ~ .banner,
+  .dials-open .banner {
+    visibility: hidden;
   }
 }
