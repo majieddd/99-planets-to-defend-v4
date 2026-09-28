@@ -171,9 +171,11 @@ export const TERMINATOR_BAND_TILES = 1;
  * wavelength, 2.5 m high), so a terminator on relief keeps the ramp it had; on the planet's curve B2's softness acts like
  * 0.005, the value that turned the reviewer's frames crisp and brush-broken. Under B2 the band terminator's ramp by the
  * limb (90th percentile, along the luma gradient) fell from 31 to 15 px at a 15 degree key and from 35 to 19 px at 8.
- * The scale caps the dial's reach wherever the ground curves gently, not only on the planet's curve: on the level heart
- * clearing under the default 35 degree key ndl changes by at most cos 35 degrees / 160 per metre, so the scale is at most
- * about 0.128 and the dial's top of 0.25 acts like at most about 0.032 there (or the pixel floor, where that is wider).
+ * The scale caps the dial's reach wherever the ground curves gently, not only on the planet's curve. On the bare sphere
+ * ndl changes by at most sin(angle to the key) / 160 per metre, which rises as the ground turns away from the sun, so
+ * under the default 35 degree key the scale is about 0.128 at the heart (sin 55 degrees / 160 x 25) and up to about 0.13
+ * across the level clearing within 6 m of the axis, where the dial's top of 0.25 acts like at most about 0.033 (or the
+ * pixel floor, where that is wider).
  */
 export const BAND_EDGE_RADIUS = 25;
 

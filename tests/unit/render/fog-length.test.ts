@@ -46,13 +46,16 @@ function normaliseGlsl(source: string): string {
 }
 
 /**
- * A GLSL function from its signature to its matching closing brace, with its comments dropped and its whitespace
- * normalised. The closing brace is found by counting braces, not by looking for one at the start of a line, so the
- * function may be indented. The pin used to need the brace in column 0 and every line exactly as written, so a
- * re-indent or a blank line failed it though the shader was the same.
+ * A GLSL function from its signature to its matching closing brace, with its line and block comments dropped and its
+ * whitespace normalised. The closing brace is found by counting braces, not by looking for one at the start of a line, so
+ * the function may be indented. The pin used to need the brace in column 0 and every line exactly as written, so a
+ * re-indent or a blank line failed it though the shader was the same. Both kinds of comment go in one left-to-right pass,
+ * so whichever opens first wins, as in GLSL: a slash-star inside a line comment starts nothing, and a brace inside a
+ * block comment, which the brace count used to take, is dropped with it. Each comment leaves a space, as the compiler
+ * reads it, so a block comment between two tokens cannot join them.
  */
 function glslFunction(shader: string, signature: string): string {
-  const source = shader.replace(/\/\/[^\n]*/g, '');
+  const source = shader.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, ' ');
   const start = source.indexOf(signature);
   if (start < 0) return `(no ${signature} in the shader)`;
   let depth = 0;
@@ -218,5 +221,13 @@ describe('height fog length in fp32', () => {
     expect(glslFunction(reformatted, 'float fogLength(')).toBe(normaliseGlsl(FOG_LENGTH_GLSL));
     expect(glslFunction(reformatted, 'float fogAltitude(')).toBe(normaliseGlsl(FOG_ALTITUDE_GLSL));
     expect(glslFunction(shader.replace('abs(x) > 1e-3', 'abs(x) > 1e-4'), 'float fogLength(')).not.toBe(normaliseGlsl(FOG_LENGTH_GLSL));
+    // Block comments are dropped as line comments are, across lines and with a brace inside, which would otherwise end
+    // the function early. A line comment that mentions a slash-star before a real block comment's close does not pair
+    // with it and swallow the code between. Each anchor occurs once, so both comments land inside fogLength.
+    for (const anchor of ['float total = 0.0;', 'h0 = h1;']) expect(shader.split(anchor), anchor).toHaveLength(2);
+    const commented = shader
+      .replace('float total = 0.0;', 'float total = 0.0; // the sum starts empty, /* not a block comment')
+      .replace('h0 = h1;', 'h0 = h1; /* a closing } across\n   two lines */');
+    expect(glslFunction(commented, 'float fogLength(')).toBe(normaliseGlsl(FOG_LENGTH_GLSL));
   });
 });

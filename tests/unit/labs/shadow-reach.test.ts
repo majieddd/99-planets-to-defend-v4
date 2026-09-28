@@ -46,6 +46,25 @@ const SHADOW_FAR = mainConstant('SHADOW_FAR');
 // Every sun elevation the dial allows, at its own step.
 const [ELEVATION_MIN, ELEVATION_MAX, ELEVATION_STEP] = NUMERIC_RANGES.sunElevation;
 const ELEVATIONS = Array.from({ length: Math.round((ELEVATION_MAX - ELEVATION_MIN) / ELEVATION_STEP) + 1 }, (_, i) => ELEVATION_MIN + i * ELEVATION_STEP);
+
+/** The unit vector toward the sun at an elevation, as main.ts forms it from the theme's azimuth. */
+function toSunAt(elevation: number): Vector3 {
+  return new Vector3(...sunDirection({ ...VERDANT, sun: { ...VERDANT.sun, elevationDeg: elevation } }));
+}
+
+// The patch's half extent on the plane tangent at the pole, read back from its mesh because stylePatch.ts keeps
+// HALF_EXTENT to itself, so a wider patch widens the ground this test holds. A vertex's tangent coordinates are its
+// offsets from the pole axis over its height above the planet's centre, times the radius, whatever its relief.
+const PATCH_HALF_EXTENT = ((): number => {
+  const position = patch.mesh.geometry.getAttribute('position');
+  let half = 0;
+  for (let i = 0; i < position.count; i++) {
+    const scale = STYLE_PLANET_RADIUS / (position.getY(i) - CENTER.y);
+    half = Math.max(half, Math.abs(position.getX(i)) * scale, Math.abs(position.getZ(i)) * scale);
+  }
+  return half;
+})();
+
 // A root every degree round each ring. The reach changes smoothly with the root's azimuth: a root every half degree
 // measured the same worst case to the millimetre.
 const AZIMUTHS = 360;
@@ -139,7 +158,7 @@ function reach(kit: Map<string, Vector3[]>): Reach {
   const camera = new OrthographicCamera();
   for (const elevation of ELEVATIONS) {
     // As main.ts places the sun and three aims its shadow camera: SUN_DISTANCE out toward the sun, facing the centre.
-    const toSun = new Vector3(...sunDirection({ ...VERDANT, sun: { ...VERDANT.sun, elevationDeg: elevation } }));
+    const toSun = toSunAt(elevation);
     camera.position.copy(toSun).multiplyScalar(SUN_DISTANCE);
     camera.lookAt(0, 0, 0);
     camera.updateMatrixWorld(true);
@@ -168,7 +187,7 @@ function reach(kit: Map<string, Vector3[]>): Reach {
 }
 
 describe('the Style Lab shadow box', () => {
-  it("is the scatter plan's reach plus the crown margin to each side and SHADOW_NEAR to SHADOW_FAR deep, from a sun SUN_DISTANCE out", () => {
+  it("is the scatter plan's reach plus the crown margin to each side and SHADOW_NEAR to SHADOW_FAR deep, from a sun SUN_DISTANCE out aimed at the centre", () => {
     for (const line of [
       'const theme = VERDANT;',
       'const SCATTER_REACH = Math.max(...SCATTER_PLAN.map(([, , , maxRadius]) => maxRadius));',
@@ -179,10 +198,18 @@ describe('the Style Lab shadow box', () => {
       'bottom: -SHADOW_HALF_WIDTH,',
       'near: SHADOW_NEAR,',
       'far: SHADOW_FAR,',
-      'sun.position.copy(sunDir).multiplyScalar(SUN_DISTANCE);',
+      'scene.add(sun, sun.target);',
     ]) {
       expect(MAIN, line).toContain(line);
     }
+    // The sun is placed twice, at creation and in syncSun, and syncSun's copy is the one that holds: it runs at start and
+    // on every dial change. toContain passed while either survived, so a syncSun that put the sun 0.3 times as far out
+    // passed every test here.
+    const placement = 'sun.position.copy(sunDir).multiplyScalar(SUN_DISTANCE);';
+    expect(MAIN.split(placement).length - 1, `${placement} at creation and in syncSun`).toBe(2);
+    // reach() aims the shadow camera at the centre, where three's DirectionalLight keeps its target unless something
+    // moves it, and a moved target would slide the whole box off the scatter this test holds inside it.
+    expect(MAIN, 'main.ts moves or replaces the sun\'s target, which reach() assumes stays at the centre').not.toMatch(/\bsun\.target(?:\.position\b|\s*=(?!=))/);
   });
 
   it('measures each piece where the scene puts it: leaned by its own share, and never over the largest scatter size', () => {
@@ -235,5 +262,31 @@ describe('the Style Lab shadow box', () => {
     expect(result.nearest, JSON.stringify(result)).toBeGreaterThanOrEqual(SHADOW_NEAR);
     expect(result.farthest, JSON.stringify(result)).toBeLessThanOrEqual(SHADOW_FAR);
     expect(result.lateral).toBeGreaterThan(SCATTER_REACH);
+  });
+
+  it("holds the patch's ground inside its depth at every sun elevation, out to the patch's corners", () => {
+    // three leaves a receiver past the far plane lit, so ground deeper than SHADOW_FAR would drop the long shadows a low
+    // sun lays across it: at a 150 m far plane the casters all fit and the far ground did not. The corners bound the
+    // patch's ground: sampled every 0.5 m across the whole patch, relief included, its depth peaked at a corner at every
+    // elevation, and its least depth over every elevation was a corner's under the lowest sun. Under a high sun the
+    // heart is the nearest ground, but it lies near SUN_DISTANCE deep, far past the near plane.
+    let nearest = Infinity;
+    let farthest = { depth: -Infinity, elevation: Number.NaN, x: 0, z: 0 };
+    for (const elevation of ELEVATIONS) {
+      const toSun = toSunAt(elevation);
+      for (const x of [-PATCH_HALF_EXTENT, PATCH_HALF_EXTENT]) {
+        for (const z of [-PATCH_HALF_EXTENT, PATCH_HALF_EXTENT]) {
+          const depth = SUN_DISTANCE - toSun.dot(patch.surfaceAt(x, z).position);
+          nearest = Math.min(nearest, depth);
+          if (depth > farthest.depth) farthest = { depth, elevation, x, z };
+        }
+      }
+    }
+    // Measured 7.9 m (the corner nearest a 3 degree sun) to 178.7 m deep against 1 to 220 m.
+    expect(nearest).toBeGreaterThanOrEqual(SHADOW_NEAR);
+    expect(farthest.depth, JSON.stringify(farthest)).toBeLessThanOrEqual(SHADOW_FAR);
+    // The figure SUN_DISTANCE's note in main.ts gives: the corner at (80, 80), at most 178.7 m deep. It also shows the
+    // corners were read at the patch's real extent, since corners at the centre would pass the two bounds above.
+    expect(farthest.depth, `${JSON.stringify(farthest)}: update SUN_DISTANCE's note in main.ts`).toBeCloseTo(178.7, 1);
   });
 });
