@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { COLOR_DIALS, DEFAULT_DIALS, NUMERIC_RANGES } from '../../../src/render/defaults';
 import { acceptDial, decodeDials, encodeDials } from '../../../src/render/dialsCodec';
@@ -130,6 +131,22 @@ describe('dials', () => {
       grain: DEFAULT_DIALS.grain,
     }).toEqual({ shadowLift: 0, rimPower: 3, inkColor: '#0e0f14', depthThreshold: 0.03, normalThreshold: 0.35, edgeFadeNear: 60, bloomThreshold: 1, grain: 0 });
     expect(DEFAULT_DIALS.edgeFadeNear).toBeLessThan(DEFAULT_DIALS.edgeFadeFar);
+  });
+
+  it("holds the blueprint's preset B3 row to the live link the lock was decoded from", () => {
+    // The row records the approved look as JSON and no code reads it, so only this keeps the two from drifting apart. It
+    // names the link's 30 dials at the link's values and the grain at 0, which the link leaves out as the default.
+    const row = readFileSync('docs/blueprint.md', 'utf8')
+      .split(/\r?\n/)
+      .find((line) => line.startsWith('| Golden-hour preset B3 |'));
+    const json = row ? /^\| Golden-hour preset B3 \| `([^`]+)` \|/.exec(row)?.[1] : undefined;
+    if (!json) throw new Error('docs/blueprint.md has no Render defaults row "Golden-hour preset B3" opening with its JSON in backticks');
+    const recorded = JSON.parse(json) as Record<string, unknown>;
+    const raw = JSON.parse(atob(B3_LINK.replace(/-/g, '+').replace(/_/g, '/'))) as Record<string, unknown>;
+    expect(recorded).toEqual({ ...raw, grain: 0 });
+    // The row's claim: decodeDials opens the link at the row's value for every dial the row names.
+    const opened = decodeDials(B3_LINK) as unknown as Record<string, unknown>;
+    for (const [key, value] of Object.entries(recorded)) expect(opened[key], key).toBe(value);
   });
 
   it("sets the gate's sun, height fog and soil from the locked look, while the Verdant theme keeps its own light", () => {

@@ -17,13 +17,13 @@ import {
 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { rgbToHsv } from '../../../src/labs/style/audit';
+import { NO_EDGE_PIECES } from '../../../src/labs/shared/meadow';
 import { placeholderAssets } from '../../../src/labs/style/placeholders';
 import {
   buildStyleScene,
   BULWARK_HOME,
   HUSK_RADIUS,
   HUSK_SPEED,
-  NO_EDGE_PIECES,
   PRESETS,
   RUN_RADIUS,
   RUN_SPEED,

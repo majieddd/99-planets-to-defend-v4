@@ -6,7 +6,6 @@ import {
   LoopRepeat,
   Matrix4,
   Object3D,
-  Quaternion,
   Vector3,
   type AnimationAction,
   type Mesh,
@@ -16,7 +15,9 @@ import { Rng, seedRng } from '../../sim/rng';
 import type { LoadedAsset, MaterialContext } from '../../render/assets/loadAsset';
 import { attachHull } from '../../render/ink/hull';
 import { LAYERS } from '../../render/layers';
+import { place } from '../../render/terrain/place';
 import type { StylePatch } from '../../render/terrain/stylePatch';
+import { NO_EDGE_PIECES } from '../shared/meadow';
 
 export type BulwarkMode = 'cycle' | 'idle' | 'run' | 'attack';
 export type PresetName = 'hero' | 'strategic' | 'closeup' | 'horizon';
@@ -69,12 +70,6 @@ export const SCATTER_PLAN: readonly ScatterEntry[] = [
 ];
 
 /**
- * Meadow pieces drawn on LAYERS.noEdge alone, out of the screen-space edge pass: on the world layer it outlined every
- * grass cone, silhouette and base line alike, and the open meadow read as scribble. The flowers keep their own hull.
- */
-export const NO_EDGE_PIECES: readonly string[] = ['grass_tuft', 'flowers'];
-
-/**
  * The range each scattered piece's size is drawn from, as a multiple of its size in the kit. The sun's shadow box
  * (SHADOW_HALF_WIDTH in main.ts) has to hold a crown at the top of this range, which tests/unit/labs/shadow-reach.test.ts
  * checks, so the test reads the range from here.
@@ -90,20 +85,12 @@ export const SCATTER_SIZE_MAX = 1.25;
 export const ROCK_LEAN = 0.8;
 export const SCATTER_LEAN = 0.2;
 
-const UP = new Vector3(0, 1, 0);
 const HOME_ANGLE = Math.atan2(BULWARK_HOME.z, BULWARK_HOME.x);
 const HOME_YAW = Math.PI;
 const LAP_SECONDS = (2 * Math.PI * RUN_RADIUS) / RUN_SPEED;
 // Rocks and bushes keep this far from the Husk's ring so he does not walk through one. It covers the stand-ins: the
 // largest rock at its largest scale reaches 1.25 m from its centre and the Husk's body 0.6 m from his.
 const HUSK_PATH_CLEARANCE = 2;
-
-function place(object: Object3D, patch: StylePatch, x: number, z: number, yaw: number, alignToGround = 0): void {
-  const surface = patch.surfaceAt(x, z);
-  object.position.copy(surface.position);
-  const up = surface.up.clone().lerp(surface.normal, alignToGround).normalize();
-  object.quaternion.setFromUnitVectors(UP, up).multiply(new Quaternion().setFromAxisAngle(UP, yaw));
-}
 
 class Actor {
   readonly mixer: AnimationMixer;

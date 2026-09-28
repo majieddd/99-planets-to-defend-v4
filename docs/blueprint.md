@@ -3,7 +3,8 @@
 Status: design approved in brainstorming on 2026-09-23. The M0a toolchain, checks, CI and Pages site,
 the M0b simulation kernel, the M0c Blender asset set, and the M0d renderer v1 and Style Lab exist, and
 the owner locked the Painted-Anime-Inkline 4.0 look at the M0 style gate on 2026-09-28, so M0 is
-complete; no game systems yet. This file is both the approved spec and the running design document for the whole
+complete. The Asset World, M0's inspection follow-up, lays out every built asset in the locked look;
+no game systems yet. This file is both the approved spec and the running design document for the whole
 game. Check it before any build:
 
 ```bash
@@ -145,7 +146,7 @@ src/render/    three.js renderer, materials, ink, post, terrain, effects, animat
 src/game/      input actions, commands, event routing
 src/ui/        HUD, menus, touch controls
 src/audio/     procedural audio engine
-src/labs/      Asset Gallery, Planet Lab, Weapon Forge, Boss Lab, Style Lab
+src/labs/      Asset World, Planet Lab, Weapon Forge, Boss Lab, Style Lab
 blender/       recipes/ and lib/ (paint, rig, animate, export)
 public/assets/ exported GLB, textures, manifest.json
 tools/         asset build and checks, bot runner, capture, perf
@@ -1009,11 +1010,12 @@ owner's words: "I looked at the golden-hour style lab, and it definitely looks g
 it, but here are a couple minor adjustments to make as the default: Make default EdgeStrength = .33;
 Make default Edgefadefar = 65" and "Also make litsaturation 1.09". `DEFAULT_DIALS` in
 `src/render/defaults.ts` holds these values; every other dial keeps B3's value or, where B3 named none,
-renderer v1's start. Each row keeps its measured rationale and gives renderer v1's start where it helps
-("was"). In the rationales, "the defaults" and "the default key" mean renderer v1's starts, measured
-before the lock, unless a figure names the locked set. A dials link names only the dials that differ
-from the defaults, so a link made before the lock opens every dial it does not name at its locked
-value: B3's own link now opens the locked look with B3's edgeStrength of 1 and litSaturation of 0.87.
+renderer v1's start. The Style Lab and the Asset World both open on `DEFAULT_DIALS`. Each row keeps
+its measured rationale and gives renderer v1's start where it helps ("was"). In the rationales, "the
+defaults" and "the default key" mean renderer v1's starts, measured before the lock, unless a figure
+names the locked set. A dials link names only the dials that differ from the defaults, so a link made
+before the lock opens every dial it does not name at its locked value: B3's own link now opens the
+locked look with B3's edgeStrength of 1 and litSaturation of 0.87.
 
 | Dial | Locked | Rationale |
 |---|---|---|
@@ -1085,6 +1087,7 @@ set.
 | Grain hash, `fract(sin(dot(p, vec2(12.9898, 78.233)) + uSeed) * 43758.5453)` on the pixel index `floor(uv * uResolution)` (post/finishEffect.ts) | 12.9898, 78.233 and 43758.5453 | A pseudo-random value from 0 to 1 for each screen pixel and seed: the dot product folds the pixel's column and row into one number, the seed offsets it, and the sine scaled by 43758.5453 changes so fast between neighbours that its fractional part reads as noise. Indexing by the screen pixel is what pins the grain to the glass rather than to the painted surfaces (Film grain, Render defaults). These are the constants of the widely used one-line shader hash; renderer v1 took it from the M0d plan, and why this hash was chosen over another was not recorded |
 | Grain space, `sqrt(c)` before the grain and `g * g` after (post/finishEffect.ts) | gamma 2 | The grain is added to the square root of the display-linear colour and the sum is squared back, a gamma 2 space close enough to sRGB that equal steps of grain read evenly from ink to highlights. Added in display-linear light it was six to nine times louder in shadows and ink, a spread of 14.9 sRGB levels in ink against 1.8 in highlights, and clipping it there lifted black into grey speckle; in gamma 2 it spreads 2.6 to 3.8 levels across all tones (83db415, measured in headless Chromium). The sum is still clipped at 0, so grain can only brighten black ink, which is why B3's old 0.06 lifted the ink beside Bulwark from 4.3 to 6.3 luma (Film grain, Render defaults) |
 | `DEFAULT_STANDARD_BLEND` (materials/painted.ts) | 0.1 | The blend a painted material takes when its creator names none, a prop's; above 0 the material is an actor's and takes the actor fill |
+| `FAMILY_STANDARD_BLEND` (assets/familyBlend.ts) | commanders 0.35, xeno 0.3, towers, heart and nests 0.1, env 0 | The blend each manifest family's materials are authored at, which the Style Lab and the Asset World both load with, so an asset lights alike on the two pages: Bulwark's `AUTHORED_CHARACTER_BLEND`, the Husk's 0.3 (Actor fill, Render defaults), a structure's 0.1 (`DEFAULT_STANDARD_BLEND`) and paint alone for the kit, the values the Style Lab loaded each asset with before the table existed. A family the table does not name throws with its name rather than loading as a prop, because a character loaded as a prop would lose the actor fill and nothing on screen would say why |
 | `SOIL_EDGE_GAIN` and `SOIL_EDGE_SOFTNESS` (materials/painted.ts) | 2.2 and 0.06 | How far the brush sample moves the soil edge's threshold, in soil weight, and the threshold's half-width. The brush atlas spans 0.29 to 0.71 between its 5th and 95th percentiles, so 2.2 spreads the threshold over the whole of the old soft band where 1 would jitter it by a fifth; 0.06 is about 10 cm of ground on the ring's ramps, a crisp stroke edge at hero distance that still anti-aliases from the strategic camera |
 | Hull ink distance scale, `clamp(uDistanceRef / max(-mvPosition.z, 0.001), 0.35, 1.0)` with `uDistanceRef` 25 (ink/hull.ts) | 25 m and 0.35 | The hull ink keeps its full screen width out to 25 m from the camera and beyond that thins in proportion to 25 m over the distance, so far props do not turn to ink blots; the clamp stops the thinning at 0.35 of the full width, reached 71 m out, and the width is then held to the Hull ink width row's 1.2 to 4 px (Render defaults). At the default 2.2 px, on ink authored at width 1, the 1.2 px floor takes over from about 46 m, so the 0.35 clamp shows only on wider ink. Renderer v1's values, from the M0d plan; why 25 m and 0.35 were chosen was not recorded |
 | Sky cloud band and threshold, `smoothstep(0.02, 0.12, h) * (1.0 - smoothstep(0.24, 0.5, h))` and `smoothstep(0.54, 0.6, field * 0.8 + band * 0.35)` (render/sky.ts) | h 0.02 to 0.12 and 0.24 to 0.5; field 0.54 to 0.6 | h is the sine of a direction's elevation above the planet's limb, so the cloud band fades in from about 1 to 7 degrees above the limb and out from about 14 to 30, and the painted cumulus sits low over the horizon. Inside it the brush field, the atlas read at two scales and weighted 0.6 and 0.4, times 0.8, plus 0.35 of the band's own weight, is thresholded over the narrow ramp from 0.54 to 0.6, so the strokes turn into hard-edged masses, and the band term makes cloud form most readily at the band's heart. Without the brush atlas the sky reads a black field, which never reaches the threshold; a grey one lifted the whole band over it into one solid slab (main.ts). Renderer v1's values, from the M0d plan; why these numbers were chosen was not recorded |
@@ -1092,6 +1095,40 @@ set.
 | `SHADOW_HALF_WIDTH`, `SHADOW_CROWN_MARGIN`, `SHADOW_NEAR` and `SHADOW_FAR` (labs/style/main.ts) | the scatter plan's reach (48 m) plus 2 m, so 50 m; and 1 to 220 m | The sun's square shadow box, derived from the scatter plan rather than fitted to the layout today's seed draws, so a reseed or a wider ring cannot put a caster outside it. Near a noon sun the box lies on the ground; under a low sun one axis still runs across it, so the plan's reach sets the box at every elevation. The margin covers a tree at the edge of its ring leaning out with the planet's curve, and its crown at the largest scatter size, and tests/unit/labs/shadow-reach.test.ts holds the box to it: every casting piece of the shipped kit, read from its GLB, at the outer edge of its ring, at 1.25 times its size (`SCATTER_SIZE_MAX`, labs/style/scene.ts), at any yaw, every degree of azimuth and every elevation the dial allows, reaches at most 49.35 m in the light's view (a conifer), and the placeholder kit 49.31 m; the browser measurement the margin was chosen on sampled 72 azimuths and 8 yaws, for 49.24 m, and today's layout reaches 46.4 m (at 85 degrees). The plan's reach of 48 m is its largest ring's radius, a coordinate on the tangent plane, so it is an upper bound on how far a root stands from the scene centre: surfaceAt(48, 0) lands about 46 m out. The old 45 m cut the outermost conifer's shadow at 85 degrees, and the 48 m fitted to today's layout held only the trees this seed placed. At 50 m the high tier's 2048 map has 4.9 cm texels; at the defaults the move from 48 m shifts cast-shadow edges on 0.73 percent of the hero frame's pixels by more than 2 of 255 (0.37 percent by more than 24) |
 | `SHADOW_BIAS` and `SHADOW_NORMAL_BIAS` (labs/style/main.ts) | -0.0004 and 0.03 m | A small constant bias and a 3 cm push along the normal keep lit ground free of self-shadowing at the tiers' map sizes. Preset B's strategic crosshatch was tested against them: bias 0 or -0.002, normal bias 0 to 0.3 and PCF radius 0 to 3 each moved its fleck count by under 3 percent |
 | Shadow PCF radius, `sun.shadow.radius` (labs/style/main.ts) | 0 | three r186's PCF spreads five taps over the radius and rotates them per pixel with screen-anchored noise, which the painted bands turned into shadow, mid and lit speckle that crawled with the camera (radius 3 measured 6.3 band changes per column across a straight shadow edge, against 2 for a clean edge); at 0 the taps coincide in one hardware-filtered lookup |
+
+### Asset World layout
+
+The Asset World's numbers (Content, Asset World). Positions are metres on the world's view frame: s
+to the right as its cameras see it and d away from them, on the plane tangent at the pole, with the
+world's centre on the pole.
+
+| Constant | Value | Why |
+|---|---|---|
+| `WORLD_FACING_DEG` (labs/world/registry.ts) | 145 degrees | The bearing from the world's centre toward every camera, from +x toward +z. The Verdant key's azimuth of 250 degrees puts the sun at bearing 200 on the tangent plane, so each view has the key 55 degrees behind it and to its left: members lit three quarters from the front with their shadow side still partly in view, and the locked 15 degree key's long shadows (Sun elevation, colour and intensity, Render defaults) falling away from the cameras and to the right, behind a member rather than across its neighbour |
+| `KIT_ARC_RADIUS` and `KIT_ARC_SPAN_DEG` (labs/world/registry.ts) | 17 m and 96 degrees | The Verdant kit's eight pieces on an arc around the centre on the cameras' side, 4.1 m of arc apart, small flora at the left end and the trees at the right, where their shadows fall off the world. At 14 m, with the towers at -6.5 m, the towers' family label came within 20 px of the arc's labels in the 1920 x 1080 overview; 17 m, with the rows spread, gives them room |
+| `TOWER_ROW_DEPTH`, `TOWER_ROW_START`, `TOWER_SPACING` and `NEST_SPOT` (labs/world/registry.ts) | -9 m; marks at s -7.6, -4.4 and -1.2 m, 3.2 m apart; the nest at (4.6, -9) | The Bolt Sentinel's marks, up to 1.96 m across, side by side with at least 1.4 m between plinths, and the 3.2 m nest on the same row to their right |
+| `CHARACTER_ROW_DEPTH`, `CHARACTER_SPACING`, `HUSK_ROW_START` and `BULWARK_ROW_START` (labs/world/registry.ts) | 0; 2.6 m; the Husk's idle, walk and attack from s -6.4 m, Bulwark's idle, run and attack from 2.8 m | The characters stand plumb on and beside the level clearing at the pole, 1.2 m or more apart, with 4 m between the Husk's three and Bulwark's three so the two families read apart. When the idle Husk joined, Bulwark's row moved one spacing right rather than the Husk's row left: at s -9 m, past the clearing, the ground under a plumb Husk's 0.8 m foot ring strays 7.9 cm from level, against 2.7 cm at -6.4 m, where the idle Husk now stands, and under Bulwark's narrower 0.55 m at 8 m it strays 3.1 cm. In their opening poses the browser test reads each character's lowest point within 3.8 cm of the ground (Bulwark's run, both feet up), 0.8 cm for the idle Husk |
+| `HEART_ROW_DEPTH`, `HEART_ROW_START` and `HEART_SPACING` (labs/world/registry.ts) | 12.5 m; s -5.4 m on, 3.6 m apart | The hearts' 2.5 m plinths with 1.1 m between them, at the back, where the stage 10 heart's 5.2 m and its long shadow hide nothing. At 10.5 m the heart row's family label met Bulwark's member labels in the overview; 12.5 m clears them |
+| `LEAN` (labs/world/registry.ts) | characters 0; towers, hearts and nest 0.8; rocks 0.8; flora 0.2 | place()'s lean toward the ground's normal. The structures' plinths and mounds, 1.9 to 3.2 m across, stand on 1 to 8 degree slopes: plumb, their edges strayed up to 13.5 cm from the ground, and at the Style Lab's tower lean of 0.5 up to 7.6 cm; at 0.8 at most 4.4 cm (the stage 0 heart, where the ground curves under its plinth), tilting none more than 6.1 degrees. The rocks and flora keep the Style Lab's scatter leans (`ROCK_LEAN`, `SCATTER_LEAN`) |
+| `THREE_QUARTER_TURN_DEG` (labs/world/registry.ts) | 30 degrees | The characters and towers turn from facing the cameras toward the key's side, so a lit three-quarter face and a barrel's length show instead of a flat front |
+| `LIVE_HEART_START_LEVEL` (labs/world/registry.ts) and the fixed stages | 7; stages 0, 5 and 10 | The slider heart opens between the fixed stages, so it reads as a fourth heart and not a copy; the fixed three show the first, middle and last of the eleven stages |
+| `HEART_STAGES` (labs/world/layout.ts) | 11 | The heart's stage nodes, one per level 0 to 10 (blender/recipes/heart.py); the panel's slider runs from 0 to `HEART_STAGES - 1` and the heart clamps to them |
+| `TURRET_SWEEP_SECONDS` and `TURRET_SWEEP_DEG` (labs/world/layout.ts) | 9 s and 35 degrees each side, a third of a period apart | The tower heads sweep slowly about their rest, so the head, the barrels and their energy read from every side without a target, and out of step so each reads alone |
+| `OVERVIEW_PITCH_DEG`, `FAMILY_PITCH_DEG` and `MEMBER_PITCH_DEG` (labs/world/views.ts) | 48, 26 and 18 degrees | The overview looks down far enough that no row hides the one behind it; a family's view low enough to see faces and high enough that the rows in front of a closely fitted zone fall under the frame (at 20 degrees, with the looser sphere fit the page first had, the tower row filled the foot of the characters' frame) |
+| `FIT_NDC` and `MIN_FIT_HALF_SIZE` (labs/world/views.ts) | 0.9 of the half-frame; 1.2 m | A view comes as close as keeps every corner of its members' bounds, and the room its labels take, within 0.9 of the frame's middle toward each edge, and centres them: the distance is halved 40 times between 0.05 m and a start of four times the members' half-diagonal (doubled up to 12 times if that does not fit), and the target re-centred twice. A sphere fitted around the whole world left it in the middle 40 percent of a 1920 x 1080 frame. In the overview and a family's view, points closer together than 1.2 m to each side are framed as if they spread that far, so a zone of small pieces is seen with meadow around it; a member's own view has its own, smaller floor (`MEMBER_MIN_FIT_HALF_SIZE`). The page's points and fit are views.ts's viewPoints and frameView, which the unit test drives: every member's own view stands within 1.3 times the distance of a fit to its bounds alone at the same 0.5 m floor, at 375 x 667 and 1920 x 1080 (in the browser, on the shipped assets, 0.99 to 1.02, and the nest, framed with its placard, 1.11 on a 1920 x 1080 screen and 0.97 on a phone). Framing the family's placard as well stood an end-of-row member back until its zone fitted: the flowers 3.90 times as far on a phone (29.1 m against 7.5 m) and 2.15 times on a 1920 x 1080 screen, both at the 1.2 m floor member views then had |
+| `MEMBER_MIN_FIT_HALF_SIZE` (labs/world/views.ts) | 0.5 m | A member's own view frames points closer together than 0.5 m to each side as if they spread that far, a metre's cube just larger than the two smallest members, the flowers (0.4 by 0.45 m) and the grass tuft (0.45 by 0.68 m), so each is studied close with a little meadow around it. At the family views' 1.2 m, the flowers filled 0.07 by 0.14 of a 1920 x 1080 frame from 4.36 m, and 16 of the 22 members stood at that same 4.36 m however small each was; at 0.5 m the flowers fill 0.17 by 0.34 from 1.82 m (on a 375 x 667 phone 0.31 by 0.20 from 3.11 m, against 0.13 by 0.08 from 7.45 m), the grass tuft 0.22 by 0.48, and every member larger than the cube comes as close as its own bounds and label allow (on the 1920 x 1080 screen the idle Husk from 2.50 m and Mark II from 3.00 m, both 4.36 m before; measured on the GPU). A member whose own size already set its distance at 1.2 m keeps it (on that screen the two trees, the heart's stages 5 and 10 and the slider heart), and the overview and family views keep 1.2 m |
+| `FAMILY_LABEL_GAP`, `MEMBER_LABEL_ROOM_PX`, `FOCUSED_MEMBER_LABEL_ROOM_PX` and `FAMILY_LABEL_ROOM_PX` (labs/world/views.ts); `LABEL_AXIS_RADIUS` and `LABEL_AXIS_LINES` (labs/world/layout.ts) | 0.8 m; 36, 52 and 56 px; 0.3 m and 8 lines | A family's label hangs like a placard from the ground 0.8 m in front of its zone, so a family's name never meets its members' names, and a member's stands on its body's top: the highest point where its drawn surface crosses the up line through its root or one of 8 lines 0.3 m around it, with no lift in metres, because the tail stands it off by the same few pixels at every distance. Standing 0.15 m over the highest point of all, Bulwark's labels rose 0.5 m over his helmet on his upright sword and Mark III's 0.3 m, and in a close view they sat on the assets behind ("Mark II" on a Husk, "Idle" on a heart); the surface is crossed, not its vertices sampled, because a low-poly box has vertices only at its corners. In a member's own view its label adds its family's name as a second line, and no placard shows. A view keeps the room each takes inside its frame: in the browser a member label and tail take 33.5 px (30.2 px on phones), with its family line 49.1 px (45.8 px), and a placard 54.3 px (33.3 px). The browser test reads the two-line label's room over Mark II in its own view on both sides of the phone line, at 480 and 800 px wide, and holds each to 52 px |
+| Label sizes (labs/world/world.css) | family 18 px (15 px on phones), its family key 12 px (hidden on phones), member 13 px (12 px on phones), a member's family line in its own view 12 px, tail 10 px (8 px on phones) | Readable on a 375 px phone at the 12 px the Style Lab's phone chips use, in Barlow Condensed for the family names and Inter for the rest (Interface and HUD) |
+| `MOVE_PX` (labs/world/labels.ts) | 0.05 px | A label's transform is written again only when its point moves this far, half the 0.1 px step the transform is written in, so frames under a still camera write no styles and build no strings |
+| `OVERVIEW_MEMBER_LABELS_MIN_WIDTH` (labs/world/views.ts) | 1280 px | The overview names every member only on a screen at least this wide; narrower, the 21 member labels (22 members, but the nest, its family's only member, has none) crowd each other, so the overview names the six families and each family's view names its members |
+| `FAMILY_MEMBER_LABELS_MIN_WIDTH` (labs/world/views.ts) | the Verdant kit's view 1024 px; no other family | A family's view names its members only on a screen at least this wide; narrower, it names the family alone, as the overview does, and each member names itself in its own view and in the panel's member list. The kit's eight pieces stand 4.1 m apart on an arc 25 m across, which a portrait phone fits into its width: measured on the GPU, at 375 x 667 six pairs of their labels overlapped and "Flowers" ran 9.7 px off the left edge (five pairs and 8.9 px at 390 x 844), one pair still overlapped at 667 x 375 and at 768 x 1024, and none at 1024 x 768, 1280 x 720, 1366 x 768 or 1920 x 1080, where the view is unchanged. Every other family's view names its members without an overlap at all eight sizes, the characters' eight labels included |
+| `TURNTABLE_SECONDS` (labs/world/main.ts) | 40 s a turn | The turntable turns slowly enough to study a silhouette as it passes, OrbitControls' autoRotateSpeed of 60 / 40 at the frame's own seconds |
+| `TRANSITION_SECONDS` (labs/world/main.ts) | 0.8 s, easing out | A view chosen in the panel glides there, starting at once and settling softly; reduced motion, the address and the test handle jump |
+| `MAX_ANIMATION_SPEED` (labs/world/panel.ts) | 2, in steps of 0.05 | The speed dial runs the clips and sweeps from paused to twice their authored speed; below 1 is where a strike frame is studied |
+| `WORLD_SUN_DISTANCE`, `WORLD_SHADOW_NEAR`, `WORLD_SHADOW_FAR`, `WORLD_SHADOW_BIAS` and `WORLD_SHADOW_NORMAL_BIAS` (labs/world/sun.ts) | 90 m, 1 to 220 m, -0.0004 and 0.03 m, PCF radius 0 | The Style Lab's sun (Render constants), whose reasons hold here: every member lies within 24 m of the centre, far past the near plane, and the patch's farthest corner inside the far plane |
+| `WORLD_CASTER_MARGIN` and `WORLD_SHADOW_HALF_WIDTH` (labs/world/sun.ts) | 7 m; the furthest root's 17 m plus 7, so 24 m | A member's point lies at most its root's distance, plus its footprint's half-width, plus its height from the centre, and the largest of each in the manifest are the broad tree's 1.71 m and the stage 10 heart's 5.19 m (measured from the GLBs), 6.9 m rounded up. The high tier's 2048 map then has 2.3 cm texels, against the Style Lab's 4.9 cm |
+| The browser test's ground allowances (tests/e2e/asset-world.spec.ts) | 5 mm, plus 4.4 cm for the structures, 2.5 cm for the kit and 4 cm for the characters | Each member's lowest drawn point, along the planet's up at its spot (`PlacedMember.lowest`, measured with its bounds), against the ground on the planet's radius through it, less its designed sink. The bounds' lowest corner cannot stand for it: the planet's curve tilts a member 17 m out by 6 degrees, which alone put rock B's bounds 14 cm under its root. The Kit's 5 mm contract, then the structures' lean stray (`LEAN`; Mark III reads 4.1 cm), the kit's rocks and flora leaning on the arc's slopes as the Style Lab's scatter does (rock A reads 2.3 cm), and the characters' opening poses rather than the bind pose the contract measures (Bulwark's run reads 3.8 cm up). Every read is the same on every load, since the layout, the ground and the opening poses are fixed |
+| The Style Lab's frame (labs/world/main.ts) | a 50 degree lens from 0.1 to 2500 m, orbit to 400 m; the scene's step clamped to 1/20 s; the frame interval a 0.95 running average, shown every 30 frames; ready at frame 3; flat textures of 128 (materials) and 0 (sky) | Taken as the Style Lab has them, so the two pages measure and draw alike |
 
 ## Content: planets and families
 
@@ -1128,13 +1165,16 @@ Play this seed.
 | Helios Lance | beam that ramps on one target | Prism Array: the beam splits to three | Sun Needle: ramps to 5x on one target |
 | Warden Barracks | summons wardens who hold ground | Phalanx Hall: more, tougher wardens | Vanguard Lodge: fewer elite hunters |
 
-Inspection view: **Asset Gallery** (`/labs/gallery.html?family=towers`), every mark and
-specialization side by side at first-person, third-person and strategic distance.
+Inspection view: **Asset World** (`/labs/world.html?family=towers`, one mark with
+`?member=bolt_mk2`): every built mark side by side, in the overview, the family's view and each
+mark's own view. The specializations join it when they are built, with presets at first-person,
+third-person and strategic distance.
 
 ### Xeno species and evolutions
 
 Mite, Husk, Aegis and Wisp (v3), each with four evolution overlays (armour, speed, shield, split).
-Inspection view: Asset Gallery (`?family=xeno`), with every animation playable.
+Inspection view: Asset World (`/labs/world.html?family=xeno`, one clip with `?member=husk_attack`),
+with every animation playable.
 
 ### Commanders and allies
 
@@ -1143,7 +1183,8 @@ M1 the commanders take the owner's CharForge style, as its Bo and Pip show
 (https://majieddd.github.io/charforge/): about 4.5 to 5 heads tall, oversized hands and feet, slim
 limbs and chunky rounded volumes, with a visible cartoon face (painted features, blink and jaw shape
 keys). M0's Bulwark stays the visored knight the style gate locked on. Inspection view: Asset
-Gallery (`?family=commanders`) and the M1 test course (`/labs/course.html`).
+World (`/labs/world.html?family=commanders`, one clip with `?member=bulwark_run`) and the M1 test
+course (`/labs/course.html`).
 
 ### Weapons
 
@@ -1179,12 +1220,42 @@ Cinder Wyrm). Inspection view: **Boss Lab** (`/labs/bosses.html?theme=&archetype
 Structures: Outpost Ruin, Crashed Lander, Ancient Shrine, Dead Hive (v3 had four families). Mounts:
 Ridge Strider, Tideback, Sky Ray (v3). Disasters: Tornado, Quake, Lightning Storm, Tsunami,
 Eruption, Radiation Storm (v3), plus Blizzard and Sandstorm as theme weather. Inspection views: Asset
-Gallery for structures and mounts; Planet Lab's disaster trigger for disasters.
+World for structures and mounts (`/labs/world.html?family=` and `?member=`, once their families are
+built); Planet Lab's disaster trigger for disasters.
 
 ### Style
 
 Inspection view: **Style Lab** (`/labs/style.html`), the style scene with live dials, the reference
 board, and the colour audit.
+
+### Asset World
+
+Inspection view for every built asset family: **Asset World** (`/labs/world.html`). It lays out
+every model the manifest lists, and every placeable in it, in labelled zones on the Style Lab's
+painted patch, in the locked Painted-Anime-Inkline 4.0 defaults (`DEFAULT_DIALS`, Render defaults),
+or in the look a `?dials=` link carries, applied over those defaults as the Style Lab applies it. Its
+panel's "Open this look in the Style Lab" and the Style Lab's "Open the Asset World with these dials"
+carry the dials on screen between the two pages in the same link. `?family=` opens one family's
+zone: `env` (the Verdant kit's eight pieces on an arc), `heart` (the Worldheart at stages 0, 5 and 10
+beside a heart the panel's slider sets from 0 to 10), `nests` (the nest), `xeno` (the Husk idle,
+walking and attacking), `commanders` (Bulwark idle, running and attacking), `towers` (Bolt Sentinel
+marks I to III, their heads sweeping), or `characters` (the Husk's and Bulwark's rows together).
+`?member=` opens one member by its placed name, such as `rock_a`, `worldheart_stage_05`,
+`husk_walk` or `bolt_mk3`, and names it with its family as the label's second line. A family's
+view names its members, except the Verdant kit's on a screen under 1024 px wide, where its eight
+labels would crowd each other; there it names the kit alone, and each piece names itself in its own
+view. Each parameter is read as its own kind: an empty one is skipped, and a name that is not one of
+its kind is named in the console and the banner while the view falls back to the other parameter, or
+the overview. The address follows the view chosen in the panel, so the bar always holds a link to
+what is on screen.
+Every root stands on the ground through the shared place() (Kit's ground contract), with no offset
+for any asset, and the browser test reads each member's lowest drawn point against the ground. The
+placement registry (`src/labs/world/registry.ts`) gives every manifest entry a place, every clip a
+member that loops it or a reason in `CLIPS_NOT_SHOWN`, and, for a texture, the reason it is not
+shown, and a unit test fails any new entry, kit piece, tower mark or clip without one, by name, and
+any reason left for a clip the manifest no longer lists or a member loops. The world shows the
+members alone, with no scatter a viewer could take for one. The layout's numbers are in Numbers
+(Asset World layout).
 
 ## Interface and HUD
 
@@ -1454,3 +1525,14 @@ no preset camera shows on the GPU (`WARM_BLUE_FULL`, Render constants), so decid
 emitter's own colour joins M2's follow-ups (Task list). Next: M1, commander feel, starting with the
 CharForge-style commander (Task list), and M2, planet rendering and the headless end-to-end playable
 (Build order, item 1).
+2026-09-28. The Asset World (`/labs/world.html`), M0's inspection follow-up, lays out every built
+asset for inspection on the Style Lab's patch in the locked Painted-Anime-Inkline 4.0 defaults: the
+Verdant kit's eight pieces, the Worldheart at stages 0, 5 and 10 beside a heart the panel's slider
+sets, the nest, the Husk idle, walking and attacking, Bulwark idle, running and attacking, and Bolt Sentinel
+marks I to III, each family in a labelled zone with its own view, reachable by `?family=` and
+`?member=` (Content, Asset World). It is the inspection view the plan called the Asset Gallery. It
+was built in preset B3 while the gate was open and now opens on `DEFAULT_DIALS`, as the Style Lab
+does, so the locked look has one source in code; a dials link still applies over it. A registry test
+fails any manifest entry the world does not place. The home page links to it, the Style Lab's panel
+opens it in the look its dials make, and its own panel opens the Style Lab in its look. Next is
+unchanged: M1 and M2, as the paragraph above records.
