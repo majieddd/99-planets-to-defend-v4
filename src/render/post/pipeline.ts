@@ -33,15 +33,18 @@ export const BLOOM_SMOOTHING = 0.25;
  * The key material's warm test ramps over a red-led pixel's blue as a fraction of its peak channel: at WARM_BLUE_FULL or
  * less the pixel is warm and takes heartHalo, at WARM_BLUE_NONE or more it takes bloomIntensity. The two edges encode
  * Pillar 5 (warm is the heart and its economy, magenta is Xeno, cyan is yours) on the committed assets lit at the
- * defaults (tools/render/warm-texels.mjs lights the texels, and bloom-warm.test.ts holds what it wrote): the heart
- * crystal's texels sit at 0.041 to 0.074 (1st to 99th percentile), 0.126 under the first edge, and the nest's magenta
- * seams at 0.382 to 0.519, 0.032 over the second, while cyan's red never leads. The heart stays warm through a fog amount
- * of about 0.3 (at 0.4 its texels reach 0.198 to 0.237). The art preset narrows the nest's margin to 0.017 (its seams
- * start at 0.367), and a silhouette rim under it puts about 98 percent of the seam texels at least half warm; no preset
- * camera showed it, the seams feeding at most 4.6 luma of heart halo (the strategic camera, high tier). Known failure,
- * unreachable at the defaults, where a silhouette rim leaves no seam texel half warm: a sunColor of #ff8844 at intensity
- * 8 with that rim warms the seams until 89.5 percent of their texels test at least half warm. Deciding warmth in
- * painted.ts from the emitter's own colour, not the lit pixel, would end both.
+ * locked defaults (tools/render/warm-texels.mjs lights the texels, and bloom-warm.test.ts holds what it wrote): the heart
+ * crystal's texels sit at 0.037 to 0.060 (1st to 99th percentile), 0.140 under the first edge, and the nest's magenta
+ * seams at 0.365 to 0.470, 0.015 over the second (0.032 under renderer v1's key), while cyan's red never leads. The heart
+ * stays warm through a fog amount of about 0.3 (at 0.4 its texels reached 0.198 to 0.237 under renderer v1's key); on the
+ * GPU at the locked defaults its fed pixels reach 0.19 at the 99th percentile at the horizon camera, where 6 of 1,222 are
+ * not wholly warm. In the generator's model a silhouette rim under the locked key puts 98.3 percent of the seam texels at
+ * least half warm, as the art preset's did. No preset camera shows it: on the GPU at the locked defaults no nest seam
+ * pixel the bloom feeds tests half warm at the four cameras on the high and low tiers, and the seams add at most 1.0 luma
+ * of heart halo (1.9 on the low tier, both at the strategic camera). The Husk's magenta seams, which the generator does
+ * not sample, put 1 of 32 fed pixels half warm at the strategic camera on the high tier, adding up to 7.2 luma and moving
+ * 28 pixels of the frame by more than 2. Known failure: a sunColor of #ff8844 at intensity 8 with that rim warms 99.6 percent of the seam texels to at
+ * least half warm. Deciding warmth in painted.ts from the emitter's own colour, not the lit pixel, would end all of these.
  */
 export const WARM_BLUE_FULL = 0.2;
 /** See WARM_BLUE_FULL. */
@@ -60,8 +63,9 @@ export const WARM_BLUE_NONE = 0.35;
  * the hero camera keeps 99 and 96 percent of the default ink's on the low and high tiers; a mid-grey ink (#808080,
  * 0.216) keeps 28 and 11 percent. And because the width is added rather than scaled, the ramp narrows as the ink
  * lightens: between the sRGB greys at its two edges it spans about 14.8 levels of 255 at the default ink, 9.6 at
- * #102030 and 2.2 at #808080. At #ffffff the gate opens at 1.24, over the full-sun white the default key is calibrated
- * to (about 1.0, painted.ts), so almost no paint gets a halo.
+ * #102030 and 2.2 at #808080. At #ffffff the gate opens at 1.24, over the full-sun white renderer v1's key is
+ * calibrated to (about 1.0, painted.ts), so almost no paint got a halo; under the locked key sunlit white reaches about
+ * 1.25 before exposure, about at it.
  *
  * INK_GATE_HEADROOM is 0.006 over the default ink's 0.0048552, to the seven digits that make the default ink's edges the
  * fixed 0.006 and 0.015 they replace, and frames in the default ink measured unchanged bit for bit (on all three tiers:
@@ -247,14 +251,15 @@ export interface KeyedBloomOptions {
  *
  * The gate finds ink by luminance alone, so it misses ink that no longer reads darker than paint, and takes paint that
  * reads as dark as the ink:
- * - Fog lifts distant ink through it. At the default fog, ink more than about 22 to 30 m from the camera rises past the
- *   gate and takes the glow: the heart's outline at the strategic camera reads 62, 57 and 49 luma with the bloom off and
- *   101, 99 and 116 with it on (high, medium, low tier), on the high and medium tiers what it read before the gate. At
- *   the art preset, whose fog starts at the camera, fogged ink beside energy reads dark brown, 30, 32 and 43 luma at the
- *   hero camera against about 3 with the bloom off.
- * - Edge ink at the default edgeStrength of 0.9 lets a tenth of the paint under it through, which lifts it past the gate
- *   over all but the darkest paint, so the cap alone holds it: near energy it gains about 20 luma at the hero camera and
- *   32 at the close-up (high tier).
+ * - Fog lifts distant ink through it. At renderer v1's fog (0.006 from 20 m), ink more than about 22 to 30 m from the
+ *   camera rises past the gate and takes the glow: the heart's outline at the strategic camera reads 62, 57 and 49 luma
+ *   with the bloom off and 101, 99 and 116 with it on (high, medium, low tier), on the high and medium tiers what it read
+ *   before the gate. At the art preset, whose fog starts at the camera as the locked look's does, fogged ink beside
+ *   energy reads dark brown, 30, 32 and 43 luma at the hero camera against about 3 with the bloom off.
+ * - Edge ink at renderer v1's edgeStrength of 0.9 let a tenth of the paint under it through, which lifted it past the
+ *   gate over all but the darkest paint, so the cap alone held it: near energy it gained about 20 luma at the hero camera
+ *   and 32 at the close-up (high tier). At the locked 0.33 two thirds of the paint shows through a full edge, so the gate
+ *   passes it more readily still and the cap is again what holds it; that was not measured apart at the lock.
  * - A background darker than the gate gets no halo, or a capped one, so glow cannot read against a sky or ground as dark
  *   as the ink, such as Ashen Moon's black sky (M8) or Ember Rift's charcoal basalt (M2).
  * - A lighter ink takes the halo off paint as dark as it: around energy at the hero camera #3a1f5c keeps about 85

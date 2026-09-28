@@ -28,8 +28,11 @@ describe('painted materials', () => {
     applyPaintDials(shared, { ...DEFAULT_DIALS, bands: 4 }, VERDANT);
     expect(a.uniforms['uBands']!.value).toBe(4);
     expect(b.uniforms['uBands']!.value).toBe(4);
-    // The standardBlend dial rescales every authored blend, so at the default each material keeps its authored value.
-    expect(createPaintUniforms(VERDANT, DEFAULT_DIALS, null).uStandardBlendScale.value).toBe(1);
+    // The standardBlend dial rescales every authored blend by the dial over Bulwark's authored 0.35: at 0.35 each material
+    // keeps its authored value, and at the locked 0.45 each takes 9/7 of it.
+    expect(createPaintUniforms(VERDANT, { ...DEFAULT_DIALS, standardBlend: AUTHORED_CHARACTER_BLEND }, null).uStandardBlendScale.value).toBe(1);
+    expect(DEFAULT_DIALS.standardBlend).toBe(0.45);
+    expect(createPaintUniforms(VERDANT, DEFAULT_DIALS, null).uStandardBlendScale.value).toBeCloseTo(9 / 7, 12);
     applyPaintDials(shared, { ...DEFAULT_DIALS, standardBlend: 0.7 }, VERDANT);
     expect(a.uniforms['uStandardBlendScale']!.value).toBeCloseTo(2);
     expect(b.uniforms['uStandardBlendScale']!.value).toBeCloseTo(2);
@@ -44,7 +47,8 @@ describe('painted materials', () => {
       bands: 4,
       bandSoftness: 0.18,
       shadowTint: '#7a3d5c',
-      shadowDepth: 0.62,
+      // Not 0.62, which the locked look took from preset B3: a value equal to the default could not show a dropped line.
+      shadowDepth: 0.57,
       shadowLift: 0.047,
       ambientStrength: 0.93,
       rimStrength: 1.14,
@@ -93,10 +97,12 @@ describe('painted materials', () => {
     expect(changed.shadowTint).not.toBe(DEFAULT_DIALS.shadowTint);
     expect(created.uShadowTint.value.getHexString()).toBe('7a3d5c');
     expect(applied.uShadowTint.value.getHexString()).toBe('7a3d5c');
-    // The rim is sunlight at a grazing angle, so it takes the sun colour dial, whose default is the theme's sun.
+    // The rim is sunlight at a grazing angle, so it takes the sun colour dial, whose locked default is the golden-hour key
+    // rather than the theme's own sun.
     expect(created.uRimColor.value.getHexString()).toBe('ff8844');
     expect(applied.uRimColor.value.getHexString()).toBe('ff8844');
-    expect(createPaintUniforms(VERDANT, DEFAULT_DIALS, null).uRimColor.value.getHexString()).toBe(VERDANT.sun.color.slice(1));
+    expect(createPaintUniforms(VERDANT, DEFAULT_DIALS, null).uRimColor.value.getHexString()).toBe(DEFAULT_DIALS.sunColor.slice(1));
+    expect(DEFAULT_DIALS.sunColor).not.toBe(VERDANT.sun.color);
     // Both paths above use VERDANT, so the theme-driven lines need a theme switch of their own to show. A theme's own
     // sun colour no longer reaches the rim: the dial does.
     const dusk = {
@@ -192,8 +198,10 @@ describe('the soil edge', () => {
     expect(Number(soil.defines['SOIL_EDGE_SOFTNESS'])).toBe(SOIL_EDGE_SOFTNESS);
   });
 
-  it('thresholds the soil weight against the brush, and at a breakup of 0 mixes by the weight alone, as the vertex colour did', () => {
-    expect(DEFAULT_DIALS.soilBreakup).toBe(0);
+  it('thresholds the soil weight against the brush, wholly at the locked breakup of 1, and at 0 mixes by the weight alone, as the vertex colour did', () => {
+    // The locked look breaks the soil ring's edge into the terrain's strokes; the mix below leaves nothing of the smooth
+    // weight at 1, and is the smooth weight alone at 0.
+    expect(DEFAULT_DIALS.soilBreakup).toBe(1);
     const f = soil.fragmentShader;
     expect(f).toContain('float soilEdge = clamp(0.5 + (brush - 0.5) * SOIL_EDGE_GAIN, SOIL_EDGE_SOFTNESS + 0.01, 0.99 - SOIL_EDGE_SOFTNESS);');
     expect(f).toContain('float soil = mix(vSoil, smoothstep(soilEdge - SOIL_EDGE_SOFTNESS, soilEdge + SOIL_EDGE_SOFTNESS, vSoil), uSoilBreakup);');
@@ -217,11 +225,19 @@ describe('the look dials in the painted shader', () => {
     return index;
   };
 
-  it('start at the look they were added to: no prop brush, full lit saturation, no actor fill, no shadow lift', () => {
-    expect(DEFAULT_DIALS.propBrush).toBe(0);
-    expect(DEFAULT_DIALS.litSaturation).toBe(1);
-    expect(DEFAULT_DIALS.actorFill).toBe(0);
+  it('lock the golden-hour look: prop brush 1.3, lit saturation 1.09 away from emitters, actor fill 1.4, no shadow lift', () => {
+    expect(DEFAULT_DIALS.propBrush).toBe(1.3);
+    expect(DEFAULT_DIALS.litSaturation).toBe(1.09);
+    expect(DEFAULT_DIALS.actorFill).toBe(1.4);
     expect(DEFAULT_DIALS.shadowLift).toBe(0);
+    // The owner's 1.09 is above 1, so lit colour is pushed away from grey rather than restrained. Emitters are spared:
+    // at a spare of 0 the restraint is exactly 1 and the line is skipped, so the energy keeps its authored colour.
+    expect(f).toContain('float restraint = mix(1.0, uLitSaturation, spare);');
+    expect(f).toContain('if (restraint != 1.0) color = withSaturation(color, restraint);');
+    // Extrapolating can take a channel under 0; the clamp holds it at 0, so no lit colour enters the HDR buffer negative.
+    expect(f).toContain('return max(mix(vec3(luma), c, amount), 0.0);');
+    // Before the emitters add their light.
+    expect(at('if (restraint != 1.0) color = withSaturation(color, restraint);')).toBeLessThan(at('color += emissive * min(1.0, EMISSIVE_PEAK / max(emissiveKey, 1e-4));'));
   });
 
   it("lifts the shadow band toward the theme's shadow grade colour at unit luminance, on every painted surface", () => {

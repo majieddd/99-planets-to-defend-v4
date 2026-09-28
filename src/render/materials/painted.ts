@@ -173,9 +173,10 @@ export const TERMINATOR_BAND_TILES = 1;
  * limb (90th percentile, along the luma gradient) fell from 31 to 15 px at a 15 degree key and from 35 to 19 px at 8.
  * The scale caps the dial's reach wherever the ground curves gently, not only on the planet's curve. On the bare sphere
  * ndl changes by at most sin(angle to the key) / 160 per metre, which rises as the ground turns away from the sun, so
- * under the default 35 degree key the scale is about 0.128 at the heart (sin 55 degrees / 160 x 25) and up to about 0.13
- * across the level clearing within 6 m of the axis, where the dial's top of 0.25 acts like at most about 0.033 (or the
- * pixel floor, where that is wider).
+ * under renderer v1's 35 degree key the scale is about 0.128 at the heart (sin 55 degrees / 160 x 25) and up to about
+ * 0.13 across the level clearing within 6 m of the axis, where the dial's top of 0.25 acts like at most about 0.033 (or
+ * the pixel floor, where that is wider). Under the locked 15 degree key it is about 0.151 at the heart (sin 75 degrees /
+ * 160 x 25), where the locked 0.03 acts like about 0.0045.
  */
 export const BAND_EDGE_RADIUS = 25;
 
@@ -393,7 +394,9 @@ void main() {
     // three passes light colour times intensity and its own Lambert divides by PI (undivided, lit albedo ran about
     // PI too bright and bloomed like energy). The Verdant sun's 3.2 is calibrated so a white surface facing it lands
     // near 1.0: lit albedo stays under the bloom threshold (only energy and hazards bloom), and shadowDepth,
-    // ambientStrength and rimStrength read as fractions of full sun.
+    // ambientStrength and rimStrength read as fractions of full sun. The locked golden-hour key, #ffc05c at 6.6, puts
+    // that surface near 1.25 in linear luminance (2.1 in red) before the exposure of 0.44; lit colour still never
+    // blooms, because the bloom keys on the emissive key in alpha, not on luminance.
     sunColor = directionalLights[0].color * RECIPROCAL_PI;
   #endif
   float ndl = dot(N, L);
@@ -450,17 +453,18 @@ void main() {
   // The fill and the lift below give way to the key by the smooth key, (1 - lambert), not by the banded (1 - lit). lit
   // jumps at the terminator and lambert does not, so a term weighted by (1 - lit) stepped down exactly where the key
   // stepped up: with a standard blend the lit side just past the terminator kept only part of the fill, and the
-  // terminator's step shrank as the fill grew. Camera-facing white under the default key, 0.05 of ndl to each side, it
-  // measured 0.217 linear luminance at a fill of 0, 0.059 at 1.2, 0.006 at 1.6 and -0.046 at 2, and the lift inverted
-  // it on dark albedo (a lift of 0.06 on an albedo of 0.04, 0.1 on 0.1). The smooth weight is continuous across the
-  // terminator and the same everywhere on the shadow side, form or cast, so the step is the key's (0.178 at a fill of 2).
-  // A cast shadow's edge still drops the smooth key, so where the fill outshines the key a shadow on a lit face reads
-  // brighter than the light beside it: above a fill of 1.18 under the default key, never within the range under B3's.
-  // The lit side keeps (1 - ndl) of the fill, so where the fill fades faster than the key brightens, a face turned
-  // fully to the key reads darker than one turned partly away. On a sky- and camera-facing surface at Bulwark's
-  // standard blend, whatever the albedo, the lit side stops brightening toward the key above a fill of 0.42 under the
-  // default key and 0.99 under B3's, and from ndl 0.75 to 1 its luminance falls by 9.9 percent at a fill of 1.2 under
-  // the default key (0.07 percent under the banded weight) and by 3.8 percent at B3's 1.4 under its own key.
+  // terminator's step shrank as the fill grew. Camera-facing white under renderer v1's key, 0.05 of ndl to each side,
+  // it measured 0.217 linear luminance at a fill of 0, 0.059 at 1.2, 0.006 at 1.6 and -0.046 at 2, and the lift
+  // inverted it on dark albedo (a lift of 0.06 on an albedo of 0.04, 0.1 on 0.1). The smooth weight is continuous across
+  // the terminator and the same everywhere on the shadow side, form or cast, so the step is the key's (0.178 at a fill of
+  // 2). A cast shadow's edge still drops the smooth key, so where the fill outshines the key a shadow on a lit face reads
+  // brighter than the light beside it: above a fill of 1.18 under renderer v1's key, never within the range under B3's,
+  // which is the locked key. The lit side keeps (1 - ndl) of the fill, so where the fill fades faster than the key
+  // brightens, a face turned fully to the key reads darker than one turned partly away. On a sky- and camera-facing
+  // surface at Bulwark's standard blend, whatever the albedo, the lit side stops brightening toward the key above a fill
+  // of 0.42 under renderer v1's key and 0.99 under B3's, and from ndl 0.75 to 1 its luminance falls by 9.9 percent at a
+  // fill of 1.2 under renderer v1's key (0.07 percent under the banded weight) and by 3.8 percent at the locked 1.4 under
+  // the locked key.
   #ifdef PAINT_ACTOR
     // Seen against the light, an actor's whole visible side is in the shadow band, and preset B's hero camera showed
     // Bulwark's back at a median luma of 14 against 72 to 81 of ground (every blow must read, Pillar 4). This fill comes
@@ -494,10 +498,12 @@ void main() {
   #endif
 
   // The saturation dial works on albedo, so the key's own tint still raised the meadow's chroma (preset B's amber key
-  // took the ground's HSV saturation from 0.56 to 0.66). This restrains the lit colour itself, before the emitters add
-  // their light and away from emitting pixels, so the energy, the heart and the bloom that reads them keep their full
-  // colour. The grade would have greyed the halo too: it runs after the bloom. At 1 it is skipped rather than computed,
-  // so the default frame stays the one it was bit for bit (mix(luma, c, 1.0) need not return c exactly).
+  // took the ground's HSV saturation from 0.56 to 0.66). This sets the saturation of the lit colour itself, before the
+  // emitters add their light and away from emitting pixels, so the energy, the heart and the bloom that reads them keep
+  // their authored colour. The grade would have reached the halo too: it runs after the bloom. Below 1 it restrains;
+  // above 1, as the locked 1.09 does, it extrapolates away from grey, and withSaturation's clamp at 0 holds a channel
+  // that would go negative at 0 instead. At 1 it is skipped rather than computed, so a frame at 1 stays the one it was
+  // before the dial existed bit for bit (mix(luma, c, 1.0) need not return c exactly).
   float restraint = mix(1.0, uLitSaturation, spare);
   if (restraint != 1.0) color = withSaturation(color, restraint);
 

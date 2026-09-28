@@ -1,6 +1,7 @@
 /**
- * Every dial the Style Lab exposes. DEFAULT_DIALS are the starting values from docs/blueprint.md (Numbers,
- * Render defaults). At the M0 gate the owner's approved values replace them and become Painted-Anime-Inkline 4.0.
+ * Every dial the Style Lab exposes. DEFAULT_DIALS are the Painted-Anime-Inkline 4.0 values the owner locked at the M0
+ * style gate, each with its row in docs/blueprint.md (Numbers, Render defaults), which also keeps the renderer v1 start
+ * each dial replaced.
  */
 export interface RenderDials {
   bands: number;
@@ -44,60 +45,67 @@ export interface RenderDials {
   vignette: number;
 }
 
+// Painted-Anime-Inkline 4.0: approved by the owner at the M0 style gate on 2026-09-28, from the golden-hour preset B3's live link with three adjustments (edgeStrength 0.33, edgeFadeFar 65, litSaturation 1.09).
 export const DEFAULT_DIALS: RenderDials = {
-  bands: 3,
-  bandSoftness: 0.06,
-  terminatorNoise: 0.12,
-  paintStrength: 0.85,
-  saturation: 1.3,
-  shadowDepth: 0.35,
-  shadowTint: '#2f8f8c',
+  bands: 2,
+  bandSoftness: 0.03,
+  terminatorNoise: 0.3,
+  paintStrength: 1,
+  saturation: 1.12,
+  shadowDepth: 0.62,
+  shadowTint: '#1b7078',
   // Light added under every shadow, in the theme's shadow grade colour, as a fraction of full sun on white, so the darkest
   // note is a coloured dark, never black. It adds rather than floors, so darker albedo stays darker in shadow. At 0 the
   // shadows are where the shadow depth and the grade's contrast leave them.
   shadowLift: 0,
-  rimStrength: 0.35,
+  rimStrength: 0.6,
   rimPower: 3,
-  standardBlend: 0.35,
-  ambientStrength: 0.45,
-  brushScale: 0.35,
-  terrainBrush: 0.5,
-  // 0 leaves everything but the terrain with its baked paint alone, the look before the dial existed; above 0 the brush
-  // atlas strokes the albedo of characters, towers and props as terrainBrush strokes the ground.
-  propBrush: 0,
-  // 0 keeps the soil ring's smooth vertex-colour edge; 1 breaks it into the terrain's brush strokes.
-  soilBreakup: 0,
-  // The saturation of lit colour, after the key has tinted it and before any emitter adds its light. At 1 it changes
-  // nothing; lower, it restrains the chroma a warm key adds to the meadow while the energy keeps its full colour.
-  litSaturation: 1,
+  standardBlend: 0.45,
+  ambientStrength: 0.22,
+  brushScale: 0.7,
+  terrainBrush: 1.2,
+  // The brush atlas strokes the albedo of characters, towers and props as terrainBrush strokes the ground, because their
+  // baked paint read smooth on Bulwark's broad plates at hero distance. 0 leaves them with their baked paint alone.
+  propBrush: 1.3,
+  // 1 breaks the soil ring's edge into the terrain's brush strokes; 0 keeps its smooth vertex-colour edge.
+  soilBreakup: 1,
+  // The saturation of lit colour, after the key has tinted it and before any emitter adds its light; emitting pixels are
+  // spared, so the energy keeps its authored colour. At 1 it changes nothing and below 1 it restrains the chroma a warm
+  // key adds to the meadow. The owner's 1.09 pushes lit colour 9 percent further from grey instead (B3 had 0.87), and
+  // painted.ts's withSaturation clamps each channel at 0, so a channel under about 8 percent of its pixel's luma clips
+  // to 0 rather than going negative: 10 to 13 percent of the painted pixels at the four preset cameras.
+  litSaturation: 1.09,
   // A fill from the camera's side on actors (materials with a standard blend above 0), fading out as the key lights the
-  // surface, so a backlit character keeps its form instead of reading as a black cut-out. At 0 it adds nothing.
-  actorFill: 0,
-  inkWidthPx: 2.2,
+  // surface, so a backlit character keeps its form instead of reading as a black cut-out. Under the locked 15 degree key
+  // the hero camera sees Bulwark backlit, and with no fill his body's median luma read 16.6, 0.20 of his ground's.
+  actorFill: 1.4,
+  inkWidthPx: 3.2,
   inkColor: '#0e0f14',
-  edgeStrength: 0.9,
-  edgeLineWidth: 1.2,
+  edgeStrength: 0.33,
+  edgeLineWidth: 1.4,
   depthThreshold: 0.03,
   normalThreshold: 0.35,
+  // The edge pass's crease ink fades out between these two view depths, so past 65 m only its depth (silhouette) edges,
+  // at 0.45 of their weight, and the hull ink remain. On the 160 m planet only the strategic camera sees terrain that far.
   edgeFadeNear: 60,
-  edgeFadeFar: 180,
-  fogDensity: 0.006,
-  fogStart: 20,
-  // Per metre of altitude above the planet. At 0 every metre of the ray counts alike, which is the distance fog the
-  // renderer drew before height fog existed, so the default look is unchanged.
-  fogHeightFalloff: 0,
-  // The sun defaults to the Verdant theme's light (themes.ts), so a preset can lower and warm the key without
-  // editing the theme. The theme keeps the azimuth.
-  sunElevation: 35,
-  sunColor: '#ffd29a',
-  sunIntensity: 3.2,
-  exposure: 0.77,
-  contrast: 1.05,
-  // Halo strengths, in units of an emitter pixel's hue at full brightness (post/pipeline.ts). 0.8 gives the rails and
-  // the nest the glow they had when the bloom took 0.6 of the capped surface colour (whose peak is about 1.3); the
-  // heart's 4 is what makes its halo read at hero distance.
-  bloomIntensity: 0.8,
-  heartHalo: 4,
+  edgeFadeFar: 65,
+  fogDensity: 0.02,
+  fogStart: 0,
+  // Per metre of altitude above the planet, so the haze lies on the ground: at 0 every metre of the ray would count
+  // alike, the distance fog the renderer drew before height fog existed.
+  fogHeightFalloff: 0.3,
+  // The locked sun is the golden-hour key the owner approved: a raking 15 degree amber light, lower, warmer and stronger
+  // than the Verdant theme's own light (themes.ts: 35 degrees, #ffd29a, 3.2), which the theme keeps and these dials
+  // override. The theme keeps the azimuth.
+  sunElevation: 15,
+  sunColor: '#ffc05c',
+  sunIntensity: 6.6,
+  exposure: 0.44,
+  contrast: 1.35,
+  // Halo strengths, in units of an emitter pixel's hue at full brightness (post/pipeline.ts). Renderer v1 started them
+  // at 0.8 and 4; the locked 1.2 and 11 are preset B3's, and the heart's rows in the blueprint give the halo they add.
+  bloomIntensity: 1.2,
+  heartHalo: 11,
   bloomThreshold: 1.0,
   // Off at the owner's direction at the M0 style gate. The grain is hashed per screen pixel, so it read as noise laid
   // over the whole picture, not as paint: running, it re-seeds 24 times a second, a shimmer over every pixel; frozen or
@@ -105,7 +113,7 @@ export const DEFAULT_DIALS: RenderDials = {
   // paint's texture lives on the surfaces instead (the brush atlas and the broken terminator), which move with the
   // world. The dial keeps its range, so the owner can still turn the grain back on.
   grain: 0,
-  vignette: 0.35,
+  vignette: 0.55,
 };
 
 type NumericKey = { [K in keyof RenderDials]: RenderDials[K] extends number ? K : never }[keyof RenderDials];
@@ -129,8 +137,9 @@ export const NUMERIC_RANGES: Record<NumericKey, [number, number, number]> = {
   terrainBrush: [0, 1.5, 0.01],
   propBrush: [0, 1.5, 0.01],
   soilBreakup: [0, 1, 0.01],
-  // Under preset B, 0.65 already took the meadow's HSV saturation from 0.63 to 0.42, a grey-green, so 0.4 is the floor;
-  // above 1 it only adds chroma the albedo saturation dial already gives.
+  // Under preset B, 0.65 already took the meadow's HSV saturation from 0.63 to 0.42, a grey-green, so 0.4 is the floor.
+  // Above 1 it pushes lit colour further from grey, the key's tint included, which the albedo saturation dial, working
+  // before the light, does not reach; the owner locked 1.09 there.
   litSaturation: [0.4, 1.5, 0.01],
   // 2 gives a shadow side that faces the camera twice the sky light the ambient term gives at full strength.
   actorFill: [0, 2, 0.01],
