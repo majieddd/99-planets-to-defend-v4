@@ -23,6 +23,7 @@ export interface LabHandlers {
   copyDials(): void;
   reset(): void;
   screenshot(): void;
+  openWorld(): void;
 }
 
 type ColorDial = (typeof COLOR_DIALS)[number];
@@ -109,5 +110,7 @@ export function createDialsPanel(dials: RenderDials, state: LabState, handlers: 
     for (const controller of gui.controllersRecursive()) controller.updateDisplay();
   };
   actions.add({ reset }, 'reset').name('Reset dials');
+  // The Asset World shows every generated asset in the look these dials make, through the same dials link.
+  actions.add({ world: () => handlers.openWorld() }, 'world').name('Open the Asset World with these dials');
   return gui;
 }

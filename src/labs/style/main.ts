@@ -1,7 +1,8 @@
-import { DataTexture, DirectionalLight, NoColorSpace, PerspectiveCamera, RedFormat, RepeatWrapping, Scene, TextureLoader, Vector2, Vector3, type Texture, type WebGLRenderer } from 'three';
+import { DirectionalLight, PerspectiveCamera, Scene, Vector2, Vector3, type WebGLRenderer } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FAMILY_STANDARD_BLEND } from '../../render/assets/familyBlend';
 import { assetUrl, fetchManifest, type Manifest } from '../../render/assets/manifest';
-import { loadAsset, type LoadedAsset, type MaterialContext } from '../../render/assets/loadAsset';
+import type { MaterialContext } from '../../render/assets/loadAsset';
 import { DEFAULT_DIALS, type RenderDials } from '../../render/defaults';
 import { acceptDial, decodeDials, encodeDials, type SetDialsResult } from '../../render/dialsCodec';
 import { applyInkDials, createHullMaterial, createInkUniforms } from '../../render/ink/hull';
@@ -13,6 +14,7 @@ import { createRenderer } from '../../render/renderer';
 import { createPaintedSky } from '../../render/sky';
 import { createStylePatch, STYLE_PLANET_RADIUS } from '../../render/terrain/stylePatch';
 import { sunDirection, VERDANT } from '../../render/themes';
+import { flatTexture, loadManifestTexture, loadNamedAsset } from '../shared/labAssets';
 import { auditPixels, mutationProof } from './audit';
 import { createDialsPanel, type LabState } from './dials';
 import { placeholderAssets } from './placeholders';
@@ -81,56 +83,6 @@ function fail(error: unknown): void {
   }
 }
 
-function flat(value: number): Texture {
-  const texture = new DataTexture(new Uint8Array([value]), 1, 1, RedFormat);
-  texture.needsUpdate = true;
-  return texture;
-}
-
-/**
- * The brush atlas and the ink noise are requested only when the manifest lists them. Until the asset track's first
- * build there is no public/assets, and GitHub Pages answers each missing file with a 404 that Chromium logs as a
- * console error (Vite's dev and preview servers hide this by answering with index.html), so the flat grey fallback
- * stands in without a request.
- */
-function textureUrl(manifest: Manifest | null, name: string): string | null {
-  const entry = manifest?.assets.find((asset) => asset.name === name && asset.kind === 'texture');
-  return entry ? `${BASE}assets/${entry.file}` : null;
-}
-
-/**
- * Null when the manifest does not list the texture or its load failed, so the caller knows whether the real texture
- * arrived. A failed load used to hand back the flat grey without a word, and the sky, which checked only that the
- * manifest listed the atlas, took that grey and drew the solid slab described in start(). The warning names the
- * texture; it is a warning rather than an error because the lab still runs, and the browser tests fail on console
- * errors.
- */
-async function loadTexture(manifest: Manifest | null, name: string): Promise<Texture | null> {
-  const url = textureUrl(manifest, name);
-  if (!url) return null;
-  try {
-    const texture = await new TextureLoader().loadAsync(url);
-    texture.wrapS = texture.wrapT = RepeatWrapping;
-    texture.colorSpace = NoColorSpace; // data, not colour
-    return texture;
-  } catch (error) {
-    console.warn(`Style Lab: texture ${name} failed to load from ${url}; using the flat fallback`, error);
-    return null;
-  }
-}
-
-/**
- * GLTFLoader's errors need not name the model (a parse error names neither asset nor file), so a failed load reached
- * the banner and the console without saying which of the six it was. The manifest name and URL now travel with it.
- */
-async function loadNamed(name: string, url: string, ctx: MaterialContext, blend: number): Promise<LoadedAsset> {
-  try {
-    return await loadAsset(url, ctx, blend);
-  } catch (error) {
-    throw new Error(`asset ${name} failed to load from ${url}: ${String(error)}`, { cause: error });
-  }
-}
-
 async function loadStyleAssets(manifest: Manifest | null, ctx: MaterialContext): Promise<StyleAssets | null> {
   if (!manifest) return null;
   const urls = {
@@ -143,12 +95,12 @@ async function loadStyleAssets(manifest: Manifest | null, ctx: MaterialContext):
   };
   if (Object.values(urls).some((url) => url === null)) return null;
   const [bulwark, husk, bolt, heart, nest, kit] = await Promise.all([
-    loadNamed('bulwark', urls.bulwark as string, ctx, 0.35),
-    loadNamed('husk', urls.husk as string, ctx, 0.3),
-    loadNamed('bolt_sentinel', urls.bolt as string, ctx, 0.1),
-    loadNamed('worldheart', urls.heart as string, ctx, 0.1),
-    loadNamed('nest', urls.nest as string, ctx, 0.1),
-    loadNamed('verdant_kit', urls.kit as string, ctx, 0.0),
+    loadNamedAsset('bulwark', urls.bulwark as string, ctx, FAMILY_STANDARD_BLEND.commanders),
+    loadNamedAsset('husk', urls.husk as string, ctx, FAMILY_STANDARD_BLEND.xeno),
+    loadNamedAsset('bolt_sentinel', urls.bolt as string, ctx, FAMILY_STANDARD_BLEND.towers),
+    loadNamedAsset('worldheart', urls.heart as string, ctx, FAMILY_STANDARD_BLEND.heart),
+    loadNamedAsset('nest', urls.nest as string, ctx, FAMILY_STANDARD_BLEND.nests),
+    loadNamedAsset('verdant_kit', urls.kit as string, ctx, FAMILY_STANDARD_BLEND.env),
   ]);
   return { bulwark, husk, bolt, heart, nest, kit };
 }
@@ -186,9 +138,14 @@ async function start(): Promise<void> {
   // One manifest read serves the textures and the models. A build without public/assets/manifest.json skips even
   // that read: GitHub Pages answered it with a 404 that Chromium logged as a console error on the live lab.
   const manifest = __HAS_ASSET_MANIFEST__ ? await fetchManifest(BASE) : null;
-  const [brushAtlas, inkNoiseMap] = await Promise.all([loadTexture(manifest, 'brush_strokes'), loadTexture(manifest, 'ink_noise')]);
-  const brush = brushAtlas ?? flat(128);
-  const inkNoise = inkNoiseMap ?? flat(128);
+  // The texture and model loaders (labs/shared/labAssets.ts) and each family's standard blend
+  // (render/assets/familyBlend.ts) are shared with the Asset World, so an asset loads and lights alike on both pages.
+  const [brushAtlas, inkNoiseMap] = await Promise.all([
+    loadManifestTexture(BASE, manifest, 'brush_strokes', 'Style Lab'),
+    loadManifestTexture(BASE, manifest, 'ink_noise', 'Style Lab'),
+  ]);
+  const brush = brushAtlas ?? flatTexture(128);
+  const inkNoise = inkNoiseMap ?? flatTexture(128);
   const paint = createPaintUniforms(theme, dials, brush);
   const inkUniforms = createInkUniforms(dials);
   const ctx: MaterialContext = { paint, hullMaterial: createHullMaterial(inkUniforms), hullLayer: LAYERS.hull };
@@ -239,7 +196,7 @@ async function start(): Promise<void> {
   // threshold into one solid slab, lit or shadowed by sun side alone, which read as a pale vertical smear. At 0 no
   // cloud forms, leaving the painted gradient and sun glow until the atlas brings real cumulus. This keys on the atlas
   // having loaded, not on the manifest listing it, so a listed atlas that fails to load cannot bring the slab back.
-  const skyBrush = brushAtlas ?? flat(0);
+  const skyBrush = brushAtlas ?? flatTexture(0);
   // Anchored to the planet, the painted horizon sits on its limb; without the planet it is flat and floats well above
   // the limb seen from the patch. The fog measures its height fog's altitude from the same sphere.
   const planet = { center: new Vector3(0, -STYLE_PLANET_RADIUS, 0), radius: STYLE_PLANET_RADIUS };
@@ -368,6 +325,12 @@ async function start(): Promise<void> {
       link.download = `style-lab-${state.preset}.png`;
       link.href = renderer.domElement.toDataURL('image/png');
       link.click();
+    },
+    // A dials link, which the Asset World applies over the defaults as this lab does, so it opens in the look on screen.
+    openWorld: () => {
+      const url = new URL('world.html', location.href);
+      url.search = `?dials=${encodeDials(dials)}`;
+      location.assign(url.toString());
     },
   });
   mountReferenceBoard(document.getElementById('board') as HTMLElement, theme);
