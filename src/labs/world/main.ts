@@ -17,23 +17,21 @@ import { VERDANT } from '../../render/themes';
 import { flatTexture, loadManifestTexture, loadNamedAsset } from '../shared/labAssets';
 import { NARROW_SCREEN } from '../style/referenceBoard';
 import { WorldLabels, type LabelSpec } from './labels';
-import { buildAssetWorld, type AssetWorld, type PlacedMember } from './layout';
+import { buildAssetWorld, type AssetWorld } from './layout';
 import { createWorldPanel, type WorldPanelState } from './panel';
-import { coverageGaps, MEMBERS, ZONES } from './registry';
+import { coverageGaps, MEMBERS } from './registry';
 import { createWorldSun } from './sun';
 import {
-  boundsCorners,
-  CHARACTER_FAMILIES,
-  CHARACTERS,
-  FAMILY_LABEL_ROOM_PX,
-  familyLabelAnchor,
-  fitPoints,
-  MEMBER_LABEL_ROOM_PX,
+  frameView,
+  isMemberName,
+  isViewName,
+  labelRule,
+  labelSpecs,
   memberLabelAnchor,
-  membersOf,
   OVERVIEW,
-  pitchOf,
-  type FitPoint,
+  registryOverview,
+  resolveAddress,
+  type OpenView,
   type ViewPose,
 } from './views';
 
@@ -44,9 +42,6 @@ const PAGE = 'Asset World';
 const TURNTABLE_SECONDS = 40;
 /** How long a view chosen in the panel takes to arrive, in seconds; reduced motion and the test handle jump at once. */
 const TRANSITION_SECONDS = 0.8;
-/** The overview shows every member's label only on a screen at least this wide, in CSS pixels; narrower, the labels
- * of 21 members crowd each other, so the overview names the families alone and a family's view names its members. */
-const OVERVIEW_MEMBER_LABELS_MIN_WIDTH = 1280;
 
 // start() fills these in, so a failure at any point can stop the loop and word the banner for when it happened.
 let activeRenderer: WebGLRenderer | null = null;
@@ -80,13 +75,14 @@ async function loadEntries(manifest: Manifest, ctx: MaterialContext): Promise<Ma
   return new Map(loaded.filter((pair): pair is [string, LoadedAsset] => pair !== null));
 }
 
-/** A family placard's key among the labels, apart from the members' names. */
-function familyKey(family: string): string {
-  return `family:${family}`;
-}
-
 function liveHeartText(level: number): string {
   return `Stage ${level} (slider)`;
+}
+
+/** How the banner and the console name the view an address fell back to. */
+function describeView(open: OpenView): string {
+  if (open.member) return `the member ${open.member}`;
+  return open.view === OVERVIEW ? 'the overview' : `the ${open.view} view`;
 }
 
 async function start(): Promise<void> {
@@ -101,8 +97,8 @@ async function start(): Promise<void> {
   // look (the locked edge fade with B3's edge ink and lit saturation), so the page now reads the one locked set.
   const dials: RenderDials = linked ? decodeDials(linked) : { ...DEFAULT_DIALS };
   // Named for what the dials are, not for whether the address has a link: both pages' buttons always write one, and a
-  // link that moves no dial opens the locked look.
-  const lookKind = (Object.keys(DEFAULT_DIALS) as (keyof RenderDials)[]).some((key) => dials[key] !== DEFAULT_DIALS[key]) ? 'link' : 'locked';
+  // link that moves no dial opens the locked look. Read afresh each time, because the test handle moves dials too.
+  const lookKind = (): 'locked' | 'link' => ((Object.keys(DEFAULT_DIALS) as (keyof RenderDials)[]).every((key) => dials[key] === DEFAULT_DIALS[key]) ? 'locked' : 'link');
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const state: WorldPanelState = {
     view: OVERVIEW,
@@ -120,11 +116,23 @@ async function start(): Promise<void> {
 
   const look = document.getElementById('look') as HTMLButtonElement;
   const lookName = look.querySelector('.look-name') as HTMLElement;
-  lookName.textContent = lookKind === 'locked' ? 'Look: Painted-Anime-Inkline 4.0 (locked)' : 'Look: a dials link over the locked defaults';
+  const syncLook = (): void => {
+    lookName.textContent = lookKind() === 'locked' ? 'Look: Painted-Anime-Inkline 4.0 (locked)' : 'Look: a dials link over the locked defaults';
+  };
+  syncLook();
+  // On a phone the note starts closed behind the chip's first line, and a tap opens or closes it. On a wider screen the
+  // note always shows and the chip is no toggle: a click there used to hide the note for good, since nothing reopened
+  // it, and turning a phone past the line kept the other width's state. Crossing the line starts that width afresh.
   const narrow = matchMedia(NARROW_SCREEN);
-  // On a phone the note shows its first line and opens on a tap; on a wider screen it is always open.
-  look.setAttribute('aria-expanded', String(!narrow.matches));
-  look.addEventListener('click', () => look.setAttribute('aria-expanded', String(look.getAttribute('aria-expanded') !== 'true')));
+  const syncLookOpen = (): void => {
+    if (narrow.matches) look.setAttribute('aria-expanded', 'false');
+    else look.removeAttribute('aria-expanded');
+  };
+  syncLookOpen();
+  narrow.addEventListener('change', syncLookOpen);
+  look.addEventListener('click', () => {
+    if (narrow.matches) look.setAttribute('aria-expanded', String(look.getAttribute('aria-expanded') !== 'true'));
+  });
 
   // One manifest read serves the textures and the models; a build without one skips even that (see the Style Lab).
   const manifest = __HAS_ASSET_MANIFEST__ ? await fetchManifest(BASE) : null;
@@ -171,7 +179,6 @@ async function start(): Promise<void> {
     MEMBERS.filter((m) => assets.has(m.entry)),
   );
   scene.add(world.root);
-  const byName = new Map(world.members.map((entry) => [entry.member.name, entry]));
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -196,40 +203,27 @@ async function start(): Promise<void> {
 
   // Labels: a placard under each family's zone, and a label over each member, except a family's only member.
   const labels = new WorldLabels(document.getElementById('labels') as HTMLElement);
-  const familyMembers = (family: string): PlacedMember[] => world.members.filter((entry) => entry.member.family === family);
-  for (const zone of ZONES) {
-    const members = familyMembers(zone.family);
-    if (members.length) labels.add({ key: familyKey(zone.family), kind: 'family', text: zone.label, detail: zone.family, anchor: familyLabelAnchor(members, patch) });
-  }
-  for (const entry of world.members) {
-    const { member } = entry;
-    if (!member.label) continue;
-    const text = member.heartStage === 'live' ? liveHeartText(world.heartLevel()) : member.label;
-    labels.add({ key: member.name, kind: 'member', text, anchor: memberLabelAnchor(entry) });
-  }
+  for (const spec of labelSpecs(world.members, patch)) labels.add(spec);
+  // The same objects the labels carry, so the fits read an anchor the slider moved.
+  const specs = labels.specs();
   const liveHeart = world.members.find((entry) => entry.member.heartStage === 'live');
   state.heartLevel = world.heartLevel();
-  function setHeartLevel(level: number): void {
-    world.setHeartLevel(level);
-    state.heartLevel = world.heartLevel();
-    if (!liveHeart) return;
-    labels.setText(liveHeart.member.name, liveHeartText(state.heartLevel));
-    labels.setAnchor(liveHeart.member.name, memberLabelAnchor(liveHeart));
+  if (liveHeart) labels.setText(liveHeart.member.name, liveHeartText(state.heartLevel));
+
+  // The canvas size, read on resize rather than in every frame.
+  let widthPx = stage.clientWidth;
+  let heightPx = stage.clientHeight;
+  const current = (): OpenView => ({ view: state.view, member: state.member });
+  // The label rule is resolved when what it depends on changes, so the frame loop only calls it.
+  const ruleFor = { view: '', member: '', labels: false, widthPx: -1 };
+  let shows: (spec: LabelSpec) => boolean = () => false;
+  function labelShows(): (spec: LabelSpec) => boolean {
+    if (ruleFor.view !== state.view || ruleFor.member !== state.member || ruleFor.labels !== state.labels || ruleFor.widthPx !== widthPx) {
+      Object.assign(ruleFor, { view: state.view, member: state.member, labels: state.labels, widthPx });
+      shows = labelRule(current(), world.members, { labels: state.labels, widthPx });
+    }
+    return shows;
   }
-  /**
-   * Which labels a view shows. The overview names every family, and on a wide screen every member too; the characters'
-   * view names both character families and their members; a family's view names the family and its members; a member's
-   * view names the member and its family. Other families' names stay off a close view, where they would crowd its edges.
-   */
-  const labelShown = (spec: LabelSpec): boolean => {
-    if (!state.labels) return false;
-    const family = spec.kind === 'family' ? spec.key.slice(familyKey('').length) : byName.get(spec.key)?.member.family;
-    if (!family) return false;
-    if (state.member) return spec.kind === 'family' ? family === byName.get(state.member)?.member.family : spec.key === state.member;
-    if (state.view === OVERVIEW) return spec.kind === 'family' || stage.clientWidth >= OVERVIEW_MEMBER_LABELS_MIN_WIDTH;
-    if (state.view === CHARACTERS) return CHARACTER_FAMILIES.includes(family);
-    return family === state.view;
-  };
 
   // Views. The test handle and the address jump; the panel glides, unless the viewer asked for reduced motion.
   let transition: { from: ViewPose; to: ViewPose; elapsed: number } | null = null;
@@ -241,31 +235,17 @@ async function start(): Promise<void> {
     controls.target.copy(pose.target);
     camera.lookAt(pose.target);
   }
-  /** The points a view keeps in frame: its members' bounds, and the labels it shows with the room each takes. */
-  function framePoints(focusName: string): FitPoint[] | null {
-    const framed = membersOf(focusName, world.members);
-    if (!framed || framed.length === 0) return null;
-    const points: FitPoint[] = boundsCorners(framed).map((point) => ({ point }));
-    if (!state.labels) return points;
-    const families = new Set(framed.map((entry) => entry.member.family));
-    for (const family of families) {
-      const spec = labels.spec(familyKey(family));
-      if (spec && labelShown(spec)) points.push({ point: spec.anchor, belowPx: FAMILY_LABEL_ROOM_PX });
-    }
-    for (const entry of framed) {
-      const spec = labels.spec(entry.member.name);
-      if (spec && labelShown(spec)) points.push({ point: spec.anchor, abovePx: MEMBER_LABEL_ROOM_PX });
-    }
-    return points;
-  }
-  function applyFocus(animate: boolean): boolean {
-    const points = framePoints(focusKey());
-    if (!points) return false;
-    const pose = fitPoints(points, pitchOf(focusKey(), world.members), { fov: camera.fov, aspect: camera.aspect, heightPx: stage.clientHeight });
+  /**
+   * Fits the open view (frameView in views.ts, which the unit test drives), or, when it frames no member because the
+   * assets did not load, the registry's overview, so the camera never stays at the origin inside the ground.
+   */
+  function applyFocus(animate: boolean): void {
+    const lens = { fov: camera.fov, aspect: camera.aspect, heightPx };
+    const pose = frameView(current(), world.members, specs, { labels: state.labels, widthPx }, lens) ?? registryOverview(patch, lens);
     userMoved = false;
+    labels.focus(state.member || null);
     if (animate && !reducedMotion) transition = { from: { position: camera.position.clone(), target: controls.target.clone() }, to: pose, elapsed: 0 };
     else jumpTo(pose);
-    return true;
   }
   /** Keeps the address on the open view, so the bar always holds a link to it (the inspection-view law). */
   function syncAddress(): void {
@@ -277,22 +257,20 @@ async function start(): Promise<void> {
     const query = next.toString();
     history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}`);
   }
-  /** Opens a view by name: the overview, the characters, a family or a member. False for a name that is none. */
-  function focus(name: string, animate = false): boolean {
-    const member = byName.get(name)?.member;
-    if (member) {
-      state.view = member.family;
-      state.member = member.name;
-    } else if (membersOf(name, world.members)) {
-      state.view = name;
-      state.member = '';
-    } else {
-      return false;
-    }
+  function openView(view: OpenView): void {
+    state.view = view.view;
+    state.member = view.member;
     panel.refresh();
-    const done = applyFocus(animate);
+    applyFocus(false);
     syncAddress();
-    return done;
+  }
+  /** The test handle's way in: opens a view or a member by name, and is false for a name that is neither. */
+  function focus(name: string): boolean {
+    const member = isMemberName(name) ? MEMBERS.find((m) => m.name === name) : undefined;
+    if (member) openView({ view: member.family, member: member.name });
+    else if (isViewName(name)) openView({ view: name, member: '' });
+    else return false;
+    return true;
   }
   controls.addEventListener('start', () => {
     // A drag takes the camera from a gliding view, and a resize then leaves the viewer's framing alone.
@@ -300,11 +278,24 @@ async function start(): Promise<void> {
     userMoved = true;
   });
 
+  function setHeartLevel(level: number): void {
+    world.setHeartLevel(level);
+    state.heartLevel = world.heartLevel();
+    if (!liveHeart) return;
+    labels.setText(liveHeart.member.name, liveHeartText(state.heartLevel));
+    labels.setAnchor(liveHeart.member.name, memberLabelAnchor(liveHeart));
+    // The slider heart's own view follows its growth, as a resize refits a view, unless the viewer has moved the camera:
+    // the view fitted to stage 7 cut off stage 10's crystal and framed stage 0 from twice as far as it needed.
+    if (state.member === liveHeart.member.name && !userMoved) applyFocus(true);
+  }
+
   function resize(): void {
-    camera.aspect = stage.clientWidth / stage.clientHeight;
+    widthPx = stage.clientWidth;
+    heightPx = stage.clientHeight;
+    camera.aspect = widthPx / heightPx;
     camera.updateProjectionMatrix();
-    renderer.setSize(stage.clientWidth, stage.clientHeight);
-    pipeline.setSize(stage.clientWidth, stage.clientHeight);
+    renderer.setSize(widthPx, heightPx);
+    pipeline.setSize(widthPx, heightPx);
     renderer.getDrawingBufferSize(drawing);
     inkUniforms.uResolution.value.copy(drawing);
     // A turned phone refits the open view, unless the viewer has moved the camera since opening it.
@@ -319,6 +310,7 @@ async function start(): Promise<void> {
     syncHulls();
     pipeline.applyDials(dials, theme);
     syncSun();
+    syncLook();
   }
 
   function setTier(name: TierName): void {
@@ -352,18 +344,17 @@ async function start(): Promise<void> {
     },
   });
 
-  // The address opens a member or a family (the inspection-view law); a name that is neither opens the overview and
-  // says so, rather than a blank or a thrown error.
-  const askedMember = params.get('member');
-  const askedFamily = params.get('family');
-  const asked = askedMember ?? askedFamily;
-  if (asked && !focus(asked)) {
-    console.warn(`${PAGE}: no ${askedMember ? 'member' : 'family'} named "${asked}"; opening the overview`);
-    showBanner(`No ${askedMember ? 'member' : 'family'} named "${asked}"; showing the overview.`);
-    focus(OVERVIEW);
-  } else if (!asked) {
-    applyFocus(false);
+  // The address opens a member or a family (the inspection-view law), each parameter read as its own kind; a name that
+  // is neither is named in the console and the banner, and the view falls back to the other parameter or the overview,
+  // with the address rewritten to what opened.
+  const address = resolveAddress(params.get('member'), params.get('family'));
+  if (address.problems.length) {
+    const where = describeView(address.open);
+    for (const problem of address.problems) console.warn(`${PAGE}: ${problem} in the address; opening ${where}`);
+    const said = address.problems.join('; ');
+    showBanner(`${said.charAt(0).toUpperCase()}${said.slice(1)}; showing ${where}.`);
   }
+  openView(address.open);
 
   /** Moves dials as the Style Lab's handle does: each change passes acceptDial, and a refused one is named. */
   function setDials(changes: Record<string, unknown>): SetDialsResult {
@@ -388,17 +379,28 @@ async function start(): Promise<void> {
     page: 'world',
     tier: state.tier,
     assets: manifest !== null && gaps.length === 0 && world.members.length === MEMBERS.length,
-    look: lookKind,
+    get look() {
+      return lookKind();
+    },
     placed: [...new Set(world.members.flatMap((entry) => [entry.member.entry, entry.member.name]))],
     roots: () =>
       world.members.map((entry) => ({
         name: entry.member.name,
         entry: entry.member.entry,
+        node: entry.member.node,
         family: entry.member.family,
+        clip: entry.member.clip,
         position: entry.root.getWorldPosition(new Vector3()).toArray(),
       })),
     surfaceAt: surface,
-    bounds: () => world.members.map((entry) => ({ name: entry.member.name, min: entry.bounds.min.toArray(), max: entry.bounds.max.toArray() })),
+    bounds: () =>
+      world.members.map((entry) => ({
+        name: entry.member.name,
+        min: entry.bounds.min.toArray(),
+        max: entry.bounds.max.toArray(),
+        lowest: entry.lowest.toArray(),
+        top: entry.top.toArray(),
+      })),
     focus: (name: string) => focus(name),
     focused: focusKey,
     gliding: () => transition !== null,
@@ -454,7 +456,7 @@ async function start(): Promise<void> {
       controls.update(frozen ? 0 : Math.min(interval / 1000, 1 / 20));
       sky.follow(camera);
       pipeline.render(dt);
-      labels.update(camera, stage.clientWidth, stage.clientHeight, labelShown);
+      labels.update(camera, widthPx, heightPx, labelShows());
       frames += 1;
       if (frames % 30 === 0) fpsBox.textContent = `${tier.name} tier, frame interval ${frameMs.toFixed(1)} ms`;
       if (frames === 3 && window.__P99__) window.__P99__.ready = true;

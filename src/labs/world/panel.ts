@@ -1,6 +1,7 @@
 import GUI, { type Controller } from 'lil-gui';
 import type { TierName } from '../../render/quality';
 import { NARROW_SCREEN } from '../style/referenceBoard';
+import { HEART_STAGES } from './layout';
 import { MEMBERS, ZONES } from './registry';
 import { CHARACTER_FAMILIES, CHARACTERS, OVERVIEW } from './views';
 
@@ -47,7 +48,6 @@ export function memberOptions(view: string): Record<string, string> {
 }
 
 export interface WorldPanel {
-  gui: GUI;
   /** Rebuilds the member dropdown for the current view and redraws every control from the state. */
   refresh(): void;
 }
@@ -87,14 +87,14 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
   // The frame loop reads the turntable and the labels from the state every frame, so neither toggle needs a handler.
   gui.add(state, 'turntable').name('turntable');
   gui.add(state, 'labels').name('labels');
-  gui.add(state, 'heartLevel', 0, 10, 1).name('slider heart level').onChange((level: number) => handlers.onHeartLevel(level));
+  // The slider's top is the heart's last stage, read from HEART_STAGES rather than kept as a copy that could drift.
+  gui.add(state, 'heartLevel', 0, HEART_STAGES - 1, 1).name('slider heart level').onChange((level: number) => handlers.onHeartLevel(level));
   gui.add(state, 'speed', 0, MAX_ANIMATION_SPEED, 0.05).name('animation speed');
   gui.add(state, 'paused').name('pause animation');
   gui.add(state, 'tier', ['high', 'medium', 'low']).name('quality tier').onChange((tier: TierName) => handlers.onTier(tier));
   gui.add({ open: () => handlers.openStyleLab() }, 'open').name('Open this look in the Style Lab');
 
   return {
-    gui,
     refresh() {
       rebuildMembers();
       for (const controller of gui.controllersRecursive()) controller.updateDisplay();

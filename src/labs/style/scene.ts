@@ -17,6 +17,7 @@ import { attachHull } from '../../render/ink/hull';
 import { LAYERS } from '../../render/layers';
 import { place } from '../../render/terrain/place';
 import type { StylePatch } from '../../render/terrain/stylePatch';
+import { NO_EDGE_PIECES } from '../shared/meadow';
 
 export type BulwarkMode = 'cycle' | 'idle' | 'run' | 'attack';
 export type PresetName = 'hero' | 'strategic' | 'closeup' | 'horizon';
@@ -67,12 +68,6 @@ export const SCATTER_PLAN: readonly ScatterEntry[] = [
   ['grass_tuft', 420, 2.5, 40],
   ['flowers', 70, 3, 36],
 ];
-
-/**
- * Meadow pieces drawn on LAYERS.noEdge alone, out of the screen-space edge pass: on the world layer it outlined every
- * grass cone, silhouette and base line alike, and the open meadow read as scribble. The flowers keep their own hull.
- */
-export const NO_EDGE_PIECES: readonly string[] = ['grass_tuft', 'flowers'];
 
 /**
  * The range each scattered piece's size is drawn from, as a multiple of its size in the kit. The sun's shadow box

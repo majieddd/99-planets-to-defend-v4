@@ -74,9 +74,20 @@
   letter-spacing: 0.04em;
 }
 
-.world-label-detail {
+.world-label-detail,
+.world-label-line {
   font: 400 12px/1.3 var(--font-body);
   color: var(--paper-muted);
+}
+
+/* A member's family name shows under its name only in the member's own view (labels.ts focus()), which shows no family
+   placard; the view keeps the taller label in frame (FOCUSED_MEMBER_LABEL_ROOM_PX in views.ts). */
+.world-label-line {
+  display: none;
+}
+
+.world-label-focused .world-label-line {
+  display: block;
 }
 
 .world-label-member {

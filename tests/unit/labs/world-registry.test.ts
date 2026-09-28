@@ -2,7 +2,11 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { FAMILY_STANDARD_BLEND, standardBlendFor } from '../../../src/render/assets/familyBlend';
 import {
+  BULWARK_ROW_START,
+  CHARACTER_SPACING,
+  CLIPS_NOT_SHOWN,
   coverageGaps,
+  HUSK_ROW_START,
   MEMBERS,
   NON_PLACEABLE,
   requiredPieces,
@@ -20,10 +24,11 @@ interface ShippedManifest extends CoverageManifest {
 const manifest = JSON.parse(readFileSync('public/assets/manifest.json', 'utf8')) as ShippedManifest;
 
 describe('the Asset World registry', () => {
-  it('accounts for every entry of the shipped manifest: each model placed, each placeable and kit piece placed, each texture given a reason', () => {
+  it('accounts for every entry of the shipped manifest: each model placed, each placeable and kit piece placed, each clip looped, each texture given a reason', () => {
     expect(coverageGaps(manifest)).toEqual([]);
     const models = manifest.assets.filter((entry) => entry.kind === 'model');
     for (const entry of models) expect(MEMBERS.some((m) => m.entry === entry.name), entry.name).toBe(true);
+    for (const entry of models) for (const clip of entry.animations) expect(MEMBERS.some((m) => m.entry === entry.name && m.clip === clip.name), `${entry.name} ${clip.name}`).toBe(true);
     const kit = manifest.assets.filter((entry) => entry.family === 'env').flatMap((entry) => entry.nodes);
     expect(kit.length).toBeGreaterThan(0);
     for (const piece of kit) expect(MEMBERS.some((m) => m.node === piece), piece).toBe(true);
@@ -54,6 +59,23 @@ describe('the Asset World registry', () => {
     for (const gap of gaps) expect(gap).toContain('src/labs/world/registry.ts');
   });
 
+  it('fails a clip no member loops by name, unless CLIPS_NOT_SHOWN gives it a reason', () => {
+    const grown: CoverageManifest = {
+      assets: manifest.assets.map((entry) => (entry.name === 'husk' ? { ...entry, animations: [...entry.animations, { name: 'leap' }] } : entry)),
+    };
+    const gaps = coverageGaps(grown);
+    expect(gaps).toEqual([expect.stringMatching(/"husk" has a clip "leap" that no Asset World member loops and CLIPS_NOT_SHOWN/)]);
+    expect(gaps[0]).toContain('src/labs/world/registry.ts');
+    expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, { 'husk/leap': 'a one-off intro, shown in the cutscene lab' })).toEqual([]);
+    // A blank reason is no reason, and a reason for another entry's clip covers nothing here.
+    expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, { 'husk/leap': '  ' })).toHaveLength(1);
+    expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, { 'bulwark/leap': 'Bulwark does not leap' })).toHaveLength(1);
+    // The shipped registry loops every shipped clip, so the table of reasons starts empty.
+    expect(CLIPS_NOT_SHOWN).toEqual({});
+    const withoutIdle = MEMBERS.filter((m) => m.name !== 'husk_idle');
+    expect(coverageGaps(manifest, withoutIdle)).toEqual([expect.stringContaining('"husk" has a clip "idle"')]);
+  });
+
   it('fails a member whose entry left the manifest', () => {
     const shrunk: CoverageManifest = { assets: manifest.assets.filter((entry) => entry.name !== 'nest') };
     expect(coverageGaps(shrunk)).toEqual([expect.stringContaining('member "nest" comes from "nest"')]);
@@ -77,9 +99,9 @@ describe('the Asset World registry', () => {
       if (m.clip) expect(entry.animations.map((clip) => clip.name), m.name).toContain(m.clip);
       if (typeof m.heartStage === 'number') expect(entry.nodes, m.name).toContain(`heart_stage_${String(m.heartStage).padStart(2, '0')}`);
     }
-    // The members the world shows: the Husk walking and attacking, Bulwark idle, running and attacking, the three fixed
-    // heart stages and the slider's heart, and the three tower marks.
-    expect(MEMBERS.filter((m) => m.entry === 'husk').map((m) => m.clip)).toEqual(['walk', 'attack']);
+    // The members the world shows: the Husk idle, walking and attacking, Bulwark idle, running and attacking, the three
+    // fixed heart stages and the slider's heart, and the three tower marks.
+    expect(MEMBERS.filter((m) => m.entry === 'husk').map((m) => m.clip)).toEqual(['idle', 'walk', 'attack']);
     expect(MEMBERS.filter((m) => m.entry === 'bulwark').map((m) => m.clip)).toEqual(['idle', 'run', 'attack']);
     expect(MEMBERS.filter((m) => m.entry === 'worldheart').map((m) => m.heartStage)).toEqual([0, 5, 10, 'live']);
     expect(MEMBERS.filter((m) => m.entry === 'bolt_sentinel').map((m) => m.node)).toEqual(['bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
@@ -100,6 +122,15 @@ describe('the Asset World registry', () => {
       }
     }
     expect(nearest, pair).toBeGreaterThanOrEqual(2.4);
+  });
+
+  it('keeps 4 m between the Husk row and Bulwark row, so the two families read apart', () => {
+    const husk = MEMBERS.filter((m) => m.entry === 'husk');
+    const bulwark = MEMBERS.filter((m) => m.entry === 'bulwark');
+    expect(husk[0]!.s).toBe(HUSK_ROW_START);
+    expect(bulwark[0]!.s).toBe(BULWARK_ROW_START);
+    expect(Math.min(...bulwark.map((m) => m.s)) - Math.max(...husk.map((m) => m.s))).toBeCloseTo(4, 12);
+    for (const row of [husk, bulwark]) for (let i = 1; i < row.length; i++) expect(row[i]!.s - row[i - 1]!.s).toBeCloseTo(CHARACTER_SPACING, 12);
   });
 
   it('maps the view frame onto the tangent plane without stretching it', () => {

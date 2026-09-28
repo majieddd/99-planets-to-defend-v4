@@ -28,8 +28,13 @@ export const TOWER_SPACING = 3.2;
 export const NEST_SPOT = { s: 4.6, d: -9 } as const;
 export const CHARACTER_ROW_DEPTH = 0;
 export const CHARACTER_SPACING = 2.6;
+/**
+ * The Husk's three clips from s -6.4 m and Bulwark's from 2.8 m, 4 m apart. Bulwark's row moved one spacing right
+ * when the idle Husk joined, rather than the Husk's row moving left: at -9 m, past the level clearing, the ground
+ * under a plumb Husk's feet strayed 7.9 cm from level, and here the new idle Husk takes the walking Husk's old spot.
+ */
 export const HUSK_ROW_START = -6.4;
-export const BULWARK_ROW_START = 0.2;
+export const BULWARK_ROW_START = 2.8;
 export const HEART_ROW_DEPTH = 12.5;
 export const HEART_ROW_START = -5.4;
 export const HEART_SPACING = 3.6;
@@ -158,7 +163,7 @@ export const MEMBERS: readonly WorldMember[] = [
   ...kit,
   ...towers,
   member({ name: 'nest', entry: 'nest', family: 'nests', s: NEST_SPOT.s, d: NEST_SPOT.d, lean: LEAN.structure }),
-  ...characters('husk', 'xeno', HUSK_ROW_START, ['walk', 'attack']),
+  ...characters('husk', 'xeno', HUSK_ROW_START, ['idle', 'walk', 'attack']),
   ...characters('bulwark', 'commanders', BULWARK_ROW_START, ['idle', 'run', 'attack']),
   ...hearts,
 ];
@@ -169,6 +174,13 @@ export const NON_PLACEABLE: Readonly<Record<string, string>> = {
   ink_noise: 'the noise the screen-space edge ink wobbles by; used by the ink pass, not shown as a model',
 };
 
+/**
+ * Clips a model exports that no member loops, each keyed `entry/clip` with the reason it is not shown. Every clip is
+ * shown today, so the table is empty; a clip added to a GLB fails the coverage check by name until it has a member or
+ * a reason here.
+ */
+export const CLIPS_NOT_SHOWN: Readonly<Record<string, string>> = {};
+
 /** The part of public/assets/manifest.json the coverage check reads. */
 export interface CoverageManifest {
   assets: readonly {
@@ -176,6 +188,7 @@ export interface CoverageManifest {
     kind: string;
     family: string;
     nodes: readonly string[];
+    animations?: readonly { name: string }[];
     ground?: readonly { node: string | null }[];
   }[];
 }
@@ -193,12 +206,19 @@ export function requiredPieces(entry: CoverageManifest['assets'][number]): strin
 }
 
 /**
- * One sentence per gap between the manifest and the registry, each naming the entry, piece or texture: an empty list
- * means every entry is accounted for. A model with no member, a placeable the world leaves out, a kit piece with no
- * place, and a texture that is neither placed nor given a reason each fail; so does a member whose entry the manifest no
- * longer lists, or whose family disagrees with its entry's.
+ * One sentence per gap between the manifest and the registry, each naming the entry, piece, clip or texture: an empty
+ * list means every entry is accounted for. A model with no member, a placeable the world leaves out, a kit piece with no
+ * place, a clip no member loops and CLIPS_NOT_SHOWN does not explain, and a texture that is neither placed nor given a
+ * reason each fail; so does a member whose entry the manifest no longer lists, or whose family disagrees with its
+ * entry's. The clips were once left out: the Husk's idle shipped in its GLB and the world showed only its walk and
+ * attack, while the blueprint promised every animation.
  */
-export function coverageGaps(manifest: CoverageManifest, members: readonly WorldMember[] = MEMBERS, textures: Readonly<Record<string, string>> = NON_PLACEABLE): string[] {
+export function coverageGaps(
+  manifest: CoverageManifest,
+  members: readonly WorldMember[] = MEMBERS,
+  textures: Readonly<Record<string, string>> = NON_PLACEABLE,
+  clipsNotShown: Readonly<Record<string, string>> = CLIPS_NOT_SHOWN,
+): string[] {
   const gaps: string[] = [];
   const where = 'src/labs/world/registry.ts';
   for (const entry of manifest.assets) {
@@ -219,6 +239,10 @@ export function coverageGaps(manifest: CoverageManifest, members: readonly World
       for (const node of entry.nodes) {
         if (node && !own.some((m) => m.node === node)) gaps.push(`kit piece "${node}" of "${entry.name}" has no layout in the Asset World registry (${where})`);
       }
+    }
+    for (const { name: clip } of entry.animations ?? []) {
+      if (own.some((m) => m.clip === clip) || clipsNotShown[`${entry.name}/${clip}`]?.trim()) continue;
+      gaps.push(`manifest entry "${entry.name}" has a clip "${clip}" that no Asset World member loops and CLIPS_NOT_SHOWN gives no reason for (${where})`);
     }
     for (const m of own) {
       if (m.family !== entry.family) gaps.push(`member "${m.name}" sits in family ${m.family}, but its entry "${entry.name}" is in ${entry.family} (${where})`);

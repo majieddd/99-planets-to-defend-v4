@@ -6,9 +6,13 @@ export type LabelKind = 'family' | 'member';
 export interface LabelSpec {
   key: string;
   kind: LabelKind;
+  /** The family the label belongs to: a placard's own, or a member's. */
+  family: string;
   text: string;
-  /** A smaller second line: the family's key, which `?family=` takes. */
+  /** A placard's smaller second line: the family's key, which `?family=` takes. */
   detail?: string;
+  /** A member label's second line in the member's own view, which shows no placard: its family's name. */
+  line?: string;
   anchor: Vector3;
 }
 
@@ -16,6 +20,7 @@ interface Label {
   spec: LabelSpec;
   node: HTMLElement;
   name: HTMLElement;
+  line: HTMLElement | null;
   shown: boolean;
   x: number;
   y: number;
@@ -26,11 +31,16 @@ export interface LabelReading {
   key: string;
   kind: LabelKind;
   text: string;
+  /** The second line: a placard's family key (which phones hide), or a member's family name in the member's own view. */
+  line: string | null;
   shown: boolean;
   x: number;
   y: number;
   fontPx: number;
 }
+
+/** How far a label must move, in CSS pixels, before its transform is written again. */
+const MOVE_PX = 0.05;
 
 /**
  * DOM labels over the canvas, each carried to a point in the world every frame. They are interface, not paint, so they
@@ -41,6 +51,7 @@ export class WorldLabels {
   private readonly labels = new Map<string, Label>();
   private readonly view = new Vector3();
   private readonly ndc = new Vector3();
+  private focused: Label | null = null;
 
   constructor(private readonly host: HTMLElement) {}
 
@@ -58,13 +69,20 @@ export class WorldLabels {
       detail.textContent = spec.detail;
       node.appendChild(detail);
     }
+    let line: HTMLElement | null = null;
+    if (spec.line) {
+      line = document.createElement('span');
+      line.className = 'world-label-line';
+      line.textContent = spec.line;
+      node.appendChild(line);
+    }
     node.hidden = true;
     this.host.appendChild(node);
-    this.labels.set(spec.key, { spec, node, name, shown: false, x: 0, y: 0 });
+    this.labels.set(spec.key, { spec, node, name, line, shown: false, x: Number.NaN, y: Number.NaN });
   }
 
-  spec(key: string): LabelSpec | undefined {
-    return this.labels.get(key)?.spec;
+  specs(): LabelSpec[] {
+    return [...this.labels.values()].map((label) => label.spec);
   }
 
   setText(key: string, text: string): void {
@@ -78,14 +96,26 @@ export class WorldLabels {
     this.labels.get(key)?.spec.anchor.copy(anchor);
   }
 
+  /** Shows the second line of one member's label, the member whose own view is open, or of none. */
+  focus(key: string | null): void {
+    const next = (key && this.labels.get(key)) || null;
+    if (next === this.focused) return;
+    this.focused?.node.classList.remove('world-label-focused');
+    next?.node.classList.add('world-label-focused');
+    this.focused = next;
+  }
+
   /**
-   * Places every label the policy wants shown over its anchor, and hides the rest along with any whose anchor is behind
-   * the camera or off the canvas. Only transform and the hidden flag change, so a frame never lays out the page.
+   * Places every label the view shows over its anchor, and hides the rest along with any whose anchor is behind the
+   * camera or off the canvas. Only transform and the hidden flag change, so a frame never lays out the page, and a label
+   * that has not moved keeps its transform, so a still camera writes no styles and builds no strings.
    */
-  update(camera: PerspectiveCamera, width: number, height: number, wanted: (spec: LabelSpec) => boolean): void {
+  update(camera: PerspectiveCamera, width: number, height: number, shows: (spec: LabelSpec) => boolean): void {
     camera.updateMatrixWorld();
     for (const label of this.labels.values()) {
-      let shown = wanted(label.spec);
+      let shown = shows(label.spec);
+      let x = label.x;
+      let y = label.y;
       if (shown) {
         this.view.copy(label.spec.anchor).applyMatrix4(camera.matrixWorldInverse);
         shown = this.view.z < -camera.near;
@@ -93,11 +123,15 @@ export class WorldLabels {
       if (shown) {
         this.ndc.copy(label.spec.anchor).project(camera);
         shown = Math.abs(this.ndc.x) <= 1 && Math.abs(this.ndc.y) <= 1;
-        label.x = ((this.ndc.x + 1) / 2) * width;
-        label.y = ((1 - this.ndc.y) / 2) * height;
+        x = ((this.ndc.x + 1) / 2) * width;
+        y = ((1 - this.ndc.y) / 2) * height;
       }
-      const rise = label.spec.kind === 'member' ? '-100%' : '0';
-      if (shown) label.node.style.transform = `translate3d(${label.x.toFixed(1)}px, ${label.y.toFixed(1)}px, 0) translate(-50%, ${rise})`;
+      if (shown && !(Math.abs(x - label.x) < MOVE_PX && Math.abs(y - label.y) < MOVE_PX)) {
+        const rise = label.spec.kind === 'member' ? '-100%' : '0';
+        label.node.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, ${rise})`;
+        label.x = x;
+        label.y = y;
+      }
       if (shown !== label.shown) {
         label.node.hidden = !shown;
         label.shown = shown;
@@ -110,6 +144,7 @@ export class WorldLabels {
       key: label.spec.key,
       kind: label.spec.kind,
       text: label.spec.text,
+      line: label.spec.kind === 'family' ? (label.spec.detail ?? null) : label === this.focused ? (label.spec.line ?? null) : null,
       shown: label.shown,
       x: label.x,
       y: label.y,
