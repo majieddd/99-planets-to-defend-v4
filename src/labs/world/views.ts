@@ -2,7 +2,7 @@ import { Box3, PerspectiveCamera, Vector3 } from 'three';
 import type { Ground } from '../../render/terrain/place';
 import type { LabelSpec } from './labels';
 import type { PlacedMember } from './layout';
-import { fromTangent, MEMBERS, toTangent, TOWARD_CAMERAS, ZONES } from './registry';
+import { fromTangent, MEMBERS, PIP_ZONE, toTangent, TOWARD_CAMERAS, ZONES } from './registry';
 
 /**
  * How far above the horizontal each kind of view looks down, in degrees: the overview high enough that no row hides the
@@ -33,8 +33,8 @@ export const MEMBER_LABEL_ROOM_PX = 36;
 export const FOCUSED_MEMBER_LABEL_ROOM_PX = 52;
 export const FAMILY_LABEL_ROOM_PX = 56;
 /**
- * The overview names every member only on a screen at least this wide, in CSS pixels; narrower, the 21 member labels
- * (22 members, but the nest, its family's only member, has none) crowd each other, so the overview names the families
+ * The overview names every member only on a screen at least this wide, in CSS pixels; narrower, the 24 member labels
+ * (25 members, but the nest, its family's only member, has none) crowd each other, so the overview names the families
  * alone and a family's view names its members.
  */
 export const OVERVIEW_MEMBER_LABELS_MIN_WIDTH = 1280;
@@ -49,9 +49,10 @@ export const FAMILY_MEMBER_LABELS_MIN_WIDTH: Readonly<Record<string, number>> = 
 
 /** The views the page opens, besides one per family and one per member. */
 export const OVERVIEW = 'overview';
-/** The Husk's and Bulwark's rows together, the page's one view of every character clip at once. */
+/** The Husk's, Bulwark's and Pip-A's rows together, the page's one view of every character clip at once. */
 export const CHARACTERS = 'characters';
-export const CHARACTER_FAMILIES: readonly string[] = ['xeno', 'commanders'];
+/** The zones the characters' view frames, by zone key (a member's `zone`), so Pip-A's preview zone joins the Husk and Bulwark. */
+export const CHARACTER_FAMILIES: readonly string[] = ['xeno', 'commanders', PIP_ZONE];
 
 export interface ViewPose {
   position: Vector3;
@@ -100,8 +101,8 @@ export function isViewName(name: string): boolean {
 /** The members a view frames, or null for a name that is no view. */
 export function membersOf(focus: string, members: readonly PlacedMember[]): PlacedMember[] | null {
   if (focus === OVERVIEW) return [...members];
-  if (focus === CHARACTERS) return members.filter((entry) => CHARACTER_FAMILIES.includes(entry.member.family));
-  if (ZONES.some((zone) => zone.family === focus)) return members.filter((entry) => entry.member.family === focus);
+  if (focus === CHARACTERS) return members.filter((entry) => CHARACTER_FAMILIES.includes(entry.member.zone));
+  if (ZONES.some((zone) => zone.family === focus)) return members.filter((entry) => entry.member.zone === focus);
   const one = members.find((entry) => entry.member.name === focus);
   return one ? [one] : null;
 }
@@ -166,14 +167,15 @@ export function familyLabelAnchor(members: readonly PlacedMember[], ground: Grou
 export function labelSpecs(members: readonly PlacedMember[], ground: Ground): LabelSpec[] {
   const specs: LabelSpec[] = [];
   for (const zone of ZONES) {
-    const own = members.filter((entry) => entry.member.family === zone.family);
+    const own = members.filter((entry) => entry.member.zone === zone.family);
     if (own.length) specs.push({ key: familyLabelKey(zone.family), kind: 'family', family: zone.family, text: zone.label, detail: zone.family, anchor: familyLabelAnchor(own, ground) });
   }
   for (const entry of members) {
     const { member } = entry;
     if (!member.label) continue;
-    const zone = ZONES.find((candidate) => candidate.family === member.family);
-    specs.push({ key: member.name, kind: 'member', family: member.family, text: member.label, line: zone?.label ?? member.family, anchor: memberLabelAnchor(entry) });
+    // A label belongs to its member's zone, which names it: Pip-A's "Idle" reads "Pip-A (commander preview)", not "Bulwark".
+    const zone = ZONES.find((candidate) => candidate.family === member.zone);
+    specs.push({ key: member.name, kind: 'member', family: member.zone, text: member.label, line: zone?.label ?? member.zone, anchor: memberLabelAnchor(entry) });
   }
   return specs;
 }
@@ -193,8 +195,8 @@ export function labelRule(open: OpenView, members: readonly PlacedMember[], cont
   if (open.member) {
     const entry = members.find((candidate) => candidate.member.name === open.member);
     if (!entry) return () => false;
-    const { family, label } = entry.member;
-    return label ? (spec) => spec.kind === 'member' && spec.key === open.member : (spec) => spec.kind === 'family' && spec.family === family;
+    const { zone, label } = entry.member;
+    return label ? (spec) => spec.kind === 'member' && spec.key === open.member : (spec) => spec.kind === 'family' && spec.family === zone;
   }
   if (open.view === OVERVIEW) {
     const everyMember = context.widthPx >= OVERVIEW_MEMBER_LABELS_MIN_WIDTH;
@@ -322,7 +324,7 @@ export function resolveAddress(member: string | null, family: string | null): Ad
   let open: OpenView | null = null;
   if (member) {
     const found = MEMBERS.find((m) => m.name === member);
-    if (found) open = { view: found.family, member: found.name };
+    if (found) open = { view: found.zone, member: found.name };
     else problems.push(`no member named "${member}"`);
   }
   if (family) {

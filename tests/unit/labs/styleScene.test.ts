@@ -2,15 +2,19 @@ import { readFileSync } from 'node:fs';
 import {
   AnimationClip,
   Box3,
+  CapsuleGeometry,
   Color,
+  Float32BufferAttribute,
+  Group,
   InstancedMesh,
   Line3,
   Matrix4,
+  Mesh as ThreeMesh,
+  MeshStandardMaterial,
   NumberKeyframeTrack,
   Quaternion,
   Vector3,
   type BoxGeometry,
-  type CapsuleGeometry,
   type Mesh,
   type Object3D,
   type ShaderMaterial,
@@ -34,7 +38,7 @@ import {
   type StyleAssets,
   type StyleScene,
 } from '../../../src/labs/style/scene';
-import type { MaterialContext } from '../../../src/render/assets/loadAsset';
+import { paintAndInk, type LoadedAsset, type MaterialContext } from '../../../src/render/assets/loadAsset';
 import { DEFAULT_DIALS } from '../../../src/render/defaults';
 import { createHullMaterial, createInkUniforms } from '../../../src/render/ink/hull';
 import { LAYERS } from '../../../src/render/layers';
@@ -752,5 +756,92 @@ describe('buildStyleScene', () => {
     expect(Math.max(...trace.slice(12).map(Math.abs))).toBeLessThan(1e-9);
     step(style, 0.95); // 2.5 s: the strike crossfaded in from idle and holds its last frame
     expect(body.position.x).toBeCloseTo(1, 9);
+  });
+});
+
+/**
+ * A Pip-A stand-in: a body carrying the five face morphs, with idle and run clips that hold it at their own x, and no
+ * attack clip, as the shipped Pip-A has none yet.
+ */
+function pipStandIn(x: { idle: number; run: number }): LoadedAsset {
+  const geometry = new CapsuleGeometry(0.25, 1.2).translate(0, 0.85, 0);
+  const count = geometry.getAttribute('position').count;
+  geometry.morphAttributes['position'] = ['blink_L', 'blink_R', 'smile', 'brows_up', 'pucker'].map((name) => {
+    const target = new Float32BufferAttribute(new Float32Array(count * 3), 3);
+    target.name = name;
+    return target;
+  });
+  geometry.morphTargetsRelative = true;
+  const body = new ThreeMesh(geometry, new MeshStandardMaterial());
+  body.name = 'pip_body';
+  const root = new Group();
+  root.add(body);
+  paintAndInk(root, ctx, 0.35);
+  const pose = (value: number, duration: number) => new NumberKeyframeTrack('pip_body.position[x]', [0, duration], [value, value]);
+  return { root, animations: [new AnimationClip('idle', 1.6, [pose(x.idle, 1.6)]), new AnimationClip('run', 0.7, [pose(x.run, 0.7)])] };
+}
+
+describe('the Style Lab commander', () => {
+  it('shows Bulwark by default, and Pip-A in his place, home pose and cycle once switched, and Bulwark again after', () => {
+    const { assets, style } = build();
+    expect(style.commander()).toBe('bulwark');
+    expect(style.setFace({ blink: 1 })).toBe(false);
+    const pip = pipStandIn({ idle: 0, run: 2 });
+    style.setCommander('pip', pip);
+    expect(style.commander()).toBe('pip');
+    expect(pip.root.parent).toBe(style.root);
+    expect(assets.bulwark.root.parent).toBeNull();
+    // He stands where Bulwark stood, facing as Bulwark faced, before any update.
+    const home = patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position;
+    expect(worldPosition(pip.root).distanceTo(home)).toBeLessThan(1e-9);
+    expect(style.setFace({ blink: 1, smile: 1 })).toBe(true);
+    style.setFace(null);
+    style.setCommander('bulwark');
+    expect(assets.bulwark.root.parent).toBe(style.root);
+    expect(pip.root.parent).toBeNull();
+    // The second switch reuses the actor the first one built, so no asset is needed.
+    expect(() => style.setCommander('pip')).not.toThrow();
+    expect(pip.root.parent).toBe(style.root);
+  });
+
+  it('holds Pip-A\'s idle where Bulwark strikes, in the cycle and in attack mode, since he has no attack clip yet', () => {
+    const { style } = build();
+    const pip = pipStandIn({ idle: 0.5, run: 2 });
+    const body = pip.root.getObjectByName('pip_body')!;
+    style.setCommander('pip', pip);
+    const trace: number[] = [];
+    // Through the cycle's strike window, 3 to 3.85 s, and on to 6 s, where the lap begins.
+    for (let i = 0; i < 355; i++) {
+      style.update(DT);
+      trace.push(body.position.x);
+    }
+    expect(Math.max(...trace.slice(10).map((x) => Math.abs(x - 0.5)))).toBeLessThan(1e-9);
+    style.setBulwarkMode('attack');
+    step(style, 5);
+    expect(body.position.x).toBeCloseTo(0.5, 9);
+    // And his lap still runs.
+    style.setBulwarkMode('run');
+    step(style, 1);
+    expect(body.position.x).toBeCloseTo(2, 9);
+  });
+
+  it('blinks Pip-A after his mixer and holds the blink while frozen', () => {
+    const { style } = build();
+    const pip = pipStandIn({ idle: 0, run: 0 });
+    const body = pip.root.getObjectByName('pip_body') as Mesh;
+    style.setCommander('pip', pip);
+    const lids = () => body.morphTargetInfluences![body.morphTargetDictionary!['blink_L']!]!;
+    let most = 0;
+    for (let i = 0; i < 360; i++) {
+      style.update(DT);
+      most = Math.max(most, lids());
+    }
+    expect(most).toBeGreaterThan(0.9);
+    style.setFace({ blink: 0.5 });
+    style.setFrozen(true);
+    step(style, 1);
+    expect(lids()).toBe(0.5);
+    style.setFace(null);
+    style.setFrozen(false);
   });
 });

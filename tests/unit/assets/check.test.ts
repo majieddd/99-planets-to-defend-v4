@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateAsset, fileFailures } from '../../../tools/assets/check.mjs';
+import { evaluateAsset, fileFailures, pendingClips, stalePending } from '../../../tools/assets/check.mjs';
 
 const budgets = {
   xeno: { tris: 9000, bones: 24, texture: 1024, ink: true, animations: ['idle', 'walk', 'attack'] },
@@ -68,6 +68,69 @@ describe('evaluateAsset', () => {
   it('skips textures and flags unknown families', () => {
     expect(evaluateAsset({ ...husk(), kind: 'texture' }, budgets, timings)).toEqual([]);
     expect(evaluateAsset({ ...husk(), family: 'nope' }, budgets, timings)).toEqual(["no budget for family 'nope'"]);
+  });
+});
+
+describe('morph targets and pending clips', () => {
+  const FACE = ['blink_L', 'blink_R', 'smile', 'brows_up', 'pucker'];
+  const commanders = {
+    commanders: {
+      tris: 24000,
+      bones: 32,
+      texture: 1024,
+      ink: true,
+      animations: ['idle', 'run', 'attack'],
+      morphs: FACE,
+      pending: { commander_pip: { attack: 'phase B' } },
+    },
+    xeno: budgets.xeno,
+  };
+  function pip(overrides: Record<string, unknown> = {}) {
+    return husk({
+      name: 'commander_pip',
+      family: 'commanders',
+      file: 'commanders/commander_pip.glb',
+      tris: 21799,
+      bones: 24,
+      morphs: FACE,
+      animations: [
+        { name: 'idle', duration: 1.6, loop: true, strike: null, exportedDuration: 1.6 },
+        { name: 'run', duration: 0.7, loop: true, strike: null, exportedDuration: 0.7 },
+      ],
+      ground: [{ node: null, minY: 0, sink: 0 }],
+      ...overrides,
+    });
+  }
+
+  it('passes the five face morphs on a commander, and fails any morph its family does not name', () => {
+    expect(evaluateAsset(pip(), commanders, timings)).toEqual([]);
+    expect(evaluateAsset(pip({ morphs: [...FACE, 'foot_curl'] }), commanders, timings)).toEqual([
+      "morph targets foot_curl not in the commanders budget's list (blink_L, blink_R, smile, brows_up, pucker)",
+    ]);
+    // A family that names no morphs takes none, and an entry that records none passes whatever its family allows.
+    expect(evaluateAsset(husk({ morphs: ['blink_L'] }), commanders, timings)).toEqual(["morph targets blink_L not in the xeno budget's list (none)"]);
+    expect(evaluateAsset(husk(), commanders, timings)).toEqual([]);
+  });
+
+  it('lets one named model lack a required clip while its reason stands, and reports the clip as pending', () => {
+    expect(pendingClips(pip(), commanders.commanders)).toEqual([{ clip: 'attack', reason: 'phase B' }]);
+    // Any other commander still needs the clip, and so does Pip-A with a blank reason.
+    expect(evaluateAsset(pip({ name: 'commander_bo' }), commanders, timings)).toEqual(["missing animation 'attack'"]);
+    const blank = { ...commanders, commanders: { ...commanders.commanders, pending: { commander_pip: { attack: '  ' } } } };
+    expect(evaluateAsset(pip(), blank, timings)).toEqual(["missing animation 'attack'"]);
+    expect(pendingClips(pip(), blank.commanders)).toEqual([]);
+  });
+
+  it('fails a pending reason once its clip ships, once the family stops requiring it, or once its model leaves the manifest', () => {
+    const shipped = pip({ animations: [...(pip().animations as object[]), { name: 'attack', duration: 0.9, loop: false, strike: 0.3, exportedDuration: 0.9 }] });
+    expect(evaluateAsset(shipped, commanders, timings)).toEqual(["animation 'attack' ships, so its pending reason in budgets.json must go"]);
+    expect(pendingClips(shipped, commanders.commanders)).toEqual([]);
+    const dance = { ...commanders, commanders: { ...commanders.commanders, pending: { commander_pip: { attack: 'phase B', dance: 'never' } } } };
+    expect(evaluateAsset(pip(), dance, timings)).toEqual(["pending clip 'dance' is not one the commanders budget requires; remove its reason"]);
+    expect(stalePending({ assets: [pip()] }, commanders)).toEqual([]);
+    expect(stalePending({ assets: [husk()] }, commanders)).toEqual([
+      "budgets.json commanders.pending names 'commander_pip', which the manifest does not list as a commanders model; remove it",
+    ]);
   });
 });
 

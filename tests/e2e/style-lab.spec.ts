@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { DEFAULT_DIALS } from '../../src/render/defaults';
 import type { SetDialsResult } from '../../src/render/dialsCodec';
 
 interface AuditResult {
@@ -204,6 +205,77 @@ test.describe('the style lab test handle', () => {
     console.log(last);
     expect(unfrozen, last).toBeGreaterThan(0.02);
     expect(errors).toEqual([]);
+  });
+});
+
+// Pip-A, the M1 commander preview, joins the lab by the address or the panel; Bulwark stays the default the locked look
+// was approved on, so a lab opened without the parameter never loads Pip-A at all.
+test.describe('the style lab commander toggle', () => {
+  test.use({ viewport: { width: 480, height: 270 } });
+
+  test('opens on Pip-A from the address, switches back to Bulwark, and names a commander it does not know', async ({ page }) => {
+    test.setTimeout(240_000);
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const requests: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+      if (message.type() === 'warning') warnings.push(message.text());
+    });
+    page.on('pageerror', (error) => errors.push(String(error)));
+    page.on('request', (request) => requests.push(request.url()));
+    await page.goto('./labs/style.html?tier=low&freeze=1');
+    await page.waitForFunction(() => window.__P99__?.ready === true, undefined, { timeout: 180_000 });
+    const byDefault = await page.evaluate(() => (window.__P99__!['commander'] as () => string)());
+    const pipRequestedByDefault = requests.some((url) => url.includes('commander_pip'));
+
+    await page.goto('./labs/style.html?tier=low&freeze=1&commander=pip');
+    await page.waitForFunction(() => window.__P99__?.ready === true, undefined, { timeout: 180_000 });
+    const pip = await page.evaluate(async () => {
+      const p99 = window.__P99__!;
+      const call = <T>(name: string, ...args: unknown[]) => (p99[name] as (...a: unknown[]) => T)(...args);
+      const read = {
+        shown: call<string>('commander'),
+        panel:
+          [...document.querySelectorAll('.lil-gui .lil-controller')]
+            .find((controller) => controller.querySelector('.lil-name')?.textContent === 'commander')
+            ?.querySelector('select')?.selectedOptions[0]?.textContent ?? null,
+        face: call<boolean>('setFace', { blink: 1 }),
+        faceReleased: call<boolean>('setFace', null),
+        dials: call<Record<string, unknown>>('dials'),
+        back: '',
+        bulwarkFace: true,
+      };
+      read.back = await call<Promise<string>>('setCommander', 'bulwark');
+      read.bulwarkFace = call<boolean>('setFace', { blink: 1 });
+      return read;
+    });
+
+    await page.goto('./labs/style.html?tier=low&freeze=1&commander=nope');
+    await page.waitForFunction(() => window.__P99__?.ready === true, undefined, { timeout: 180_000 });
+    const unknown = await page.evaluate(() => ({
+      shown: (window.__P99__!['commander'] as () => string)(),
+      banner: document.getElementById('banner')!.hidden ? '' : document.getElementById('banner')!.textContent,
+    }));
+    const line =
+      `style lab commander [${test.info().project.name}]: default ${byDefault} (Pip-A requested: ${pipRequestedByDefault}), ` +
+      `?commander=pip shows ${pip.shown} (panel "${pip.panel}"), face pose ${pip.face}/${pip.faceReleased}, back to ${pip.back} ` +
+      `(face ${pip.bulwarkFace}), ?commander=nope shows ${unknown.shown} with "${unknown.banner}", ${errors.length} console errors`;
+    console.log(line);
+    expect(byDefault, line).toBe('bulwark');
+    expect(pipRequestedByDefault, line).toBe(false);
+    expect(pip.shown, line).toBe('pip');
+    expect(pip.panel, line).toBe('Pip-A (preview)');
+    expect(pip.face && pip.faceReleased, line).toBe(true);
+    // The address changes the commander, never the look.
+    expect(pip.dials, line).toEqual(DEFAULT_DIALS);
+    expect(pip.back, line).toBe('bulwark');
+    // Bulwark's visored rig has no face to pose.
+    expect(pip.bulwarkFace, line).toBe(false);
+    expect(unknown.shown, line).toBe('bulwark');
+    expect(unknown.banner, line).toBe('No commander named "nope"; showing Bulwark.');
+    expect(warnings.filter((text) => text.includes('Style Lab: No commander named "nope"')), line).toHaveLength(1);
+    expect(errors, line).toEqual([]);
   });
 });
 

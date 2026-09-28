@@ -169,6 +169,23 @@ describe('the face driver', () => {
     expect(driver.blink).toBeCloseTo(1, 6);
   });
 
+  it('holds the lids at a set weight for an evidence frame, frozen or not, and hands them back to the blink it kept timing', () => {
+    const body = head();
+    const driver = new FaceDriver(new Group().add(body), { random: draws(0, 0.9) });
+    driver.setFrozen(true);
+    driver.setBlinkHold(1);
+    expect([driver.blink, weight(body, 'blink_L'), weight(body, 'blink_R')]).toEqual([1, 1, 1]);
+    driver.setBlinkHold(1.7);
+    expect(weight(body, 'blink_L')).toBe(1);
+    driver.setFrozen(false);
+    // The auto-blink runs on under the hold: 2.5 s in, the first blink is half closed, and the lids stay held shut.
+    driver.update(2.5 + BLINK_CLOSE_SECONDS / 2);
+    expect(weight(body, 'blink_R')).toBe(1);
+    driver.setBlinkHold(null);
+    expect(driver.blink).toBeCloseTo(0.5, 6);
+    expect(weight(body, 'blink_L')).toBeCloseTo(0.5, 6);
+  });
+
   it('moves the ink with the lid, because the hull shares the body\'s influences', () => {
     const body = head();
     body.geometry.setAttribute('inkWidth', new Float32BufferAttribute(new Array(body.geometry.getAttribute('position').count).fill(0.5), 1));

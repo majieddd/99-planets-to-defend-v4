@@ -2,7 +2,7 @@ import { DirectionalLight, PerspectiveCamera, Scene, Vector2, Vector3, type WebG
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FAMILY_STANDARD_BLEND } from '../../render/assets/familyBlend';
 import { assetUrl, fetchManifest, type Manifest } from '../../render/assets/manifest';
-import type { MaterialContext } from '../../render/assets/loadAsset';
+import type { LoadedAsset, MaterialContext } from '../../render/assets/loadAsset';
 import { DEFAULT_DIALS, type RenderDials } from '../../render/defaults';
 import { acceptDial, decodeDials, encodeDials, type SetDialsResult } from '../../render/dialsCodec';
 import { applyInkDials, createHullMaterial, createInkUniforms } from '../../render/ink/hull';
@@ -19,7 +19,8 @@ import { auditPixels, mutationProof } from './audit';
 import { createDialsPanel, type LabState } from './dials';
 import { placeholderAssets } from './placeholders';
 import { mountReferenceBoard } from './referenceBoard';
-import { applyPreset, buildStyleScene, PRESETS, SCATTER_PLAN, type PresetName, type StyleAssets } from './scene';
+import type { FacePose } from '../shared/commanderFace';
+import { applyPreset, buildStyleScene, COMMANDERS, PRESETS, SCATTER_PLAN, type CommanderKind, type PresetName, type StyleAssets } from './scene';
 
 const BASE = import.meta.env.BASE_URL;
 const theme = VERDANT;
@@ -110,6 +111,22 @@ function parsePreset(value: string | null): PresetName {
   return PRESETS.find((name) => name === value) ?? 'hero';
 }
 
+/**
+ * The commander `?commander=` names, `pip` for Pip-A and `bulwark` (or nothing) for the locked Bulwark. Any other name is
+ * named in the console and the banner, and the lab shows Bulwark, as the Asset World falls back on a bad address.
+ */
+function parseCommander(value: string | null): { kind: CommanderKind; problem: string | null } {
+  if (!value) return { kind: 'bulwark', problem: null };
+  const kind = COMMANDERS.find((name) => name === value);
+  return kind ? { kind, problem: null } : { kind: 'bulwark', problem: `no commander named "${value}"; showing Bulwark` };
+}
+
+/** Pip-A's model, the M1 commander preview, loaded with the commanders' standard blend, or null when the manifest lacks it. */
+async function loadPip(manifest: Manifest | null, ctx: MaterialContext): Promise<LoadedAsset | null> {
+  const url = manifest ? assetUrl(BASE, manifest, 'commander_pip') : null;
+  return url ? loadNamedAsset('commander_pip', url, ctx, FAMILY_STANDARD_BLEND.commanders) : null;
+}
+
 function readPixels(canvas: HTMLCanvasElement, width: number, height: number): Uint8ClampedArray {
   const small = document.createElement('canvas');
   small.width = width;
@@ -123,11 +140,13 @@ async function start(): Promise<void> {
   const stage = document.getElementById('stage') as HTMLElement;
   const params = new URLSearchParams(location.search);
   const probe = document.createElement('canvas').getContext('webgl2');
+  const commanderParam = parseCommander(params.get('commander'));
   const state: LabState = {
     tier: parseTier(params.get('tier')) ?? (probe ? detectTier(probe, navigator.userAgent) : 'low'),
     preset: parsePreset(params.get('preset')),
     heartStage: 3,
     bulwark: 'cycle',
+    commander: commanderParam.kind,
   };
   const dials: RenderDials = params.get('dials') ? decodeDials(params.get('dials') as string) : { ...DEFAULT_DIALS };
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -215,6 +234,26 @@ async function start(): Promise<void> {
   const style = buildStyleScene(patch, loaded ?? placeholderAssets(ctx), ctx, tier.scatterScale);
   scene.add(style.root);
 
+  // Pip-A loads only when the address asks for him or the panel switches to him, so the default lab loads and draws
+  // exactly what it drew before he existed. Without the built assets there is no Pip-A to show, and the lab says so.
+  let pipAsset: LoadedAsset | null = null;
+  const note = (text: string): void => {
+    console.warn(`Style Lab: ${text}`);
+    banner.hidden = false;
+    banner.textContent = banner.textContent ? `${banner.textContent}\n${text}` : text;
+  };
+  if (commanderParam.problem) note(`${commanderParam.problem.charAt(0).toUpperCase()}${commanderParam.problem.slice(1)}.`);
+  async function showCommander(kind: CommanderKind): Promise<CommanderKind> {
+    if (kind === 'pip' && !pipAsset) pipAsset = loaded ? await loadPip(manifest, ctx) : null;
+    if (kind === 'pip' && !pipAsset) {
+      note('Pip-A is not in the built assets (npm run assets); showing Bulwark.');
+      style.setCommander('bulwark');
+    } else style.setCommander(kind, pipAsset ?? undefined);
+    state.commander = style.commander();
+    return state.commander;
+  }
+  if (state.commander === 'pip') await showCommander('pip');
+
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   // Past about 1 km the depth buffer can no longer keep the patch edge in front of the low planet 2 cm beneath it,
@@ -298,6 +337,14 @@ async function start(): Promise<void> {
     onPreset: (preset) => applyPreset(style, preset, camera, controls.target),
     onHeartStage: (level) => style.setHeartStage(level),
     onBulwark: (mode) => style.setBulwarkMode(mode),
+    onCommander: (kind) => {
+      showCommander(kind).then(
+        () => {
+          for (const controller of gui.controllersRecursive()) controller.updateDisplay();
+        },
+        (error: unknown) => fail(error),
+      );
+    },
     audit: runAudit,
     copyDials: () => {
       const url = `${location.origin}${location.pathname}?dials=${encodeDials(dials)}`;
@@ -360,6 +407,8 @@ async function start(): Promise<void> {
   // differ in one dial differ only by what that dial does (the halo and fog measurements subtract such pairs). Opened
   // with ?freeze=1 the scene never leaves the pose it is built in, so frames from separate page loads line up too.
   let frozen = params.get('freeze') === '1';
+  // A shown commander's face holds with the scene, a blink included, so frames from separate loads line up.
+  style.setFrozen(frozen);
   const fpsBox = document.getElementById('fps') as HTMLElement;
   let last = performance.now();
   let frames = 0;
@@ -376,7 +425,17 @@ async function start(): Promise<void> {
     setDials,
     freeze: (on: boolean) => {
       frozen = on;
+      style.setFrozen(on);
     },
+    commander: () => style.commander(),
+    // Switches the commander as the panel does and resolves to the one shown, Bulwark when Pip-A is not built.
+    setCommander: async (kind: CommanderKind) => {
+      const shown = await showCommander(kind);
+      for (const controller of gui.controllersRecursive()) controller.updateDisplay();
+      return shown;
+    },
+    // A face pose held on the shown commander for an evidence frame, or null to hand it back to his blink.
+    setFace: (pose: FacePose | null) => style.setFace(pose),
   };
   loopStarted = true;
   renderer.setAnimationLoop(() => {

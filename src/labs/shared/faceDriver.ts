@@ -64,6 +64,7 @@ export class FaceDriver {
   private doublePending = false;
   private frozen = false;
   private closure = 0;
+  private blinkHold: number | null = null;
 
   constructor(root: Object3D, options: FaceDriverOptions) {
     this.random = options.random;
@@ -83,9 +84,18 @@ export class FaceDriver {
     return this.meshes.length > 0 || this.jaw !== null;
   }
 
-  /** How closed the lids are now, from 0 (open) to 1 (shut). */
+  /** How closed the lids are now, from 0 (open) to 1 (shut): the held weight while one is held, else the auto-blink's. */
   get blink(): number {
-    return this.closure;
+    return this.blinkHold ?? this.closure;
+  }
+
+  /**
+   * Holds both lids at a weight from 0 to 1, so a frozen evidence frame can show a closed lid, or with null hands them
+   * back to the auto-blink, whose timing ran on underneath. Like an expression, it applies at once, frozen or not.
+   */
+  setBlinkHold(weight: number | null): void {
+    this.blinkHold = weight === null ? null : clamp01(weight);
+    this.apply();
   }
 
   /**
@@ -161,12 +171,13 @@ export class FaceDriver {
   }
 
   private apply(): void {
+    const lids = this.blink;
     for (const mesh of this.meshes) {
       const dictionary = mesh.morphTargetDictionary as Record<string, number>;
       const influences = mesh.morphTargetInfluences as number[];
       for (const name of BLINK_MORPHS) {
         const index = dictionary[name];
-        if (index !== undefined) influences[index] = this.closure;
+        if (index !== undefined) influences[index] = lids;
       }
       for (const name of EXPRESSION_MORPHS) {
         const index = dictionary[name];

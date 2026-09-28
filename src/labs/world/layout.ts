@@ -1,8 +1,11 @@
 import { AnimationMixer, Box3, Group, LoopRepeat, Vector3, type Mesh, type Object3D } from 'three';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
 import type { LoadedAsset, MaterialContext } from '../../render/assets/loadAsset';
+import { syncHullMorphs } from '../../render/ink/hull';
 import { LAYERS } from '../../render/layers';
 import { place, type Ground } from '../../render/terrain/place';
+import { createCommanderFace, FACE_SEED, faceDemoWeights, holdFacePose, type FacePose } from '../shared/commanderFace';
+import { EXPRESSION_MORPHS, type Expression, type FaceDriver } from '../shared/faceDriver';
 import { NO_EDGE_PIECES } from '../shared/meadow';
 import { LIVE_HEART_START_LEVEL, memberYaw, toTangent, type WorldMember } from './registry';
 
@@ -43,13 +46,40 @@ export interface PlacedMember {
   top: Vector3;
 }
 
+/** A member whose rig carries a face: its driver, and whether its face cycles the expression demo or holds a pose. */
+interface MemberFace {
+  member: WorldMember;
+  root: Object3D;
+  driver: FaceDriver;
+  held: boolean;
+}
+
+/** What the test handle reads of a face: its lids, its expressions, and whether every hull under it shares its morphs. */
+export interface FaceReading {
+  name: string;
+  blink: number;
+  expressions: Record<Expression, number>;
+  hullsShared: boolean;
+}
+
 export interface AssetWorld {
   root: Group;
   members: PlacedMember[];
-  /** Advances the loops and the tower sweeps by `dt` seconds of animation time (already scaled by the speed dial). */
+  /**
+   * Advances the loops, the tower sweeps and the faces by `dt` seconds of animation time (already scaled by the speed
+   * dial). Each face moves after its mixer, which would otherwise write any morph or jaw track its clips carry over it.
+   */
   update(dt: number): void;
   setHeartLevel(level: number): void;
   heartLevel(): number;
+  /** Holds every face while the page is frozen, mid-blink included, as the page's zero step holds the clips. */
+  setFrozen(on: boolean): void;
+  /**
+   * Holds a face pose on a member for an evidence frame (lids and expressions from 0 to 1), or with null hands the face
+   * back to its auto-blink and, for the face member, its demo. False for a name with no face.
+   */
+  setFace(name: string, pose: FacePose | null): boolean;
+  faces(): FaceReading[];
 }
 
 /** The up lines a member's top is read on, as offsets across its up: its own, and LABEL_AXIS_LINES around it. */
@@ -180,7 +210,9 @@ export function buildAssetWorld(ground: Ground, assets: ReadonlyMap<string, Load
   const mixers: AnimationMixer[] = [];
   const turrets: { yaw: Object3D; rest: number; phase: number }[] = [];
   const hearts: { member: PlacedMember; up: Vector3; stages: (Object3D | undefined)[]; live: boolean }[] = [];
+  const faces: MemberFace[] = [];
   let liveLevel = LIVE_HEART_START_LEVEL;
+  let frozen = false;
 
   for (const member of members) {
     const asset = assets.get(member.entry);
@@ -215,6 +247,16 @@ export function buildAssetWorld(ground: Ground, assets: ReadonlyMap<string, Load
       mixer.clipAction(clip).setLoop(LoopRepeat, Infinity).play();
       mixers.push(mixer);
     }
+    // A SkeletonUtils copy's hulls hold sliced copies of its body's morph influences until their first draw re-points
+    // them (syncHullMorphs), so a copy the camera had not yet drawn, Pip-A's run and face members from the towers' view,
+    // read as unshared. Pointing them now makes every instance's ink share its lids from the start.
+    object.traverse((child) => {
+      if ((child as Mesh).isMesh && (child as Mesh).material === ctx.hullMaterial) syncHullMorphs(child);
+    });
+    // Every instance of a rig with a face blinks on its own seeded timing, taken in member order so every load blinks
+    // alike; the driver is made here, before any mixer moves the rig, because it reads the jaw's axis from the bind pose.
+    const driver = createCommanderFace(object, FACE_SEED + faces.length);
+    if (driver) faces.push({ member, root: object, driver, held: false });
     if (member.node?.startsWith('bolt_mk')) {
       const yaw = object.getObjectByName(`${member.node}_yaw`);
       // The three heads sweep a third of a period apart, so the row never moves in step and each reads on its own.
@@ -252,6 +294,14 @@ export function buildAssetWorld(ground: Ground, assets: ReadonlyMap<string, Load
       clock += dt;
       for (const mixer of mixers) mixer.update(dt);
       sweep(clock);
+      for (const face of faces) {
+        // The demo runs on the world's clock, so it opens on neutral and a zero step, frozen or paused, holds it.
+        if (face.member.faceDemo && !face.held && !frozen && dt > 0) {
+          const weights = faceDemoWeights(clock);
+          for (const name of EXPRESSION_MORPHS) face.driver.setExpression(name, weights[name]);
+        }
+        face.driver.update(dt);
+      }
     },
     setHeartLevel(level) {
       liveLevel = Math.min(HEART_STAGES - 1, Math.max(0, Math.round(level)));
@@ -259,5 +309,40 @@ export function buildAssetWorld(ground: Ground, assets: ReadonlyMap<string, Load
       for (const heart of hearts) if (heart.live) measure(heart.member, heart.up, ctx.hullMaterial);
     },
     heartLevel: () => liveLevel,
+    setFrozen(on) {
+      frozen = on;
+      for (const face of faces) face.driver.setFrozen(on);
+    },
+    setFace(name, pose) {
+      const face = faces.find((candidate) => candidate.member.name === name);
+      if (!face) return false;
+      holdFacePose(face.driver, pose);
+      face.held = pose !== null;
+      // Handed back mid-demo, the face takes the demo's weights at once rather than resting until the clock moves.
+      if (!pose && face.member.faceDemo) {
+        const weights = faceDemoWeights(clock);
+        for (const expression of EXPRESSION_MORPHS) face.driver.setExpression(expression, weights[expression]);
+      }
+      return true;
+    },
+    faces: () =>
+      faces.map((face) => {
+        const expressions = Object.fromEntries(EXPRESSION_MORPHS.map((name) => [name, 0])) as Record<Expression, number>;
+        let hullsShared = true;
+        face.root.traverse((object) => {
+          const mesh = object as Mesh;
+          if (mesh.isMesh && mesh.material === ctx.hullMaterial && mesh.morphTargetInfluences) {
+            hullsShared &&= mesh.morphTargetInfluences === (mesh.parent as Mesh | null)?.morphTargetInfluences;
+          }
+        });
+        const body = face.driver.meshes.find((mesh) => mesh.material !== ctx.hullMaterial);
+        if (body?.morphTargetDictionary && body.morphTargetInfluences) {
+          for (const name of EXPRESSION_MORPHS) {
+            const index = body.morphTargetDictionary[name];
+            if (index !== undefined) expressions[name] = body.morphTargetInfluences[index] ?? 0;
+          }
+        }
+        return { name: face.member.name, blink: face.driver.blink, expressions, hullsShared };
+      }),
   };
 }

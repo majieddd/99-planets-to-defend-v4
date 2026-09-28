@@ -3,14 +3,19 @@ import { describe, expect, it } from 'vitest';
 import { FAMILY_STANDARD_BLEND, standardBlendFor } from '../../../src/render/assets/familyBlend';
 import {
   BULWARK_ROW_START,
+  CHARACTER_ROW_DEPTH,
   CHARACTER_SPACING,
   clipHasReason,
   CLIPS_NOT_SHOWN,
   coverageGaps,
   HUSK_ROW_START,
+  LEAN,
   MEMBERS,
   NON_PLACEABLE,
+  PIP_ROW_START,
+  PIP_ZONE,
   requiredPieces,
+  THREE_QUARTER_TURN_DEG,
   toTangent,
   WORLD_REACH,
   ZONES,
@@ -111,6 +116,8 @@ describe('the Asset World registry', () => {
   it('reads the placeables from the ground records: a whole-asset record covers the asset, otherwise each named node', () => {
     const find = (name: string) => manifest.assets.find((entry) => entry.name === name)!;
     expect(requiredPieces(find('bulwark'))).toEqual([]);
+    // Pip-A is placed whole, like Bulwark: his rig's top-level empty is covered by the whole-asset record.
+    expect(requiredPieces(find('commander_pip'))).toEqual([]);
     expect(requiredPieces(find('worldheart'))).toEqual([]);
     expect(requiredPieces(find('bolt_sentinel'))).toEqual(['bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
     expect([...requiredPieces(find('verdant_kit'))].sort()).toEqual([...find('verdant_kit').nodes].sort());
@@ -122,7 +129,9 @@ describe('the Asset World registry', () => {
     for (const m of MEMBERS) {
       const entry = manifest.assets.find((asset) => asset.name === m.entry)!;
       expect(m.family, m.name).toBe(entry.family);
-      expect(ZONES.some((zone) => zone.family === m.family), m.name).toBe(true);
+      expect(ZONES.some((zone) => zone.family === m.zone), m.name).toBe(true);
+      // A member stands in its family's zone unless it is Pip-A's preview, shown apart from the locked Bulwark.
+      expect(m.zone, m.name).toBe(m.entry === 'commander_pip' ? PIP_ZONE : m.family);
       if (m.clip) expect(entry.animations.map((clip) => clip.name), m.name).toContain(m.clip);
       if (typeof m.heartStage === 'number') expect(entry.nodes, m.name).toContain(`heart_stage_${String(m.heartStage).padStart(2, '0')}`);
     }
@@ -130,6 +139,15 @@ describe('the Asset World registry', () => {
     // fixed heart stages and the slider's heart, and the three tower marks.
     expect(MEMBERS.filter((m) => m.entry === 'husk').map((m) => m.clip)).toEqual(['idle', 'walk', 'attack']);
     expect(MEMBERS.filter((m) => m.entry === 'bulwark').map((m) => m.clip)).toEqual(['idle', 'run', 'attack']);
+    // Pip-A idle and running, and a third idle whose face cycles the expression demo; he has no attack clip yet.
+    const pip = MEMBERS.filter((m) => m.entry === 'commander_pip');
+    expect(pip.map((m) => [m.name, m.clip, m.faceDemo])).toEqual([
+      ['pip_idle', 'idle', false],
+      ['pip_run', 'run', false],
+      ['pip_face', 'idle', true],
+    ]);
+    expect(MEMBERS.filter((m) => m.faceDemo).map((m) => m.name)).toEqual(['pip_face']);
+    expect(ZONES.find((zone) => zone.family === PIP_ZONE)?.label).toBe('Pip-A (commander preview)');
     expect(MEMBERS.filter((m) => m.entry === 'worldheart').map((m) => m.heartStage)).toEqual([0, 5, 10, 'live']);
     expect(MEMBERS.filter((m) => m.entry === 'bolt_sentinel').map((m) => m.node)).toEqual(['bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
   });
@@ -151,13 +169,24 @@ describe('the Asset World registry', () => {
     expect(nearest, pair).toBeGreaterThanOrEqual(2.4);
   });
 
-  it('keeps 4 m between the Husk row and Bulwark row, so the two families read apart', () => {
+  it('keeps 4 m between the Husk, Bulwark and Pip-A rows, so the three read apart', () => {
     const husk = MEMBERS.filter((m) => m.entry === 'husk');
     const bulwark = MEMBERS.filter((m) => m.entry === 'bulwark');
+    const pip = MEMBERS.filter((m) => m.entry === 'commander_pip');
     expect(husk[0]!.s).toBe(HUSK_ROW_START);
     expect(bulwark[0]!.s).toBe(BULWARK_ROW_START);
+    expect(pip[0]!.s).toBe(PIP_ROW_START);
     expect(Math.min(...bulwark.map((m) => m.s)) - Math.max(...husk.map((m) => m.s))).toBeCloseTo(4, 12);
-    for (const row of [husk, bulwark]) for (let i = 1; i < row.length; i++) expect(row[i]!.s - row[i - 1]!.s).toBeCloseTo(CHARACTER_SPACING, 12);
+    expect(Math.min(...pip.map((m) => m.s)) - Math.max(...bulwark.map((m) => m.s))).toBeCloseTo(4, 12);
+    for (const row of [husk, bulwark, pip]) {
+      for (let i = 1; i < row.length; i++) expect(row[i]!.s - row[i - 1]!.s).toBeCloseTo(CHARACTER_SPACING, 12);
+      for (const m of row) expect([m.d, m.lean, m.turnDeg], m.name).toEqual([CHARACTER_ROW_DEPTH, LEAN.plumb, THREE_QUARTER_TURN_DEG]);
+    }
+  });
+
+  it('fails a member standing in a zone ZONES does not list, by name', () => {
+    const astray = MEMBERS.map((m) => (m.name === 'pip_face' ? { ...m, zone: 'previews' } : m));
+    expect(coverageGaps(manifest, astray)).toEqual([expect.stringMatching(/member "pip_face" stands in zone "previews", which ZONES does not list/)]);
   });
 
   it('maps the view frame onto the tangent plane without stretching it', () => {

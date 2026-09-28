@@ -15,6 +15,9 @@ export function manifestEntry(meta, stats) {
       ...animation,
       exportedDuration: stats?.animations.find((s) => s.name === animation.name)?.duration ?? null,
     })),
+    // The morph target names the GLB carries (inspect.mjs), for the family's allowed list in assets:check and for the
+    // labs' face driver. Only a model that has some records the key, so every entry without morphs stays byte-identical.
+    ...(stats?.morphs?.length ? { morphs: stats.morphs } : {}),
     tris: stats?.tris ?? 0,
     bones: stats?.bones ?? 0,
     textures: stats?.textures ?? [],

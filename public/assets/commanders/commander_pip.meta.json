@@ -1,0 +1,32 @@
+{
+  "name": "commander_pip",
+  "family": "commanders",
+  "file": "commanders/commander_pip.glb",
+  "kind": "model",
+  "recipe": null,
+  "nodes": [
+    "commander_rig",
+    "commander_armour",
+    "commander_body"
+  ],
+  "animations": [
+    {
+      "name": "idle",
+      "duration": 1.6,
+      "loop": true,
+      "strike": null
+    },
+    {
+      "name": "run",
+      "duration": 0.7,
+      "loop": true,
+      "strike": null
+    }
+  ],
+  "tris": 21799,
+  "notes": {
+    "preview": "Pip-A, the M1 commander preview: the owner's CharForge Pip reworked in Blender 5.2.1 by the M1 study's scripts, which are not yet a recipe in blender/recipes, so npm run assets keeps this committed file and does not rebuild it",
+    "clips": "idle and run only; the attack clip is phase B"
+  },
+  "placeables": []
+}

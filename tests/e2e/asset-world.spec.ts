@@ -148,6 +148,8 @@ test.describe('the Asset World', () => {
         towers: call<CameraReading>('camera'),
         towerLabels: call<LabelReading[]>('labels').filter((label) => label.shown).map((label) => label.text),
         frameMs: call<number>('frameMs'),
+        // Pip-A's faces, read after frames have drawn, when every hull has re-pointed at its body's morph influences.
+        faces: call<{ name: string; blink: number; hullsShared: boolean }[]>('faces'),
         overview: null as CameraReading | null,
       };
       // The overview's camera, read and left within this call, so SwiftShader never draws the whole world: a frame of it
@@ -197,6 +199,7 @@ test.describe('the Asset World', () => {
       `ground: worst ${worst.name} ${(worst.off * 100).toFixed(2)} cm off its sink (limit ${(worst.limit * 100).toFixed(1)} cm), off their limit ${JSON.stringify(unground)}; ` +
       `ground offsets ${contacts.map((c) => `${c.name} ${(c.off * 100).toFixed(2)}`).join(', ')} cm; ` +
       `towers view unframed ${JSON.stringify(towersUnframed)}, labels ${JSON.stringify(state.towerLabels)}; outside the overview ${JSON.stringify(outside)}; ` +
+      `faces ${JSON.stringify(state.faces.map((face) => `${face.name} hulls ${face.hullsShared ? 'shared' : 'NOT shared'}`))}; ` +
       `frame interval ${state.frameMs.toFixed(0)} ms, ${log.errors.length} console errors`;
     console.log(line);
     expect(state.assets, line).toBe(true);
@@ -211,6 +214,9 @@ test.describe('the Asset World', () => {
     expect(towersUnframed, line).toEqual([]);
     expect(state.towerLabels, line).toEqual(['Bolt Sentinel', 'Mark I', 'Mark II', 'Mark III']);
     expect(outside, line).toEqual([]);
+    // Every Pip-A instance has its own face, and every one of their hulls follows its body's morphs, the copies' too.
+    expect(state.faces.map((face) => face.name), line).toEqual(['pip_idle', 'pip_run', 'pip_face']);
+    expect(state.faces.every((face) => face.hullsShared), line).toBe(true);
     // With no dials link the world opens on DEFAULT_DIALS, Painted-Anime-Inkline 4.0, the set the Style Lab opens on.
     expect(state.look, line).toBe('locked');
     expect(state.dials, line).toEqual(DEFAULT_DIALS);
@@ -409,8 +415,9 @@ test.describe('the Asset World', () => {
         expect(layout.canvas, line).toEqual({ x: 0, y: 0, width: layout.viewport.width, height: layout.viewport.height });
         expect(share, line).toBeLessThanOrEqual(0.2);
         expect(layout.centreIsCanvas, line).toBe(true);
-        // On a phone the overview names the six families and leaves the members to their own views.
-        expect(layout.labels.filter((label) => label.kind === 'family'), line).toHaveLength(6);
+        // On a phone the overview names the seven zones (the six families, Pip-A's preview apart from Bulwark) and leaves
+        // the members to their own views.
+        expect(layout.labels.filter((label) => label.kind === 'family'), line).toHaveLength(7);
         expect(layout.labels.filter((label) => label.kind === 'member'), line).toHaveLength(0);
         for (const label of layout.labels) expect(label.fontPx, `${label.text}: ${line}`).toBeGreaterThanOrEqual(12);
         expect(log.errors, line).toEqual([]);

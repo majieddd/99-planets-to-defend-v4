@@ -1,5 +1,13 @@
 {
-  "commanders": { "tris": 24000, "bones": 32, "texture": 1024, "ink": true, "animations": ["idle", "run", "attack"] },
+  "commanders": {
+    "tris": 24000,
+    "bones": 32,
+    "texture": 1024,
+    "ink": true,
+    "animations": ["idle", "run", "attack"],
+    "morphs": ["blink_L", "blink_R", "smile", "brows_up", "pucker"],
+    "pending": { "commander_pip": { "attack": "Pip-A is the M1 commander preview; its attack clip is phase B" } }
+  },
   "xeno": { "tris": 9000, "bones": 24, "texture": 1024, "ink": true, "animations": ["idle", "walk", "attack"] },
   "towers": { "tris": 36000, "bones": 0, "texture": 1024, "ink": true },
   "heart": { "tris": 30000, "bones": 0, "texture": 1024, "ink": true },

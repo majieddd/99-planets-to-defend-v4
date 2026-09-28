@@ -14,6 +14,7 @@ import { createRenderer } from '../../render/renderer';
 import { createPaintedSky } from '../../render/sky';
 import { createStylePatch, STYLE_PLANET_RADIUS } from '../../render/terrain/stylePatch';
 import { VERDANT } from '../../render/themes';
+import type { FacePose } from '../shared/commanderFace';
 import { flatTexture, loadManifestTexture, loadNamedAsset } from '../shared/labAssets';
 import { NARROW_SCREEN } from '../style/referenceBoard';
 import { WorldLabels, type LabelSpec } from './labels';
@@ -268,7 +269,7 @@ async function start(): Promise<void> {
   /** The test handle's way in: opens a view or a member by name, and is false for a name that is neither. */
   function focus(name: string): boolean {
     const member = MEMBERS.find((m) => m.name === name);
-    if (member) openView({ view: member.family, member: member.name });
+    if (member) openView({ view: member.zone, member: member.name });
     else if (isViewName(name)) openView({ view: name, member: '' });
     else return false;
     return true;
@@ -370,6 +371,8 @@ async function start(): Promise<void> {
   }
 
   let frozen = params.get('freeze') === '1';
+  // The faces hold with the clips, a blink included, so a frozen frame is the same frame on every load.
+  world.setFrozen(frozen);
   const fpsBox = document.getElementById('fps') as HTMLElement;
   let last = performance.now();
   let frames = 0;
@@ -390,6 +393,7 @@ async function start(): Promise<void> {
         entry: entry.member.entry,
         node: entry.member.node,
         family: entry.member.family,
+        zone: entry.member.zone,
         clip: entry.member.clip,
         position: entry.root.getWorldPosition(new Vector3()).toArray(),
       })),
@@ -432,7 +436,11 @@ async function start(): Promise<void> {
     },
     freeze: (on: boolean) => {
       frozen = on;
+      world.setFrozen(on);
     },
+    // A face pose held on a member for an evidence frame, or null to hand it back to its blink and demo.
+    setFace: (name: string, pose: FacePose | null) => world.setFace(name, pose),
+    faces: () => world.faces(),
   };
   loopStarted = true;
   renderer.setAnimationLoop(() => {

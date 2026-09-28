@@ -32,9 +32,13 @@ export const CHARACTER_SPACING = 2.6;
  * The Husk's three clips from s -6.4 m and Bulwark's from 2.8 m, 4 m apart. Bulwark's row moved one spacing right
  * when the idle Husk joined, rather than the Husk's row moving left: at -9 m, past the level clearing, the ground
  * under a plumb Husk's feet strayed 7.9 cm from level, and here the new idle Husk takes the walking Husk's old spot.
+ * Pip-A's three, the commander preview, stand next to Bulwark's from 12 m, 4 m on from his last, rather than moving the
+ * other rows: those stand on the level clearing, and Pip-A's narrow stance, about 0.2 m from his root to a boot's edge,
+ * strays least from level on the ground past it.
  */
 export const HUSK_ROW_START = -6.4;
 export const BULWARK_ROW_START = 2.8;
+export const PIP_ROW_START = 12;
 export const HEART_ROW_DEPTH = 12.5;
 export const HEART_ROW_START = -5.4;
 export const HEART_SPACING = 3.6;
@@ -60,7 +64,10 @@ export const THREE_QUARTER_TURN_DEG = 30;
 export const LIVE_HEART_START_LEVEL = 7;
 
 export interface WorldZone {
-  /** The manifest family, and the value `?family=` takes. */
+  /**
+   * The zone's key, the value `?family=` takes: a manifest family, or, for a preview shown apart from the rest of its
+   * family, a key of its own (Pip-A's `pip`, a commander beside the locked Bulwark).
+   */
   family: string;
   label: string;
 }
@@ -72,7 +79,10 @@ export interface WorldMember {
   entry: string;
   /** The placeable inside the entry (a kit piece, a tower mark), or null for the whole asset. */
   node: string | null;
+  /** The manifest family of the entry, which the coverage check holds it to. */
   family: string;
+  /** The zone the member stands in, the key of one of ZONES: its family's, unless it is a preview with a zone of its own. */
+  zone: string;
   /** Shown over the member when its family is in focus; null for a family's only member, which its zone names. */
   label: string | null;
   s: number;
@@ -84,7 +94,15 @@ export interface WorldMember {
   clip: string | null;
   /** The heart stage shown, 'live' for the slider's heart, or null for anything but a heart. */
   heartStage: number | 'live' | null;
+  /**
+   * Whether the member's face cycles the held-expression demo (labs/shared/commanderFace.ts) over its idle. Every
+   * member whose rig has a face blinks on its own either way.
+   */
+  faceDemo: boolean;
 }
+
+/** Pip-A's zone key, apart from Bulwark's `commanders` zone although both are in the commanders family. */
+export const PIP_ZONE = 'pip';
 
 export const ZONES: readonly WorldZone[] = [
   { family: 'env', label: 'Verdant kit' },
@@ -92,6 +110,7 @@ export const ZONES: readonly WorldZone[] = [
   { family: 'nests', label: 'Nest' },
   { family: 'xeno', label: 'Husk' },
   { family: 'commanders', label: 'Bulwark' },
+  { family: PIP_ZONE, label: 'Pip-A (commander preview)' },
   { family: 'heart', label: 'Worldheart' },
 ];
 
@@ -109,7 +128,7 @@ const KIT_ORDER: readonly [node: string, label: string, lean: number][] = [
 ];
 
 function member(fields: Partial<WorldMember> & Pick<WorldMember, 'name' | 'entry' | 'family' | 's' | 'd'>): WorldMember {
-  return { node: null, label: null, turnDeg: 0, lean: LEAN.plumb, clip: null, heartStage: null, ...fields };
+  return { node: null, label: null, turnDeg: 0, lean: LEAN.plumb, clip: null, heartStage: null, zone: fields.family, faceDemo: false, ...fields };
 }
 
 const kit = KIT_ORDER.map(([node, label, lean], index): WorldMember => {
@@ -159,12 +178,38 @@ const hearts = ([0, 5, 10, 'live'] as const).map((stage, index) =>
   }),
 );
 
+/**
+ * Pip-A, the M1 commander preview, in a zone of his own: idle and running, each blinking on its own, and a third idle
+ * whose face cycles the held-expression demo. He has no attack clip yet (phase B).
+ */
+const pip: WorldMember[] = (
+  [
+    ['pip_idle', 'Idle', 'idle', false],
+    ['pip_run', 'Run', 'run', false],
+    ['pip_face', 'Face', 'idle', true],
+  ] as const
+).map(([name, label, clip, faceDemo], index) =>
+  member({
+    name,
+    entry: 'commander_pip',
+    family: 'commanders',
+    zone: PIP_ZONE,
+    label,
+    s: PIP_ROW_START + index * CHARACTER_SPACING,
+    d: CHARACTER_ROW_DEPTH,
+    turnDeg: THREE_QUARTER_TURN_DEG,
+    clip,
+    faceDemo,
+  }),
+);
+
 export const MEMBERS: readonly WorldMember[] = [
   ...kit,
   ...towers,
   member({ name: 'nest', entry: 'nest', family: 'nests', s: NEST_SPOT.s, d: NEST_SPOT.d, lean: LEAN.structure }),
   ...characters('husk', 'xeno', HUSK_ROW_START, ['idle', 'walk', 'attack']),
   ...characters('bulwark', 'commanders', BULWARK_ROW_START, ['idle', 'run', 'attack']),
+  ...pip,
   ...hearts,
 ];
 
@@ -262,6 +307,8 @@ export function coverageGaps(
   }
   for (const m of members) {
     if (!manifest.assets.some((entry) => entry.name === m.entry && entry.kind === 'model')) gaps.push(`member "${m.name}" comes from "${m.entry}", which the manifest does not list as a model (${where})`);
+    // A zone no view knows would place the member where no view, label or panel list could reach it.
+    if (!ZONES.some((zone) => zone.family === m.zone)) gaps.push(`member "${m.name}" stands in zone "${m.zone}", which ZONES does not list (${where})`);
   }
   // A reason must still explain something: one kept after its clip left the manifest, or after a member took the clip
   // up, would silently explain the next clip given that name, or say a shown clip is hidden.

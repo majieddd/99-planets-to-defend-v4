@@ -17,9 +17,14 @@ import { attachHull } from '../../render/ink/hull';
 import { LAYERS } from '../../render/layers';
 import { place } from '../../render/terrain/place';
 import type { StylePatch } from '../../render/terrain/stylePatch';
+import { createCommanderFace, FACE_SEED, holdFacePose, type FacePose } from '../shared/commanderFace';
+import type { FaceDriver } from '../shared/faceDriver';
 import { NO_EDGE_PIECES } from '../shared/meadow';
 
 export type BulwarkMode = 'cycle' | 'idle' | 'run' | 'attack';
+/** The commander the scene shows at home and on the lap: the locked Bulwark, or Pip-A, the M1 commander preview. */
+export type CommanderKind = 'bulwark' | 'pip';
+export const COMMANDERS: readonly CommanderKind[] = ['bulwark', 'pip'];
 export type PresetName = 'hero' | 'strategic' | 'closeup' | 'horizon';
 export const PRESETS: PresetName[] = ['hero', 'strategic', 'closeup', 'horizon'];
 
@@ -36,7 +41,18 @@ export interface StyleScene {
   root: Group;
   update(dt: number): void;
   setHeartStage(level: number): void;
+  /** The commander's mode, whichever commander is shown; the name is Bulwark's, from before Pip-A joined. */
   setBulwarkMode(mode: BulwarkMode): void;
+  /**
+   * Shows a commander in the same home pose and cycle, starting its mode over. Pip-A needs his loaded asset the first
+   * time; the scene keeps it for later switches.
+   */
+  setCommander(kind: CommanderKind, asset?: LoadedAsset): void;
+  commander(): CommanderKind;
+  /** Holds the shown commander's face, if his rig has one, while the lab is frozen. */
+  setFrozen(on: boolean): void;
+  /** Holds a face pose on the shown commander for an evidence frame, or null hands it back to the blink; false with no face. */
+  setFace(pose: FacePose | null): boolean;
   preset(name: PresetName): { position: Vector3; target: Vector3 };
 }
 
@@ -100,6 +116,10 @@ class Actor {
   constructor(readonly root: Object3D, asset: LoadedAsset) {
     this.mixer = new AnimationMixer(root);
     for (const clip of asset.animations) this.actions.set(clip.name, this.mixer.clipAction(clip));
+  }
+
+  has(name: string): boolean {
+    return this.actions.has(name);
   }
 
   /** Crossfades in 0.18 s, the reference game's clip blend. Missing clips are ignored (placeholders). */
@@ -205,6 +225,13 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
   root.add(husk.root);
   const bulwark = new Actor(assets.bulwark.root, assets.bulwark);
   root.add(bulwark.root);
+  // The commander on show, Bulwark until the lab switches. Pip-A's actor and face are built on the first switch to him,
+  // so a lab that never shows him draws exactly what it drew before he existed.
+  let commander = bulwark;
+  let commanderKind: CommanderKind = 'bulwark';
+  let face: FaceDriver | null = null;
+  let pip: { actor: Actor; face: FaceDriver | null } | null = null;
+  let faceFrozen = false;
 
   scatter(root, patch, assets.kit, ctx, scatterScale);
 
@@ -242,39 +269,48 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
     husk.mixer.update(dt);
   }
 
+  /**
+   * The commander's cycle: idle, a strike, idle, one lap, idle, every 12 s. Pip-A has no attack clip yet (phase B), so
+   * where Bulwark strikes he holds his idle, in the cycle and in attack mode alike, rather than freezing in whatever clip
+   * played before.
+   */
+  const strike = (once: boolean) => (commander.has('attack') ? commander.play('attack', once) : commander.play('idle'));
+
   function updateBulwark(dt: number) {
     cycleTime += dt;
     let running = mode === 'run';
     if (running) runAngle -= (RUN_SPEED / RUN_RADIUS) * dt;
     if (mode === 'cycle') {
       const t = cycleTime % 12;
-      if (t < 3) bulwark.play('idle');
-      else if (t < 3.85) bulwark.play('attack', t - dt < 3);
-      else if (t < 6) bulwark.play('idle');
+      if (t < 3) commander.play('idle');
+      else if (t < 3.85) strike(t - dt < 3);
+      else if (t < 6) commander.play('idle');
       else if (t < 6 + LAP_SECONDS) {
         running = true;
         // The angle comes from the cycle clock rather than accumulating, so every lap leaves home at 6 s and closes
         // on it one lap later, however the frames fall.
         runAngle = HOME_ANGLE - (RUN_SPEED / RUN_RADIUS) * (t - 6);
-      } else bulwark.play('idle');
-    } else if (mode === 'idle') bulwark.play('idle');
+      } else commander.play('idle');
+    } else if (mode === 'idle') commander.play('idle');
     else if (mode === 'attack') {
       // Strikes land every 1.6 s from the switch. Until the first he idles, or the previous mode's clip (a run, say)
       // would go on playing in place for 1.6 s.
-      if (Math.floor((cycleTime - dt) / 1.6) !== Math.floor(cycleTime / 1.6)) bulwark.play('attack', true);
-      else if (cycleTime < 1.6) bulwark.play('idle');
+      if (Math.floor((cycleTime - dt) / 1.6) !== Math.floor(cycleTime / 1.6)) strike(true);
+      else if (cycleTime < 1.6) commander.play('idle');
     }
     if (running) {
-      bulwark.play('run');
+      commander.play('run');
       // The lap runs toward decreasing angle, with the heart on his left, because its direction at home is then 37
       // degrees from his home facing (-z) and he turns only that far where he leaves and rejoins it; run the other
       // way, he would swing through 143 degrees. His velocity is (sin a, 0, -cos a) and a glTF character faces +Z,
       // so his yaw is pi - a.
-      place(bulwark.root, patch, Math.cos(runAngle) * RUN_RADIUS, Math.sin(runAngle) * RUN_RADIUS, Math.PI - runAngle);
+      place(commander.root, patch, Math.cos(runAngle) * RUN_RADIUS, Math.sin(runAngle) * RUN_RADIUS, Math.PI - runAngle);
     } else {
-      place(bulwark.root, patch, BULWARK_HOME.x, BULWARK_HOME.z, HOME_YAW);
+      place(commander.root, patch, BULWARK_HOME.x, BULWARK_HOME.z, HOME_YAW);
     }
-    bulwark.mixer.update(dt);
+    commander.mixer.update(dt);
+    // After the mixer, which would otherwise write any morph or jaw track a clip carries over the face.
+    face?.update(dt);
   }
 
   /** Turns each head toward the Husk by at most maxTurn radians; the barrel's elevation follows at once. */
@@ -311,6 +347,35 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
       mode = next;
       cycleTime = 0;
       runAngle = HOME_ANGLE;
+    },
+    setCommander(kind, asset) {
+      if (kind === commanderKind) return;
+      if (kind === 'pip' && !pip) {
+        if (!asset) throw new Error('the Style Lab needs the loaded commander_pip asset to show Pip-A');
+        // The face is made before the actor's mixer first moves the rig, because it reads the jaw's axis from the bind pose.
+        pip = { actor: new Actor(asset.root, asset), face: createCommanderFace(asset.root, FACE_SEED) };
+      }
+      const next = kind === 'pip' && pip ? pip : { actor: bulwark, face: null };
+      root.remove(commander.root);
+      root.add(next.actor.root);
+      commander = next.actor;
+      face = next.face;
+      face?.setFrozen(faceFrozen);
+      commanderKind = kind;
+      // The new commander starts his mode over at home, as a mode switch does, and takes his pose before the next frame.
+      cycleTime = 0;
+      runAngle = HOME_ANGLE;
+      updateBulwark(0);
+    },
+    commander: () => commanderKind,
+    setFrozen(on) {
+      faceFrozen = on;
+      face?.setFrozen(on);
+    },
+    setFace(pose) {
+      if (!face) return false;
+      holdFacePose(face, pose);
+      return true;
     },
     preset(name) {
       const body = homePose.position;

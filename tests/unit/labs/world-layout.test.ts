@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import {
   AnimationClip,
   BoxGeometry,
+  Float32BufferAttribute,
   Frustum,
   Group,
   Matrix4,
@@ -23,6 +24,7 @@ import { LAYERS } from '../../../src/render/layers';
 import { createPaintUniforms } from '../../../src/render/materials/painted';
 import { createStylePatch, STYLE_PLANET_RADIUS } from '../../../src/render/terrain/stylePatch';
 import { VERDANT } from '../../../src/render/themes';
+import { FACE_DEMO_BLEND_SECONDS, FACE_DEMO_HOLD_SECONDS, FACE_DEMO_STEPS, faceDemoWeights } from '../../../src/labs/shared/commanderFace';
 import { NO_EDGE_PIECES } from '../../../src/labs/shared/meadow';
 import type { LabelSpec } from '../../../src/labs/world/labels';
 import { buildAssetWorld, HEART_STAGES, LABEL_AXIS_LINES, LABEL_AXIS_RADIUS, SHADOWLESS_PIECES, type AssetWorld, type PlacedMember } from '../../../src/labs/world/layout';
@@ -66,6 +68,7 @@ interface ManifestModel {
   kind: string;
   nodes: string[];
   animations: { name: string }[];
+  morphs?: string[];
 }
 const manifest = JSON.parse(readFileSync('public/assets/manifest.json', 'utf8')) as { assets: ManifestModel[] };
 
@@ -90,7 +93,12 @@ const TOWER_SIZE: readonly (readonly [number, number])[] = [
   [2.3, 1.22],
   [2.8, 1.65],
 ];
-const CHARACTER_SIZE: Readonly<Record<string, readonly [number, number]>> = { husk: [1.9, 1.2], bulwark: [1.3, 2.3] };
+const CHARACTER_SIZE: Readonly<Record<string, readonly [number, number]>> = { husk: [1.9, 1.2], bulwark: [1.3, 2.3], commander_pip: [1, 1.8] };
+/**
+ * The value Pip-A's stand-in idle clip keys on blink_L, as a clip that carried a face track would: the face driver runs
+ * after the mixer, so the lids it draws must be its own, never this.
+ */
+const CLIP_BLINK = 0.7;
 /** Bulwark's upright sword, beside his body: taller than him, and further from his up line than LABEL_AXIS_RADIUS. */
 const SWORD = { offset: 0.5, width: 0.08, height: 2.6 };
 
@@ -152,8 +160,24 @@ function standIns(): Map<string, LoadedAsset> {
         sword.position.x = SWORD.offset;
         root.add(sword);
       }
+      // The face morphs the manifest lists, which three names from the morph attributes (Mesh.updateMorphTargets), so the
+      // world gives the stand-in a face driver as it does the shipped Pip-A.
+      if (entry.morphs?.length) {
+        const count = part.geometry.getAttribute('position').count;
+        part.geometry.morphAttributes['position'] = entry.morphs.map((name) => {
+          const target = new Float32BufferAttribute(new Float32Array(count * 3), 3);
+          target.name = name;
+          return target;
+        });
+        part.geometry.morphTargetsRelative = true;
+        part.updateMorphTargets();
+        // Inked, so the stand-in has a hull to share its morphs with, as the shipped body does.
+        part.geometry.setAttribute('_ink', new Float32BufferAttribute(new Float32Array(count).fill(0.5), 1));
+      }
       entry.animations.forEach((clip, index) => {
-        animations.push(new AnimationClip(clip.name, 1, [new NumberKeyframeTrack(`${entry.name}_part.rotation[y]`, [0, 1], [0, index + 1])]));
+        const tracks = [new NumberKeyframeTrack(`${entry.name}_part.rotation[y]`, [0, 1], [0, index + 1])];
+        if (entry.morphs?.includes('blink_L')) tracks.push(new NumberKeyframeTrack(`${entry.name}_part.morphTargetInfluences[blink_L]`, [0, 1], [CLIP_BLINK, CLIP_BLINK]));
+        animations.push(new AnimationClip(clip.name, 1, tracks));
       });
     }
     paintAndInk(root, ctx, 0.1);
@@ -288,7 +312,17 @@ describe('buildAssetWorld', () => {
   it('loops each character instance on its own clip, in place, every clip its entry exports', () => {
     const { world } = build();
     const characters = world.members.filter((entry) => entry.member.clip);
-    expect(characters.map((entry) => entry.member.name)).toEqual(['husk_idle', 'husk_walk', 'husk_attack', 'bulwark_idle', 'bulwark_run', 'bulwark_attack']);
+    expect(characters.map((entry) => entry.member.name)).toEqual([
+      'husk_idle',
+      'husk_walk',
+      'husk_attack',
+      'bulwark_idle',
+      'bulwark_run',
+      'bulwark_attack',
+      'pip_idle',
+      'pip_run',
+      'pip_face',
+    ]);
     const before = characters.map((entry) => worldPosition(entry.root));
     world.update(0.5);
     const turns = characters.map((entry) => (entry.root.getObjectByName(`${entry.member.entry}_part`) as Object3D).rotation.y);
@@ -302,6 +336,70 @@ describe('buildAssetWorld', () => {
     // Looping: after a whole period more, every part is where it was.
     world.update(1);
     characters.forEach((entry, index) => expect((entry.root.getObjectByName(`${entry.member.entry}_part`) as Object3D).rotation.y).toBeCloseTo(turns[index]!, 6));
+  });
+
+  it('gives every Pip-A instance its own face, blinking out of step after its mixer, and cycles the demo on the face member alone', () => {
+    const { world } = build();
+    const faces = () => new Map(world.faces().map((face) => [face.name, face]));
+    // Only rigs with face morphs get a face: Pip-A's three, never Bulwark's visor or the Husk.
+    expect([...faces().keys()]).toEqual(['pip_idle', 'pip_run', 'pip_face']);
+    // Before any draw, every instance's hull, the two rig copies' included, already shares its body's influences.
+    for (const name of ['pip_idle', 'pip_run', 'pip_face']) {
+      const part = world.root.getObjectByName(name)!.getObjectByName('commander_pip_part') as Mesh;
+      const hull = part.children.find((child) => (child as Mesh).material === hullMaterial) as Mesh;
+      expect(hull.morphTargetInfluences, name).toBe(part.morphTargetInfluences);
+      expect(faces().get(name)!.hullsShared, name).toBe(true);
+    }
+    // Frame by frame for 6 s, longer than the longest wait before a first blink (5 s) plus the blink itself.
+    const firstBlink = new Map<string, number>();
+    const most = new Map<string, number>();
+    for (let frame = 1; frame <= 360; frame++) {
+      world.update(1 / 60);
+      for (const face of world.faces()) {
+        most.set(face.name, Math.max(most.get(face.name) ?? 0, face.blink));
+        if (face.blink > 0 && !firstBlink.has(face.name)) firstBlink.set(face.name, frame);
+        // The mixer's clip keys blink_L at CLIP_BLINK every frame; the face runs after it, so the lids are the face's.
+        const part = world.root.getObjectByName(face.name)!.getObjectByName('commander_pip_part') as Mesh;
+        expect(part.morphTargetInfluences![part.morphTargetDictionary!['blink_L']!], face.name).toBe(face.blink);
+      }
+    }
+    for (const name of ['pip_idle', 'pip_run', 'pip_face']) expect(most.get(name), name).toBeGreaterThan(0.9);
+    // Seeded one after another, the three never start a blink on the same frame.
+    expect(new Set(firstBlink.values()).size).toBe(3);
+  });
+
+  it('cycles neutral, smile and brows up on the face member, holds every face while frozen, and holds a posed face for a frame', () => {
+    const { world } = build();
+    const read = (name: string) => world.faces().find((face) => face.name === name)!;
+    // Opens on neutral.
+    expect(read('pip_face').expressions).toEqual({ smile: 0, brows_up: 0, pucker: 0 });
+    // Halfway through the blend out of neutral, the smile is half in; a second into its hold, it is whole.
+    world.update(FACE_DEMO_HOLD_SECONDS + FACE_DEMO_BLEND_SECONDS / 2);
+    expect(read('pip_face').expressions.smile).toBeCloseTo(0.5, 9);
+    world.update(FACE_DEMO_BLEND_SECONDS / 2 + 1);
+    expect(read('pip_face').expressions).toEqual({ smile: 1, brows_up: 0, pucker: 0 });
+    expect(faceDemoWeights(FACE_DEMO_HOLD_SECONDS + FACE_DEMO_BLEND_SECONDS + 1)).toEqual({ smile: 1, brows_up: 0, pucker: 0 });
+    // The other instances only blink.
+    expect(read('pip_idle').expressions).toEqual({ smile: 0, brows_up: 0, pucker: 0 });
+    // Frozen, even a step the page would never pass while frozen changes no face, the demo included.
+    const period = FACE_DEMO_HOLD_SECONDS + FACE_DEMO_BLEND_SECONDS;
+    world.setFrozen(true);
+    const before = world.faces();
+    world.update(period);
+    expect(world.faces()).toEqual(before);
+    // A held pose shows at once, frozen; handed back, the face takes up the demo where the world's clock now stands,
+    // two periods in: the brows up.
+    expect(world.setFace('pip_face', { blink: 1, smile: 0.8 })).toBe(true);
+    expect(read('pip_face')).toMatchObject({ blink: 1, expressions: { smile: 0.8, brows_up: 0, pucker: 0 } });
+    expect(world.setFace('bulwark_idle', { blink: 1 })).toBe(false);
+    world.setFace('pip_face', null);
+    expect(read('pip_face').expressions).toEqual(faceDemoWeights(2 * period + 1));
+    expect(read('pip_face').expressions).toEqual({ smile: 0, brows_up: 1, pucker: 0 });
+    // A period on, the cycle is back at neutral.
+    world.setFrozen(false);
+    world.update(period);
+    expect(read('pip_face').expressions).toEqual({ smile: 0, brows_up: 0, pucker: 0 });
+    expect(FACE_DEMO_STEPS).toEqual([null, 'smile', 'brows_up']);
   });
 
   it('sweeps the tower heads around their rest, out of step', () => {
@@ -402,7 +500,7 @@ describe('the Asset World views', () => {
       const ndc = new Vector3();
       const opens: OpenView[] = [
         ...[OVERVIEW, CHARACTERS, ...ZONES.map((zone) => zone.family)].map((view) => ({ view, member: '' })),
-        ...MEMBERS.map((m) => ({ view: m.family, member: m.name })),
+        ...MEMBERS.map((m) => ({ view: m.zone, member: m.name })),
       ];
       for (const open of opens) {
         const name = open.member || open.view;
@@ -410,7 +508,7 @@ describe('the Asset World views', () => {
         const camera = cameraAt(pose, lens);
         frustum.setFromProjectionMatrix(new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
         const framed = world.members.filter((entry) =>
-          open.member ? entry.member.name === open.member : open.view === OVERVIEW ? true : open.view === CHARACTERS ? ['xeno', 'commanders'].includes(entry.member.family) : entry.member.family === open.view,
+          open.member ? entry.member.name === open.member : open.view === OVERVIEW ? true : open.view === CHARACTERS ? ['xeno', 'commanders', 'pip'].includes(entry.member.zone) : entry.member.zone === open.view,
         );
         expect(framed.length, name).toBeGreaterThan(0);
         // Every corner of what is drawn is inside the frame, and every label the view shows, with the room it takes.
@@ -457,7 +555,7 @@ describe('the Asset World views', () => {
       const rows: string[] = [];
       let worst = 0;
       for (const entry of world.members) {
-        const open = { view: entry.member.family, member: entry.member.name };
+        const open = { view: entry.member.zone, member: entry.member.name };
         const page = frameView(open, world.members, specs, context, lens)!;
         const alone = fitPoints(
           boundsCorners([entry]).map((point) => ({ point })),
@@ -471,7 +569,7 @@ describe('the Asset World views', () => {
         // The view names the member alone: its own label, or, for a family's only member, its family's placard.
         const shows = labelRule(open, world.members, context);
         const shown = specs.filter((spec) => shows(spec)).map((spec) => spec.key);
-        expect(shown, entry.member.name).toEqual([entry.member.label ? entry.member.name : familyLabelKey(entry.member.family)]);
+        expect(shown, entry.member.name).toEqual([entry.member.label ? entry.member.name : familyLabelKey(entry.member.zone)]);
       }
       expect(worst, rows.join(', ')).toBeLessThanOrEqual(MEMBER_VIEW_REACH);
     });
@@ -479,8 +577,8 @@ describe('the Asset World views', () => {
 
   it('hangs each family placard in front of its zone, on the ground, and stands each member label on its body top', () => {
     const { world } = build();
-    for (const family of ['env', 'towers', 'nests', 'xeno', 'commanders', 'heart']) {
-      const members = world.members.filter((entry) => entry.member.family === family);
+    for (const family of ['env', 'towers', 'nests', 'xeno', 'commanders', 'pip', 'heart']) {
+      const members = world.members.filter((entry) => entry.member.zone === family);
       const anchor = familyLabelAnchor(members, patch);
       const p = anchor.clone().sub(CENTER);
       const ground = patch.surfaceAt((p.x / p.y) * STYLE_PLANET_RADIUS, (p.z / p.y) * STYLE_PLANET_RADIUS);
@@ -506,7 +604,23 @@ describe('the Asset World views', () => {
     expect(shown({ view: OVERVIEW, member: '' }, true, OVERVIEW_MEMBER_LABELS_MIN_WIDTH - 1)).toEqual(families);
     expect(shown({ view: OVERVIEW, member: '' }, true, OVERVIEW_MEMBER_LABELS_MIN_WIDTH)).toEqual([...families, ...labelled]);
     expect(shown({ view: 'towers', member: '' })).toEqual(['family:towers', 'bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
-    expect(shown({ view: CHARACTERS, member: '' })).toEqual(['family:xeno', 'family:commanders', 'husk_idle', 'husk_walk', 'husk_attack', 'bulwark_idle', 'bulwark_run', 'bulwark_attack']);
+    expect(shown({ view: CHARACTERS, member: '' })).toEqual([
+      'family:xeno',
+      'family:commanders',
+      'family:pip',
+      'husk_idle',
+      'husk_walk',
+      'husk_attack',
+      'bulwark_idle',
+      'bulwark_run',
+      'bulwark_attack',
+      'pip_idle',
+      'pip_run',
+      'pip_face',
+    ]);
+    // Pip-A, in the commanders family, has a zone and a view of his own beside Bulwark's.
+    expect(shown({ view: 'pip', member: '' })).toEqual(['family:pip', 'pip_idle', 'pip_run', 'pip_face']);
+    expect(shown({ view: 'commanders', member: '' })).toEqual(['family:commanders', 'bulwark_idle', 'bulwark_run', 'bulwark_attack']);
     // The kit's eight labels crowd a narrow screen, so there its view names the kit alone, as the overview does, and each
     // piece keeps its own view; the other families' views name their members on a phone.
     const kit = MEMBERS.filter((m) => m.family === 'env').map((m) => m.name);
@@ -516,7 +630,7 @@ describe('the Asset World views', () => {
     expect(shown({ view: 'env', member: 'flowers' }, true, 375)).toEqual(['flowers']);
     expect(Object.keys(FAMILY_MEMBER_LABELS_MIN_WIDTH)).toEqual(['env']);
     expect(shown({ view: 'towers', member: '' }, true, 375)).toEqual(['family:towers', 'bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
-    expect(shown({ view: CHARACTERS, member: '' }, true, 375)).toHaveLength(8);
+    expect(shown({ view: CHARACTERS, member: '' }, true, 375)).toHaveLength(12);
     expect(shown({ view: 'towers', member: 'bolt_mk2' })).toEqual(['bolt_mk2']);
     // A member opened from the overview's list is named the same way.
     expect(shown({ view: OVERVIEW, member: 'rock_a' })).toEqual(['rock_a']);
@@ -527,6 +641,8 @@ describe('the Asset World views', () => {
     expect(lines.get('bolt_mk2')).toBe('Bolt Sentinel');
     expect(lines.get('husk_idle')).toBe('Husk');
     expect(lines.get('flowers')).toBe('Verdant kit');
+    expect(lines.get('bulwark_idle')).toBe('Bulwark');
+    expect(lines.get('pip_face')).toBe('Pip-A (commander preview)');
   });
 
   it('frames the ground where the members stand when no asset loaded, rather than leaving the camera at the origin', () => {

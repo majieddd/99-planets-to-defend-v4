@@ -229,9 +229,13 @@ The kit is not bought. It is built by script in Blender 5.2.1 LTS from recipes i
 `public/assets/manifest.json`, written by `npm run assets` and counted from the exported files. Once
 a milestone's assets are built, the Content entries for that milestone must equal the manifest's
 counts, a rule kept by hand; later milestones' entries are plans until then. The current count
-(M0c) is 8 manifest entries: the `brush_strokes` and `ink_noise` textures, and the models `verdant_kit`
+is 9 manifest entries: M0c's 8, the `brush_strokes` and `ink_noise` textures and the models `verdant_kit`
 (8 pieces), `worldheart` (plinth and 11 stages), `nest`, `bolt_sentinel` (marks I to III), `husk`
-and `bulwark`. Every placeable asset has its root at its ground contact point, so the bind-pose
+and `bulwark`, and M1's `commander_pip`, Pip-A, the commander preview (idle and run, the five face
+morphs, no attack clip until phase B). Pip-A was built in Blender 5.2.1 by the M1 study's scripts, which
+are not yet a recipe in `blender/recipes`, and brought in through the build's own optimize, inspect and
+manifest steps; `npm run assets` keeps the committed file and does not rebuild it. Every placeable
+asset has its root at its ground contact point, so the bind-pose
 minimum Y of each tower mark, each Verdant piece and every other model as a whole is within 5 mm of
 0, unless its recipe names a designed sink of at most 0.14 m (rocks bury their base edge), which
 the measured depth must match within 5 mm.
@@ -247,8 +251,10 @@ the ground contact, nor carry any other vertex down to within 5 mm of it, at any
 the file's default weights must lie in that range (Morph targets against the ground contact,
 Performance budgets). The build measures this through the skin in the bind pose and fails before it
 publishes, naming the target. A commander's face morphs (`blink_L`, `blink_R`, `smile`, `brows_up`,
-`pucker`) pass; a morph that moves a foot is refused. `inspect.mjs` reads each model's morph names; the
-manifest does not record them yet. Every export applies its modifiers, and one that changes the
+`pucker`) pass; a morph that moves a foot is refused. `inspect.mjs` reads each model's morph names, the
+manifest records them after the model's clips (`morphs`, written only for a model that has some, so every
+other entry keeps its bytes), and `npm run assets:check` holds them to the family's list (Performance
+budgets). Every export applies its modifiers, and one that changes the
 topology (triangulate, bevel, subdivision) drops the mesh's shape keys, so a morph export fails unless
 every shape key reached the file: a recipe applies such modifiers before it adds the shape keys. A mesh
 may also carry `_SKIN`, a per-vertex float that is 1 on face, ears and neck skin, 0 elsewhere and soft
@@ -263,7 +269,7 @@ face, so the hull does not outline the hair across it.
 
 | Class | Planned count | Recipe | First milestone |
 |---|---|---|---|
-| Commanders | 5 archetypes on one shared skeleton (Bulwark, Twinfang, Longsight, Kettle, Emberline) | `bulwark.py` (M0); one recipe per commander after | M0 (Bulwark), M4 (all five) |
+| Commanders | 5 archetypes on one shared skeleton (Bulwark, Twinfang, Longsight, Kettle, Emberline), rebuilt from M1 in the CharForge style with a cartoon face; Pip-A (`commander_pip`) is the M1 preview of that rebuild | `bulwark.py` (M0); Pip-A from the M1 study's scripts; one recipe per commander after | M0 (Bulwark), M1 (Pip-A preview), M4 (all five) |
 | Allies | 1 (Warden) | `allies.py` | M4 |
 | Xeno species | 4 (Mite, Husk, Aegis, Wisp) plus 4 evolution overlays (armour, speed, shield, split) | `husk.py` (M0); one recipe per species after | M0 (Husk), M2 (all four) |
 | Towers | 6 families x 3 marks = 18 models, plus 12 specialization variants | `bolt_sentinel.py` (M0); one recipe per family after | M0 (Bolt Sentinel I to III), M2 (all) |
@@ -1004,7 +1010,16 @@ The asset budgets mirror `tools/assets/budgets.json`, and `npm run assets:check`
 the manifest to its family's row. A triangle budget counts the whole GLB, including every mark, stage
 and piece in it; the texture budget caps the width and height of each texture; ink means the model
 carries the `_INK` width attribute the hull ink reads. `commanders` must also export idle, run and
-attack clips, and `xeno` idle, walk and attack.
+attack clips, and `xeno` idle, walk and attack. A family's `morphs` line names the morph targets its
+models may carry, and a family without one takes none: the commanders take the five face morphs the
+face driver sets (`blink_L`, `blink_R`, `smile`, `brows_up`, `pucker`), because a stray shape key costs
+every vertex of its mesh a morph fetch in the painted and hull shaders and nothing would drive it. A
+required clip may be pending for one named model, with its reason, in the family's `pending` table;
+`npm run assets:check` prints it on that model's line, fails a blank reason, and fails the reason once
+the clip ships, once the family stops requiring it, or once the model leaves the manifest. Pip-A's
+attack is the one pending clip (phase B). Pip-A measures 21,799 triangles, 24 bones (the CharForge
+rig's 64 less its 40 finger bones, the jaw among them), two 1,024 px textures and the five face morphs,
+inside every `commanders` line.
 
 | Family | Triangles | Bones | Texture (px) | Ink | Rationale |
 |---|---|---|---|---|---|
@@ -1130,7 +1145,7 @@ world's centre on the pole.
 | `WORLD_FACING_DEG` (labs/world/registry.ts) | 145 degrees | The bearing from the world's centre toward every camera, from +x toward +z. The Verdant key's azimuth of 250 degrees puts the sun at bearing 200 on the tangent plane, so each view has the key 55 degrees behind it and to its left: members lit three quarters from the front with their shadow side still partly in view, and the locked 15 degree key's long shadows (Sun elevation, colour and intensity, Render defaults) falling away from the cameras and to the right, behind a member rather than across its neighbour |
 | `KIT_ARC_RADIUS` and `KIT_ARC_SPAN_DEG` (labs/world/registry.ts) | 17 m and 96 degrees | The Verdant kit's eight pieces on an arc around the centre on the cameras' side, 4.1 m of arc apart, small flora at the left end and the trees at the right, where their shadows fall off the world. At 14 m, with the towers at -6.5 m, the towers' family label came within 20 px of the arc's labels in the 1920 x 1080 overview; 17 m, with the rows spread, gives them room |
 | `TOWER_ROW_DEPTH`, `TOWER_ROW_START`, `TOWER_SPACING` and `NEST_SPOT` (labs/world/registry.ts) | -9 m; marks at s -7.6, -4.4 and -1.2 m, 3.2 m apart; the nest at (4.6, -9) | The Bolt Sentinel's marks, up to 1.96 m across, side by side with at least 1.4 m between plinths, and the 3.2 m nest on the same row to their right |
-| `CHARACTER_ROW_DEPTH`, `CHARACTER_SPACING`, `HUSK_ROW_START` and `BULWARK_ROW_START` (labs/world/registry.ts) | 0; 2.6 m; the Husk's idle, walk and attack from s -6.4 m, Bulwark's idle, run and attack from 2.8 m | The characters stand plumb on and beside the level clearing at the pole, 1.2 m or more apart, with 4 m between the Husk's three and Bulwark's three so the two families read apart. When the idle Husk joined, Bulwark's row moved one spacing right rather than the Husk's row left: at s -9 m, past the clearing, the ground under a plumb Husk's 0.8 m foot ring strays 7.9 cm from level, against 2.7 cm at -6.4 m, where the idle Husk now stands, and under Bulwark's narrower 0.55 m at 8 m it strays 3.1 cm. In their opening poses the browser test reads each character's lowest point within 3.8 cm of the ground (Bulwark's run, both feet up), 0.8 cm for the idle Husk |
+| `CHARACTER_ROW_DEPTH`, `CHARACTER_SPACING`, `HUSK_ROW_START`, `BULWARK_ROW_START` and `PIP_ROW_START` (labs/world/registry.ts) | 0; 2.6 m; the Husk's idle, walk and attack from s -6.4 m, Bulwark's idle, run and attack from 2.8 m, Pip-A's idle, run and face from 12 m | The characters stand plumb on and beside the level clearing at the pole, 1.2 m or more apart, with 4 m between the Husk's three and Bulwark's three so the two families read apart, and 4 m between Bulwark's and Pip-A's, who stand in a zone of their own (`PIP_ZONE`, `pip`) though Pip-A is in the commanders family. Pip-A's row joined on the right rather than moving the others off the clearing: past it the ground slopes 3 to 5 degrees (4.8 at 12 m), but his stance is narrow, and on the GPU in their opening poses his three read -0.46, -0.48 and -1.69 cm against the ground, inside the characters' allowance, with Bulwark's unchanged. When the idle Husk joined, Bulwark's row moved one spacing right rather than the Husk's row left: at s -9 m, past the clearing, the ground under a plumb Husk's 0.8 m foot ring strays 7.9 cm from level, against 2.7 cm at -6.4 m, where the idle Husk now stands, and under Bulwark's narrower 0.55 m at 8 m it strays 3.1 cm. In their opening poses the browser test reads each character's lowest point within 3.8 cm of the ground (Bulwark's run, both feet up), 0.8 cm for the idle Husk |
 | `HEART_ROW_DEPTH`, `HEART_ROW_START` and `HEART_SPACING` (labs/world/registry.ts) | 12.5 m; s -5.4 m on, 3.6 m apart | The hearts' 2.5 m plinths with 1.1 m between them, at the back, where the stage 10 heart's 5.2 m and its long shadow hide nothing. At 10.5 m the heart row's family label met Bulwark's member labels in the overview; 12.5 m clears them |
 | `LEAN` (labs/world/registry.ts) | characters 0; towers, hearts and nest 0.8; rocks 0.8; flora 0.2 | place()'s lean toward the ground's normal. The structures' plinths and mounds, 1.9 to 3.2 m across, stand on 1 to 8 degree slopes: plumb, their edges strayed up to 13.5 cm from the ground, and at the Style Lab's tower lean of 0.5 up to 7.6 cm; at 0.8 at most 4.4 cm (the stage 0 heart, where the ground curves under its plinth), tilting none more than 6.1 degrees. The rocks and flora keep the Style Lab's scatter leans (`ROCK_LEAN`, `SCATTER_LEAN`) |
 | `THREE_QUARTER_TURN_DEG` (labs/world/registry.ts) | 30 degrees | The characters and towers turn from facing the cameras toward the key's side, so a lit three-quarter face and a barrel's length show instead of a flat front |
@@ -1143,14 +1158,14 @@ world's centre on the pole.
 | `FAMILY_LABEL_GAP`, `MEMBER_LABEL_ROOM_PX`, `FOCUSED_MEMBER_LABEL_ROOM_PX` and `FAMILY_LABEL_ROOM_PX` (labs/world/views.ts); `LABEL_AXIS_RADIUS` and `LABEL_AXIS_LINES` (labs/world/layout.ts) | 0.8 m; 36, 52 and 56 px; 0.3 m and 8 lines | A family's label hangs like a placard from the ground 0.8 m in front of its zone, so a family's name never meets its members' names, and a member's stands on its body's top: the highest point where its drawn surface crosses the up line through its root or one of 8 lines 0.3 m around it, with no lift in metres, because the tail stands it off by the same few pixels at every distance. Standing 0.15 m over the highest point of all, Bulwark's labels rose 0.5 m over his helmet on his upright sword and Mark III's 0.3 m, and in a close view they sat on the assets behind ("Mark II" on a Husk, "Idle" on a heart); the surface is crossed, not its vertices sampled, because a low-poly box has vertices only at its corners. In a member's own view its label adds its family's name as a second line, and no placard shows. A view keeps the room each takes inside its frame: in the browser a member label and tail take 33.5 px (30.2 px on phones), with its family line 49.1 px (45.8 px), and a placard 54.3 px (33.3 px). The browser test reads the two-line label's room over Mark II in its own view on both sides of the phone line, at 480 and 800 px wide, and holds each to 52 px |
 | Label sizes (labs/world/world.css) | family 18 px (15 px on phones), its family key 12 px (hidden on phones), member 13 px (12 px on phones), a member's family line in its own view 12 px, tail 10 px (8 px on phones) | Readable on a 375 px phone at the 12 px the Style Lab's phone chips use, in Barlow Condensed for the family names and Inter for the rest (Interface and HUD) |
 | `MOVE_PX` (labs/world/labels.ts) | 0.05 px | A label's transform is written again only when its point moves this far, half the 0.1 px step the transform is written in, so frames under a still camera write no styles and build no strings |
-| `OVERVIEW_MEMBER_LABELS_MIN_WIDTH` (labs/world/views.ts) | 1280 px | The overview names every member only on a screen at least this wide; narrower, the 21 member labels (22 members, but the nest, its family's only member, has none) crowd each other, so the overview names the six families and each family's view names its members |
+| `OVERVIEW_MEMBER_LABELS_MIN_WIDTH` (labs/world/views.ts) | 1280 px | The overview names every member only on a screen at least this wide; narrower, the 24 member labels (25 members, but the nest, its family's only member, has none) crowd each other, so the overview names the seven zones and each zone's view names its members |
 | `FAMILY_MEMBER_LABELS_MIN_WIDTH` (labs/world/views.ts) | the Verdant kit's view 1024 px; no other family | A family's view names its members only on a screen at least this wide; narrower, it names the family alone, as the overview does, and each member names itself in its own view and in the panel's member list. The kit's eight pieces stand 4.1 m apart on an arc 25 m across, which a portrait phone fits into its width: measured on the GPU, at 375 x 667 six pairs of their labels overlapped and "Flowers" ran 9.7 px off the left edge (five pairs and 8.9 px at 390 x 844), one pair still overlapped at 667 x 375 and at 768 x 1024, and none at 1024 x 768, 1280 x 720, 1366 x 768 or 1920 x 1080, where the view is unchanged. Every other family's view names its members without an overlap at all eight sizes, the characters' eight labels included |
 | `TURNTABLE_SECONDS` (labs/world/main.ts) | 40 s a turn | The turntable turns slowly enough to study a silhouette as it passes, OrbitControls' autoRotateSpeed of 60 / 40 at the frame's own seconds |
 | `TRANSITION_SECONDS` (labs/world/main.ts) | 0.8 s, easing out | A view chosen in the panel glides there, starting at once and settling softly; reduced motion, the address and the test handle jump |
 | `MAX_ANIMATION_SPEED` (labs/world/panel.ts) | 2, in steps of 0.05 | The speed dial runs the clips and sweeps from paused to twice their authored speed; below 1 is where a strike frame is studied |
 | `WORLD_SUN_DISTANCE`, `WORLD_SHADOW_NEAR`, `WORLD_SHADOW_FAR`, `WORLD_SHADOW_BIAS` and `WORLD_SHADOW_NORMAL_BIAS` (labs/world/sun.ts) | 90 m, 1 to 220 m, -0.0004 and 0.03 m, PCF radius 0 | The Style Lab's sun (Render constants), whose reasons hold here: every member lies within 24 m of the centre, far past the near plane, and the patch's farthest corner inside the far plane |
-| `WORLD_CASTER_MARGIN` and `WORLD_SHADOW_HALF_WIDTH` (labs/world/sun.ts) | 7 m; the furthest root's 17 m plus 7, so 24 m | A member's point lies at most its root's distance, plus its footprint's half-width, plus its height from the centre, and the largest of each in the manifest are the broad tree's 1.71 m and the stage 10 heart's 5.19 m (measured from the GLBs), 6.9 m rounded up. The high tier's 2048 map then has 2.3 cm texels, against the Style Lab's 4.9 cm |
-| The browser test's ground allowances (tests/e2e/asset-world.spec.ts) | 5 mm, plus 4.4 cm for the structures, 2.5 cm for the kit and 4 cm for the characters | Each member's lowest drawn point, along the planet's up at its spot (`PlacedMember.lowest`, measured with its bounds), against the ground on the planet's radius through it, less its designed sink. The bounds' lowest corner cannot stand for it: the planet's curve tilts a member 17 m out by 6 degrees, which alone put rock B's bounds 14 cm under its root. The Kit's 5 mm contract, then the structures' lean stray (`LEAN`; Mark III reads 4.1 cm), the kit's rocks and flora leaning on the arc's slopes as the Style Lab's scatter does (rock A reads 2.3 cm), and the characters' opening poses rather than the bind pose the contract measures (Bulwark's run reads 3.8 cm up). Every read is the same on every load, since the layout, the ground and the opening poses are fixed |
+| `WORLD_CASTER_MARGIN` and `WORLD_SHADOW_HALF_WIDTH` (labs/world/sun.ts) | 7 m; the furthest root, Pip-A's face member 17.2 m out, plus 7, so 24.2 m | A member's point lies at most its root's distance, plus its footprint's half-width, plus its height from the centre, and the largest of each in the manifest are the broad tree's 1.71 m and the stage 10 heart's 5.19 m (measured from the GLBs), 6.9 m rounded up. The high tier's 2048 map then has 2.4 cm texels (2.3 cm before Pip-A's row set the reach past the kit arc's 17 m), against the Style Lab's 4.9 cm |
+| The browser test's ground allowances (tests/e2e/asset-world.spec.ts) | 5 mm, plus 4.4 cm for the structures, 2.5 cm for the kit and 4 cm for the characters | Each member's lowest drawn point, along the planet's up at its spot (`PlacedMember.lowest`, measured with its bounds), against the ground on the planet's radius through it, less its designed sink. The bounds' lowest corner cannot stand for it: the planet's curve tilts a member 17 m out by 6 degrees, which alone put rock B's bounds 14 cm under its root. The Kit's 5 mm contract, then the structures' lean stray (`LEAN`; Mark III reads 4.1 cm), the kit's rocks and flora leaning on the arc's slopes as the Style Lab's scatter does (rock A reads 2.3 cm), and the characters' opening poses rather than the bind pose the contract measures (Bulwark's run reads 3.8 cm up; Pip-A's face member, on the slope past the clearing, 1.7 cm down). Every read is the same on every load, since the layout, the ground and the opening poses are fixed |
 | The Style Lab's frame (labs/world/main.ts) | a 50 degree lens from 0.1 to 2500 m, orbit to 400 m; the scene's step clamped to 1/20 s; the frame interval a 0.95 running average, shown every 30 frames; ready at frame 3; flat textures of 128 (materials) and 0 (sky) | Taken as the Style Lab has them, so the two pages measure and draw alike |
 
 ### Face driver
@@ -1166,7 +1181,11 @@ skin).
 | `BLINK_INTERVAL_MIN_SECONDS` and `BLINK_INTERVAL_MAX_SECONDS` | 2.5 to 5 s, drawn evenly from an injected random source (`seededFaceRandom` for a seed) | People at rest blink every few seconds; a drawn wait never settles into a metronome, and a slower rate reads as a stare on a face this close to the camera. The unit test holds every wait inside the range at 60 fps and at the labs' slowest step of 1/20 s |
 | `BLINK_CLOSE_SECONDS` and `BLINK_OPEN_SECONDS` | 0.06 and 0.09 s, 150 ms in all, each eased by a smoothstep | A lid closes faster than it opens, and 150 ms sits inside a real blink's 100 to 400 ms. A long frame delta runs through every phase it spans, so one 10 s step and a thousand 10 ms steps land on the same lid |
 | `DOUBLE_BLINK_CHANCE` and `DOUBLE_BLINK_GAP_SECONDS` | 0.2 and 0.1 s | One blink in five comes twice, 100 ms apart, which reads as life rather than a timer; the second of a pair is never followed by a third |
-| `JAW_OPEN_MAX_DEG` and `JAW_BONE_NAME` | 14 degrees about the jaw axis (the bone's own x unless the lab names another), from the bone's rest pose; `jaw` | A mouth open to speak, not a yawn; the commander's rig decides the axis, which the lab passes once the asset arrives. A lab updates the driver after its animation mixer, which would otherwise overwrite the morphs and the jaw with any track its clips carry |
+| `JAW_OPEN_MAX_DEG` and `JAW_BONE_NAME` | 14 degrees about the jaw axis (the bone's own x unless the lab names another), from the bone's rest pose; `jaw` | A mouth open to speak, not a yawn; the commander's rig decides the axis, which the lab passes once the asset arrives. A lab updates the driver after its animation mixer, which would otherwise overwrite the morphs and the jaw with any track its clips carry. Pip-A's CharForge rig names its jaw `jaw` with no prefix (its other bones carry `mixamorig:`), and his idle and run key it at its rest |
+| Jaw axis (`jawAxisOf`, labs/shared/commanderFace.ts) | the character's +X in the jaw bone's frame, read from the rig in its bind pose; Pip-A's is (0.9625, -0.0924, -0.2551) | Pip-A's jaw bone is turned about 130 degrees from his head and its own x runs 15.7 degrees off the character's, so about its own x the chin swings sideways as it drops. About the character's left-right axis the chin drops and draws back: the unit test, on the shipped GLB through GLTFLoader, reads a chin point 10 cm down the bone moving under 0.1 mm sideways at a full jaw, and over 1 mm about the bone's own x |
+| `FACE_SEED` (labs/shared/commanderFace.ts) | 1, and each further commander instance on a page the next seed | Every face blinks on its own seeded timing, so the Asset World's three Pip-A instances never blink in step and every load blinks alike |
+| `FACE_DEMO_STEPS`, `FACE_DEMO_HOLD_SECONDS` and `FACE_DEMO_BLEND_SECONDS` (labs/shared/commanderFace.ts) | neutral, smile, brows up, then neutral again; each held 2 s and eased into the next over 0.4 s, at full weight, a 7.2 s cycle | The Asset World's `pip_face` shows each held expression long enough to study under the blinks, which run on through it, and opens on neutral, so a frozen frame shows the rest face |
+| Blink hold (`FaceDriver.setBlinkHold`) | lids held at a weight from 0 to 1, or handed back to the auto-blink | A frozen evidence frame of a closed lid; the auto-blink keeps its timing underneath, and the labs' `setFace` handles hold a whole pose this way |
 
 ## Content: planets and families
 
@@ -1220,9 +1239,10 @@ Bulwark, Twinfang, Longsight, Kettle and Emberline (v3), on one shared skeleton;
 M1 the commanders take the owner's CharForge style, as its Bo and Pip show
 (https://majieddd.github.io/charforge/): about 4.5 to 5 heads tall, oversized hands and feet, slim
 limbs and chunky rounded volumes, with a visible cartoon face (painted features, blink and jaw shape
-keys). M0's Bulwark stays the visored knight the style gate locked on. Inspection view: Asset
-World (`/labs/world.html?family=commanders`, one clip with `?member=bulwark_run`) and the M1 test
-course (`/labs/course.html`).
+keys). M0's Bulwark stays the visored knight the style gate locked on. Pip-A (`commander_pip`) is
+the M1 preview of the rebuild. Inspection view: Asset World (`/labs/world.html?family=commanders`,
+one clip with `?member=bulwark_run`; Pip-A with `?family=pip` and his face with `?member=pip_face`),
+the Style Lab with `?commander=pip`, and the M1 test course (`/labs/course.html`).
 
 ### Weapons
 
@@ -1264,7 +1284,10 @@ built); Planet Lab's disaster trigger for disasters.
 ### Style
 
 Inspection view: **Style Lab** (`/labs/style.html`), the style scene with live dials, the reference
-board, and the colour audit.
+board, and the colour audit. Its commander is Bulwark, the locked look's; the panel's commander control,
+or `?commander=pip`, shows Pip-A in his place and cycle, blinking, holding his idle where Bulwark strikes
+until his attack clip is made (phase B). A lab opened without the parameter never loads Pip-A, and its
+hero frame is unchanged: 0 of 2,073,600 pixels differ at `?tier=high&freeze=1` on the GPU.
 
 ### Asset World
 
@@ -1277,7 +1300,9 @@ carry the dials on screen between the two pages in the same link. `?family=` ope
 zone: `env` (the Verdant kit's eight pieces on an arc), `heart` (the Worldheart at stages 0, 5 and 10
 beside a heart the panel's slider sets from 0 to 10), `nests` (the nest), `xeno` (the Husk idle,
 walking and attacking), `commanders` (Bulwark idle, running and attacking), `towers` (Bolt Sentinel
-marks I to III, their heads sweeping), or `characters` (the Husk's and Bulwark's rows together).
+marks I to III, their heads sweeping), `pip` (Pip-A, the M1 commander preview, idle, running and a
+face member whose expressions cycle, each blinking on its own; in the commanders family, in a zone of
+its own beside the locked Bulwark), or `characters` (the Husk's, Bulwark's and Pip-A's rows together).
 `?member=` opens one member by its placed name, such as `rock_a`, `worldheart_stage_05`,
 `husk_walk` or `bolt_mk3`, and names it with its family as the label's second line. A family's
 view names its members, except the Verdant kit's on a screen under 1024 px wide, where its eight
@@ -1415,7 +1440,7 @@ The order of construction:
 | Bot runs | `npm run bot -- --planets 20` | three policies (competent, idle, reckless) win and lose planets; the competent bot finishes in 25 to 35 simulated minutes | milestone and nightly |
 | Browser smoke | `npm run e2e` | every page boots without console errors; scripted input places a tower and runs a wave; frames saved | every pull request |
 | Captures | `npm run capture` | every inspection page captured for review | milestone |
-| Asset checks | `npm run assets:check` | each model within its family's triangle, bone, texture and ink budget (Performance budgets); no double-sided material; required clips present, with durations and strike times within 1/30 s of `src/shared/timings.json`; every listed file present, each model at the byte length the manifest records; placeable roots at ground contact (Kit); fails without a manifest; reads only the numbers the build recorded, never a GLB | every commit, in CI |
+| Asset checks | `npm run assets:check` | each model within its family's triangle, bone, texture, ink and morph budget (Performance budgets); no double-sided material; required clips present, or pending for a named model with a reason that the check retires once the clip ships, with durations and strike times within 1/30 s of `src/shared/timings.json`; every listed file present, each model at the byte length the manifest records; placeable roots at ground contact (Kit); fails without a manifest; reads only the numbers the build recorded, never a GLB | every commit, in CI |
 | Performance | `npm run perf` | frame time along a fixed camera path per tier on the development laptop | milestone |
 | Blueprint gate | `blueprint.js check docs/blueprint.md --gate` | this document is complete | every commit |
 | Agent play | the built-in browser | the agent plays the change and attaches frames | every change |
@@ -1490,9 +1515,9 @@ The order of construction:
       the current, visored Bulwark; the renderer's face support is built and tested on synthetic
       meshes (face morphs allowed under the ground rule, morph targets in the painted and hull
       materials, soft skin light from `_SKIN`, no crease ink on skin meshes, the labs' face driver;
-      Kit, Face morphs and skin), and the face's remaining blockers are that the `commanders` budget
-      has no shape-key line, the manifest does not record morph names, and the Kit's Commanders row
-      does not list the M1 rebuild
+      Kit, Face morphs and skin); Pip-A, the first build, is in the manifest (morph names recorded,
+      the `commanders` budget's morph line, his attack pending) and in both labs, and the owner judges
+      him there. Phase B for Pip-A: the attack clip, and the face's export (see Where we are)
 - [ ] For M2, from the M0 gate: a per-pixel ink signal so the bloom never lifts fogged or edge ink;
       per-theme seeds for the sun dials, which override the theme's light; a bloom rule for warm
       hazards such as magma, which would take heartHalo because warm glow means the heart; deciding
@@ -1576,3 +1601,24 @@ does, so the locked look has one source in code; a dials link still applies over
 fails any manifest entry the world does not place. The home page links to it, the Style Lab's panel
 opens it in the look its dials make, and its own panel opens the Style Lab in its look. Next is
 unchanged: M1 and M2, as the paragraph above records.
+2026-09-28. Pip-A, the M1 commander preview, is in both labs. His GLB came in through the build's own
+optimize, inspect and manifest steps (2.81 MB to 613 KB, the other 8 entries re-derived byte for byte),
+the manifest records morph names, and the `commanders` budget has a morph line and his pending attack;
+`npm run assets:check` passes 9 of 9. The Asset World shows him idle, running and with a face whose
+expressions cycle, each instance blinking on its own, in a zone of his own beside Bulwark; the Style
+Lab shows him through its commander control or `?commander=pip`, and its default hero frame is
+unchanged (0 of 2,073,600 pixels). On the RTX 4080 laptop at 2560 x 1440 the Style Lab hero with Pip-A
+draws in 2.5 to 3.4 ms uncapped (Bulwark 2.2 to 2.9 ms in the same run) and 16.67 ms under vsync. In
+the locked look his blink closes the lids, no crease ink reaches his skin (0 pixels), the hair over his
+face draws no ink across the forehead, and the hull inks the face only at its edges with the hair and
+the chin. The face is not yet clean, and every cause measured lies in the export rather than the
+renderer: under the Style Lab's key a straight crease runs down the face's centre from the brow to the
+chin, stepping 80 luma over 4 px with the albedo flat (106 textured) and still 70 to 76 at the softest
+skin light (0.5) or a 0.85 standard blend, and welding or recomputing the normals leaves it in place;
+61 of the 200 vertices in his right eye band have normals facing backward; the face's split vertices
+part their normals by a median 24 degrees on the centre line and 43 on the right cheek, which draws a
+seam down that cheek; `_SKIN`, taken from the lit texture's colour, averages 0.22 in his right eye band
+and 0.56 on his right cheek at the nose, which light with the cel bands; the painted albedo carries a
+seam and baked light and shade of its own; and with the key behind his head the face turns olive-teal
+(mean hue 60 against 22 to 27 lit). Next: the owner's verdict on Pip-A in the labs, then phase B (his
+attack clip and a face export that fixes these), alongside M1 and M2.

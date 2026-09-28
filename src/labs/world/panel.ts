@@ -34,7 +34,7 @@ export interface WorldPanelHandlers {
 
 /** The view dropdown: the overview and the characters, then the families in the order the zones stand. */
 export function viewOptions(): Record<string, string> {
-  const options: Record<string, string> = { Overview: OVERVIEW, 'Characters (Husk and Bulwark)': CHARACTERS };
+  const options: Record<string, string> = { Overview: OVERVIEW, 'Characters (Husk, Bulwark and Pip-A)': CHARACTERS };
   for (const zone of ZONES) options[`${zone.label} (${zone.family})`] = zone.family;
   return options;
 }
@@ -42,7 +42,7 @@ export function viewOptions(): Record<string, string> {
 /** The member dropdown for a view: the whole view first, then each member it frames, by label and name. */
 export function memberOptions(view: string): Record<string, string> {
   const options: Record<string, string> = { 'Whole view': '' };
-  const inView = MEMBERS.filter((m) => view === OVERVIEW || (view === CHARACTERS ? CHARACTER_FAMILIES.includes(m.family) : m.family === view));
+  const inView = MEMBERS.filter((m) => view === OVERVIEW || (view === CHARACTERS ? CHARACTER_FAMILIES.includes(m.zone) : m.zone === view));
   for (const m of inView) options[m.label ? `${m.label} (${m.name})` : m.name] = m.name;
   return options;
 }

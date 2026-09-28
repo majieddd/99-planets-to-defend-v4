@@ -55,6 +55,34 @@ export function groundFailures(ground) {
   return failures;
 }
 
+/**
+ * The clips a family requires that one named model may still lack, each with its reason, from the budget's `pending`
+ * table ({ model: { clip: reason } }). Pip-A, the M1 commander preview, ships idle and run and its attack clip is phase
+ * B, so the commanders' required attack is pending for it alone. A pending clip is printed on the model's line rather
+ * than passed in silence, and a blank reason is no reason. The table cannot outlive what it explains: evaluateAsset
+ * fails a reason once its clip ships or once the family stops requiring it, and stalePending one whose model the
+ * manifest no longer lists.
+ */
+export function pendingClips(entry, budget) {
+  const table = budget?.pending?.[entry.name] ?? {};
+  return Object.entries(table)
+    .filter(([clip, reason]) => (budget.animations ?? []).includes(clip) && String(reason ?? '').trim() && !entry.animations.some((a) => a.name === clip))
+    .map(([clip, reason]) => ({ clip, reason: String(reason).trim() }));
+}
+
+/** One sentence per pending reason in the budgets whose model the manifest does not list. */
+export function stalePending(manifest, budgets) {
+  const stale = [];
+  for (const [family, budget] of Object.entries(budgets)) {
+    for (const name of Object.keys(budget.pending ?? {})) {
+      if (!manifest.assets.some((entry) => entry.name === name && entry.family === family && entry.kind === 'model')) {
+        stale.push(`budgets.json ${family}.pending names '${name}', which the manifest does not list as a ${family} model; remove it`);
+      }
+    }
+  }
+  return stale;
+}
+
 export function evaluateAsset(entry, budgets, timings) {
   if (entry.kind !== 'model') return [];
   const budget = budgets[entry.family];
@@ -68,16 +96,27 @@ export function evaluateAsset(entry, budgets, timings) {
     }
   }
   if (budget.ink && !entry.hasInk) failures.push('missing _INK attribute');
+  // A model may carry only the morph targets its family names (the commanders' five face morphs, which the labs' face
+  // driver sets), and a family that names none takes none: a stray shape key costs every vertex of its mesh a morph
+  // fetch in both the painted and the hull shader, and nothing would drive it.
+  const allowed = budget.morphs ?? [];
+  const stray = (entry.morphs ?? []).filter((name) => !allowed.includes(name));
+  if (stray.length) failures.push(`morph targets ${stray.join(', ')} not in the ${entry.family} budget's list (${allowed.join(', ') || 'none'})`);
   // Blender exports any material without backface culling as double-sided, and the runtime would then draw and
   // shadow both faces of every mesh using it; a mesh that needs both faces says so in its own extras.
   if (entry.doubleSided) failures.push('double-sided material');
   failures.push(...groundFailures(entry.ground));
+  const pending = budget.pending?.[entry.name] ?? {};
+  for (const clip of Object.keys(pending)) {
+    if (!(budget.animations ?? []).includes(clip)) failures.push(`pending clip '${clip}' is not one the ${entry.family} budget requires; remove its reason`);
+  }
   for (const name of budget.animations ?? []) {
     const animation = entry.animations.find((a) => a.name === name);
     if (!animation) {
-      failures.push(`missing animation '${name}'`);
+      if (!String(pending[name] ?? '').trim()) failures.push(`missing animation '${name}'`);
       continue;
     }
+    if (Object.hasOwn(pending, name)) failures.push(`animation '${name}' ships, so its pending reason in budgets.json must go`);
     if (animation.exportedDuration === null) failures.push(`animation '${name}' is not in the GLB`);
     const timing = timings[entry.family]?.[entry.name]?.[name];
     if (!timing) continue;
@@ -137,11 +176,15 @@ function main() {
       console.log(`ASSET ${entry.name} FAIL: ${failures.join('; ')}`);
     } else {
       pass += 1;
-      console.log(`ASSET ${entry.name} ok (${entry.tris} tris, ${Math.round(entry.bytes / 1024)} KB)`);
+      const pending = entry.kind === 'model' ? pendingClips(entry, budgets[entry.family]) : [];
+      const note = pending.length ? `; pending ${pending.map(({ clip, reason }) => `${clip} (${reason})`).join(', ')}` : '';
+      console.log(`ASSET ${entry.name} ok (${entry.tris} tris, ${Math.round(entry.bytes / 1024)} KB${note})`);
     }
   }
-  console.log(`assets:check pass=${pass} fail=${fail}`);
-  if (fail) process.exit(1);
+  const stale = stalePending(manifest, budgets);
+  for (const line of stale) console.log(`BUDGETS FAIL: ${line}`);
+  console.log(`assets:check pass=${pass} fail=${fail}${stale.length ? ` stale=${stale.length}` : ''}`);
+  if (fail || stale.length) process.exit(1);
 }
 
 // This compared argv[1], the path as typed, with the module's own path, which Node resolves through links, so run
