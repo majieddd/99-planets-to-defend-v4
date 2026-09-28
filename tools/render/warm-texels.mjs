@@ -41,8 +41,16 @@ export const HEMISPHERE_SKY_WEIGHT = 0.75;
 export const SILHOUETTE_FACING = 0.9;
 
 /**
- * Everything this generator reads from the renderer, under the given dials. The test compares warmInputs() with the copy
- * it was generated from, so a change to any of these fails there.
+ * The known failure's key, a strong orange sun laid over the dials' other values: under a silhouette rim it warms the
+ * nest's magenta seams until most of them take the heart's halo (pipeline.ts, WARM_BLUE_FULL).
+ */
+export const FAILURE_SUN = { color: '#ff8844', intensity: 8 };
+
+/**
+ * Everything this generator reads from the renderer under the given dials, and its own assumptions: where the ambient
+ * hemisphere is read, how far a silhouette faces away and the known failure's key. The test compares warmInputs() with
+ * the copy it was generated from, so a change to any of these fails there; the assumptions shape the table as much as
+ * the renderer's values do, so an edit to one of them must regenerate it too.
  */
 export function warmInputs(dials = DEFAULT_DIALS) {
   return {
@@ -59,6 +67,10 @@ export function warmInputs(dials = DEFAULT_DIALS) {
     keyFloor: dials.bloomThreshold + BLOOM_SMOOTHING,
     // Blue over peak at which the warm test gives half the heart's strength: smoothstep is half way at its midpoint.
     halfWarmBlue: (WARM_BLUE_FULL + WARM_BLUE_NONE) / 2,
+    hemisphereSkyWeight: HEMISPHERE_SKY_WEIGHT,
+    silhouetteFacing: SILHOUETTE_FACING,
+    failureSunColor: FAILURE_SUN.color,
+    failureSunIntensity: FAILURE_SUN.intensity,
   };
 }
 
@@ -114,8 +126,9 @@ function litTexels(asset, inputs, { rim = false } = {}) {
   const sun = sunLinear.map((v) => (v * inputs.sunIntensity) / Math.PI);
   const sky = linear(inputs.ambientSky);
   const ground = linear(inputs.ambientGround);
-  const ambient = ground.map((g, i) => (g + (sky[i] - g) * HEMISPHERE_SKY_WEIGHT) * inputs.ambientStrength);
-  const rimLight = rim ? sunLinear.map((v, i) => SILHOUETTE_FACING ** inputs.rimPower * inputs.rimStrength * v * sun[i]) : [0, 0, 0];
+  // Read from the inputs rather than the constants, so the copy the test pins is the one the table was lit with.
+  const ambient = ground.map((g, i) => (g + (sky[i] - g) * inputs.hemisphereSkyWeight) * inputs.ambientStrength);
+  const rimLight = rim ? sunLinear.map((v, i) => inputs.silhouetteFacing ** inputs.rimPower * inputs.rimStrength * v * sun[i]) : [0, 0, 0];
   const { width, height } = emissive.info;
   const out = [];
   for (let k = 0; k < width * height; k++) {
@@ -136,7 +149,7 @@ function litTexels(asset, inputs, { rim = false } = {}) {
 }
 
 const pick = (texels, p) => texels[Math.min(texels.length - 1, Math.floor(p * texels.length))].c.map((v) => Number(v.toFixed(4)));
-// The share of red-led texels the warm test calls at least half warm.
+// The share of all the texels, red-led or not, that the warm test calls at least half warm; only a red-led one can be.
 const halfWarm = (texels, inputs) => Number((texels.filter((t) => t.leads && t.ratio <= inputs.halfWarmBlue).length / texels.length).toFixed(4));
 
 /** The generated data, as the test holds it. */
@@ -147,7 +160,7 @@ export async function generateWarmTexels(dials = DEFAULT_DIALS) {
   const nest = litTexels(assets.nest, inputs);
   const nestRim = litTexels(assets.nest, inputs, { rim: true });
   // The known failure: a strong orange key under a silhouette rim, at the dials' other values.
-  const failureInputs = { ...inputs, sunColor: '#ff8844', sunIntensity: 8 };
+  const failureInputs = { ...inputs, sunColor: inputs.failureSunColor, sunIntensity: inputs.failureSunIntensity };
   const failure = litTexels(assets.nest, failureInputs, { rim: true });
   return {
     assets: Object.fromEntries(Object.entries(WARM_ASSETS).map(([name, file]) => [file, assets[name].sha256])),

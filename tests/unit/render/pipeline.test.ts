@@ -129,7 +129,7 @@ describe('keyed bloom effect', () => {
     expect(shader).toContain('outputColor = glow * (1.0 - emitter) * inkGate * lift;');
   });
 
-  it('keeps its glow off the ink and caps what it adds to any pixel at a multiple of the pixel\'s own luminance', () => {
+  it("keeps its glow off near, fully covered ink and caps what it adds to any pixel at a multiple of the pixel's own luminance", () => {
     // With the shield alone, the heart crystal's outline (key 0) took the whole glow and turned 119 luma lighter.
     const bloom = make();
     const shader = bloom.getFragmentShader();
@@ -149,8 +149,13 @@ describe('keyed bloom effect', () => {
 
   it('opens its ink gate just over the ink colour, at the fixed edges it replaced for the default ink', () => {
     // At fixed edges of 0.006 and 0.015, #102030 (0.0136) took 93 percent of the glow and its outline at the hero camera
-    // turned 42 to 46 luma lighter. The default ink keeps those edges exactly in fp32, which keeps its frames unchanged.
-    expect(inkGateEdges(DEFAULT_DIALS.inkColor)).toEqual([Math.fround(0.006), Math.fround(0.015)]);
+    // turned 42 to 46 luma lighter. Formed in fp32 as this model forms them, the default ink's edges are those two, and
+    // its frames measured unchanged bit for bit.
+    expect(
+      inkGateEdges(DEFAULT_DIALS.inkColor),
+      "the default ink changed, so the ink gate's figures (INK_GATE_HEADROOM and KeyedBloomEffect in pipeline.ts, and " +
+        'their Render constants and Render defaults rows) need re-measuring',
+    ).toEqual([Math.fround(0.006), Math.fround(0.015)]);
     // Every ink sits under its own gate, so where it wholly covers a pixel it takes no glow, and a black ink, whose
     // luminance is 0, still has a ramp (GLSL leaves smoothstep undefined when its edges meet).
     for (const hex of [DEFAULT_DIALS.inkColor, '#000000', '#102030', '#3a1f5c']) {
@@ -284,6 +289,12 @@ describe('createPipeline', () => {
       // The shield's key uniforms are the key material's own, merged under the bloom's prefix.
       const uniforms = (pass.fullscreenMaterial as unknown as { uniforms: Record<string, unknown> }).uniforms;
       expect(uniforms['e0Threshold']).toBe(pipeline.bloomKey.uniforms['threshold']);
+      // The GPU reads the ink gate from the merged material's e0UInkLuminance, and setInkColor writes the effect's own
+      // uInkLuminance, so a live ink move reaches the shader only while postprocessing merges the effect's Uniform object
+      // itself rather than a copy of it.
+      const ink = bloomOf(pipeline).uniforms.get('uInkLuminance');
+      expect(ink).toBeDefined();
+      expect(uniforms['e0UInkLuminance']).toBe(ink);
     }
   });
 

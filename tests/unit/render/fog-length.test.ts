@@ -14,9 +14,10 @@ const CENTER: Vec = [0, -160, 0];
 const RADIUS = 160;
 
 /**
- * The shader's two height fog functions with their comment lines dropped, which the fp32 port below copies line for
- * line. Held whole, so a change anywhere in them (midpoint sampling, a dropped last segment, a new branch) fails here
- * until the port and this copy are changed with it.
+ * The shader's two height fog functions with their comments dropped, which the fp32 port below copies line for line.
+ * Held whole, so a change anywhere in them (midpoint sampling, a dropped last segment, a new branch) fails here until
+ * the port and this copy are changed with it. Both sides are compared with their whitespace normalised (normaliseGlsl),
+ * so re-indenting the shader or spacing it out with blank lines, which changes nothing the GPU runs, does not fail it.
  */
 const FOG_ALTITUDE_GLSL = ['float fogAltitude(vec3 p) {', '  return max(length(p - uPlanetCenter) - uPlanetRadius, 0.0);', '}'].join('\n');
 const FOG_LENGTH_GLSL = [
@@ -39,16 +40,27 @@ const FOG_LENGTH_GLSL = [
   '}',
 ].join('\n');
 
-/** A GLSL function from its signature to the closing brace at the start of a line, without its comment lines. */
+/** Collapses every run of whitespace, line breaks included, to one space, since formatting is not what the pin holds. */
+function normaliseGlsl(source: string): string {
+  return source.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * A GLSL function from its signature to its matching closing brace, with its comments dropped and its whitespace
+ * normalised. The closing brace is found by counting braces, not by looking for one at the start of a line, so the
+ * function may be indented. The pin used to need the brace in column 0 and every line exactly as written, so a
+ * re-indent or a blank line failed it though the shader was the same.
+ */
 function glslFunction(shader: string, signature: string): string {
-  const start = shader.indexOf(signature);
+  const source = shader.replace(/\/\/[^\n]*/g, '');
+  const start = source.indexOf(signature);
   if (start < 0) return `(no ${signature} in the shader)`;
-  const end = shader.indexOf('\n}', start);
-  return shader
-    .slice(start, end + 2)
-    .split('\n')
-    .filter((line) => !line.trim().startsWith('//'))
-    .join('\n');
+  let depth = 0;
+  for (let i = source.indexOf('{', start); i >= 0 && i < source.length; i++) {
+    if (source[i] === '{') depth += 1;
+    else if (source[i] === '}' && --depth === 0) return normaliseGlsl(source.slice(start, i + 1));
+  }
+  return `(no end to ${signature} in the shader)`;
 }
 
 function altitude(p: Vec): number {
@@ -198,7 +210,13 @@ describe('height fog length in fp32', () => {
       center: new Vector3(...CENTER),
       radius: RADIUS,
     }).getFragmentShader();
-    expect(glslFunction(shader, 'float fogAltitude(')).toBe(FOG_ALTITUDE_GLSL);
-    expect(glslFunction(shader, 'float fogLength(')).toBe(FOG_LENGTH_GLSL);
+    expect(glslFunction(shader, 'float fogAltitude(')).toBe(normaliseGlsl(FOG_ALTITUDE_GLSL));
+    expect(glslFunction(shader, 'float fogLength(')).toBe(normaliseGlsl(FOG_LENGTH_GLSL));
+    // The pin ignores formatting and still holds every token: the shader indented by four spaces throughout, closing
+    // braces included, with a blank line after every statement, still matches, and one changed literal does not.
+    const reformatted = shader.replace(/\n/g, '\n    ').replace(/;\n/g, ';\n\n');
+    expect(glslFunction(reformatted, 'float fogLength(')).toBe(normaliseGlsl(FOG_LENGTH_GLSL));
+    expect(glslFunction(reformatted, 'float fogAltitude(')).toBe(normaliseGlsl(FOG_ALTITUDE_GLSL));
+    expect(glslFunction(shader.replace('abs(x) > 1e-3', 'abs(x) > 1e-4'), 'float fogLength(')).not.toBe(normaliseGlsl(FOG_LENGTH_GLSL));
   });
 });

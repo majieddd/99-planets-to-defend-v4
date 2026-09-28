@@ -22,20 +22,27 @@ import { applyPreset, buildStyleScene, PRESETS, SCATTER_PLAN, type PresetName, t
 const BASE = import.meta.env.BASE_URL;
 const theme = VERDANT;
 /**
- * Metres from the scene centre to the sun. At every elevation the scatter (out to 48 m) stays past the shadow camera's
- * 1 m near plane, and the patch's farthest ground, its corner at (80, 80) on the tangent plane, 96.9 m from the scene
- * centre, lies at most 178.7 m deep in the light's view (under a key near 19.5 degrees), inside the 220 m far plane.
+ * Metres from the scene centre to the sun. At every elevation the scatter's casters lie 41.3 to 139.2 m deep in the
+ * light's view (tests/unit/labs/shadow-reach.test.ts), past the shadow camera's 1 m near plane, and the patch's farthest
+ * ground, its corner at (80, 80) on the tangent plane, 96.9 m from the scene centre, lies at most 178.7 m deep (under a
+ * key near 19.5 degrees), inside the 220 m far plane.
  */
 const SUN_DISTANCE = 90;
 const SHADOW_NEAR = 1;
 const SHADOW_FAR = 220;
-/** The farthest the scatter plan may put a piece's root from the scene centre, in metres: its largest ring. */
+/**
+ * An upper bound, in metres, on how far the scatter plan puts a piece's root from the scene centre: its largest ring's
+ * radius. The rings are drawn on the plane tangent at the pole, whose coordinates patch.surfaceAt takes, so the radius is
+ * a coordinate there and not a distance over the ground: surfaceAt(48, 0) lands about 46 m out.
+ */
 const SCATTER_REACH = Math.max(...SCATTER_PLAN.map(([, , , maxRadius]) => maxRadius));
 /**
  * How far past the scatter reach a caster can extend in the light's view, in metres: a tree at the edge of its ring
- * stands on the planet's curve, leaning out with it, and at the largest scatter scale its crown reaches past its root.
- * Every casting kit piece placed at the edge of its ring, at 72 azimuths and 8 yaws and 1.25 times its size, reaches
- * 49.24 m in the light's view (the conifers, at every elevation from 3 to 85 degrees), inside the 50 m this gives.
+ * stands on the planet's curve, leaning out with it, and at the largest scatter size its crown reaches past its root.
+ * tests/unit/labs/shadow-reach.test.ts holds the box to it: every casting piece of the shipped kit at the outer edge of
+ * its ring, at any yaw, every degree of azimuth and the largest scatter size (SCATTER_SIZE_MAX in scene.ts), reaches at
+ * most 49.35 m in the light's view at any elevation the dial allows (a conifer), inside the 50 m this gives, and the
+ * placeholder kit 49.31 m. The browser measurement the margin was chosen on sampled 72 azimuths and 8 yaws, for 49.24 m.
  */
 const SHADOW_CROWN_MARGIN = 2;
 /**

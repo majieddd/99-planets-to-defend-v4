@@ -12,7 +12,8 @@ import { bluePerPeak, inkGateEdges, linearRgb, luminance, warmth, type Rgb } fro
  * input reads. Picked at the 1st, 50th and 99th percentile of blue over peak for the heart and the nest, and at the 50th
  * for the cyan assets; nestRim adds a silhouette pixel's rim light at the defaults, and failure the known failure's
  * orange key under the same rim. halfWarm is the share of seam texels the warm test calls at least half warm. The first
- * test fails with the command to run when an asset or any lighting input has changed since.
+ * test fails with the command to run when an asset, a lighting input or one of the generator's own assumptions (where
+ * the hemisphere is read, how far a silhouette faces away, the failure's key) has changed since.
  */
 // warm-texels: begin. Written by tools/render/warm-texels.mjs; paste its output over this block.
 const GENERATED = {
@@ -34,6 +35,10 @@ const GENERATED = {
     emissivePeak: 1.25,
     keyFloor: 1.25,
     halfWarmBlue: 0.275,
+    hemisphereSkyWeight: 0.75,
+    silhouetteFacing: 0.9,
+    failureSunColor: '#ff8844',
+    failureSunIntensity: 8,
   },
   heart: {
     p1: [2.1799, 0.7027, 0.0896],

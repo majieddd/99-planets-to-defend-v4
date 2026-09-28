@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COLOR_DIALS, DEFAULT_DIALS, NUMERIC_RANGES, type RenderDials } from '../../../src/render/defaults';
-import { acceptDial, decodeDials, encodeDials, type SetDialsResult } from '../../../src/render/dialsCodec';
+import { acceptDial, decodeDials, encodeDials } from '../../../src/render/dialsCodec';
 
 const toLink = (json: string) => btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const numericKeys = Object.keys(NUMERIC_RANGES) as (keyof typeof NUMERIC_RANGES)[];
@@ -107,13 +107,5 @@ describe('decodeDials through acceptDial', () => {
       high[key] = NUMERIC_RANGES[key][1];
     }
     for (const dials of [low, high]) expect(decodeDials(encodeDials(dials as unknown as RenderDials))).toEqual(dials);
-  });
-});
-
-describe('SetDialsResult', () => {
-  it('carries every dial and the refused names, the shape the lab and its browser test share', () => {
-    const result: SetDialsResult = { dials: { ...DEFAULT_DIALS }, rejected: ['notADial'] };
-    expect(Object.keys(result).sort()).toEqual(['dials', 'rejected']);
-    expect(Object.keys(result.dials).sort()).toEqual(Object.keys(DEFAULT_DIALS).sort());
   });
 });

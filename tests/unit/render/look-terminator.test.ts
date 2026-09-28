@@ -96,7 +96,23 @@ const GOLDEN: RenderDials = {
   sunColor: '#ffc05c',
   sunIntensity: 6.6,
 };
-const KEYS: Record<string, RenderDials> = { defaults: DEFAULT_DIALS, golden: GOLDEN };
+// Preset B3 (Render defaults), the look the owner's style gate starts from. Its key is B2's with a lighter shadow band,
+// a shadow depth of 0.62 against 0.5, and a little less ambient. The shadow band's direct light is the tint times the
+// depth, so the higher depth leaves the smaller step at the terminator and B3 is the harder of the two golden-hour keys
+// (its worst step 0.0205 against B2's 0.0209); the ambient lights both sides alike and cancels out of the step.
+const B3: RenderDials = {
+  ...DEFAULT_DIALS,
+  bands: 2,
+  bandSoftness: 0.03,
+  shadowDepth: 0.62,
+  shadowTint: '#1b7078',
+  rimStrength: 0.6,
+  standardBlend: 0.45,
+  ambientStrength: 0.22,
+  sunColor: '#ffc05c',
+  sunIntensity: 6.6,
+};
+const KEYS: Record<string, RenderDials> = { defaults: DEFAULT_DIALS, golden: GOLDEN, b3: B3 };
 // Bulwark, the Husk, a tower (or the heart, or the nest) and the terrain, each as authored.
 const BLENDS = { character: AUTHORED_CHARACTER_BLEND, husk: 0.3, structure: 0.1, terrain: 0 };
 const ALBEDOS = [1, 0.3, 0.1, 0.04];
@@ -114,7 +130,7 @@ describe("the terminator's step under the actor fill and the shadow lift", () =>
     for (const line of LINES) expect(f, line).toContain(line);
   });
 
-  it('stays positive across both ranges, on white and dark albedo, for every painted material, at the default key and the golden-hour key', () => {
+  it('stays positive across both ranges, on white and dark albedo, for every painted material, at the default key and both golden-hour keys', () => {
     // The step is linear in the fill and in the lift, so each range's ends and middle cover it.
     let worst = Infinity;
     for (const [name, key] of Object.entries(KEYS)) {

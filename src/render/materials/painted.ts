@@ -161,15 +161,19 @@ export const TERMINATOR_BAND_TILES = 1;
 
 /**
  * The gentlest curve, as a radius in metres, over which the terrain's band edges keep the bandSoftness dial's full ramp.
- * The dial is a width in ndl, so its ground width follows how slowly ndl changes: on the planet's own curve, about 1/160
- * per metre, preset B2's 0.03 spread each edge over nearly 10 m of ground, and the strategic camera's limb showed soft
- * airbrushed blobs, a 55 px luma ramp where a cast-shadow edge in the same frame took 10 px. On ground curving more
- * gently than this radius the softness is scaled down by the ground's rate of change of ndl times it, so an edge's ramp
- * spans at most the ground it would on a curve of this radius (0.75 m to each side at a 0.03 ndl half-width), and the dial
- * still widens or narrows it. 25 m is about the radius of the patch's broad relief (a 50 m wavelength, 2.5 m high), so
- * a terminator on relief keeps the ramp it had; on the planet's curve B2's softness acts like 0.005, the value that turned
- * the reviewer's frames crisp and brush-broken. Under B2 the band terminator's ramp by the limb (90th percentile, along
- * the luma gradient) fell from 31 to 15 px at a 15 degree key and from 35 to 19 px at 8.
+ * The dial is the ramp's half-width in band units, which is dial / (bands - 1) of ndl to each side of an edge (a
+ * half-width in ndl only at 2 bands), so its ground width follows how slowly ndl changes: on the planet's own curve,
+ * about 1/160 per metre, preset B2's 0.03 at 2 bands spread each edge over nearly 10 m of ground, and the strategic
+ * camera's limb showed soft airbrushed blobs, a 55 px luma ramp where a cast-shadow edge in the same frame took 10 px. On
+ * ground curving more gently than this radius the softness is scaled down by the ground's rate of change of ndl times
+ * it, so an edge's ramp spans at most the ground it would on a curve of this radius (0.75 m to each side at a 0.03 ndl
+ * half-width), and the dial still widens or narrows it. 25 m is about the radius of the patch's broad relief (a 50 m
+ * wavelength, 2.5 m high), so a terminator on relief keeps the ramp it had; on the planet's curve B2's softness acts like
+ * 0.005, the value that turned the reviewer's frames crisp and brush-broken. Under B2 the band terminator's ramp by the
+ * limb (90th percentile, along the luma gradient) fell from 31 to 15 px at a 15 degree key and from 35 to 19 px at 8.
+ * The scale caps the dial's reach wherever the ground curves gently, not only on the planet's curve: on the level heart
+ * clearing under the default 35 degree key ndl changes by at most cos 35 degrees / 160 per metre, so the scale is at most
+ * about 0.128 and the dial's top of 0.25 acts like at most about 0.032 there (or the pixel floor, where that is wider).
  */
 export const BAND_EDGE_RADIUS = 25;
 
@@ -423,9 +427,10 @@ void main() {
   #ifdef PAINT_TERRAIN
     // On ground gentler than BAND_EDGE_RADIUS the softness shrinks with the ground's rate of change of ndl, so an edge
     // across the planet's curve is as crisp as one across relief (see the constant for the airbrushed limb it ends). It
-    // never drops under half of x's change across a pixel, so every edge still anti-aliases over about a pixel, and
-    // never rises over the dial: across a cast shadow's edge x jumps, and there the dial's own softness stands as before.
-    // The last floor keeps smoothstep's edges apart where x does not change at all.
+    // never drops under half of x's change across a pixel unless the dial is narrower still, so every edge anti-aliases
+    // over about a pixel wherever the dial allows, and it never rises over the dial, which wins both ways: across a cast
+    // shadow's edge x jumps, and there the dial's own softness stands as before. The last floor keeps smoothstep's edges
+    // apart where x does not change at all.
     softness = min(uBandSoftness, max(uBandSoftness * min(1.0, ndlRate * BAND_EDGE_RADIUS), 0.5 * fwidth(x)));
     softness = max(softness, 1e-4);
   #endif
@@ -449,27 +454,35 @@ void main() {
   // terminator and the same everywhere on the shadow side, form or cast, so the step is the key's (0.178 at a fill of 2).
   // A cast shadow's edge still drops the smooth key, so where the fill outshines the key a shadow on a lit face reads
   // brighter than the light beside it: above a fill of 1.18 under the default key, never within the range under B3's.
+  // The lit side keeps (1 - ndl) of the fill, so where the fill fades faster than the key brightens, a face turned
+  // fully to the key reads darker than one turned partly away. On a sky- and camera-facing surface at Bulwark's
+  // standard blend, whatever the albedo, the lit side stops brightening toward the key above a fill of 0.42 under the
+  // default key and 0.99 under B3's, and from ndl 0.75 to 1 its luminance falls by 9.9 percent at a fill of 1.2 under
+  // the default key (0.07 percent under the banded weight) and by 3.8 percent at B3's 1.4 under its own key.
   #ifdef PAINT_ACTOR
     // Seen against the light, an actor's whole visible side is in the shadow band, and preset B's hero camera showed
     // Bulwark's back at a median luma of 14 against 72 to 81 of ground (every blow must read, Pillar 4). This fill comes
     // from the camera's side, so it reaches whatever the camera sees whatever the key does; it takes the sky and
-    // ground-bounce colour of the ambient hemisphere, fading out as the key lights the surface, so the lit side and the
-    // hard terminator stay the key's; and it falls off with dot(N, V), so the shadow side keeps its roundness. It follows
-    // the authored standard blend, full on characters (Bulwark's 0.35) and 0.29 of it on the towers, heart and nest at
-    // 0.1: at full strength the sky light greyed the heart's stone around its warm crystal (saturation 0.40 without the
-    // fill, 0.30 with it and 0.36 weighted, at the hero camera), and the towers read at 0.59 of their ground with no fill.
+    // ground-bounce colour of the ambient hemisphere, fading out as the key lights the surface, so the hard terminator
+    // stays the key's, though the lit side keeps part of the fill (see above); and it falls off with dot(N, V), so the
+    // shadow side keeps its roundness. It follows the authored standard blend, full on characters (Bulwark's 0.35) and
+    // 0.29 of it on the towers, heart and nest at 0.1: at full strength the sky light greyed the heart's stone around its
+    // warm crystal (saturation 0.40 without the fill, 0.30 with it and 0.36 weighted, at the hero camera), and the towers
+    // read at 0.59 of their ground with no fill.
     float actorWeight = clamp(uStandardBlend / AUTHORED_CHARACTER_BLEND, 0.0, 1.0);
     color += albedo * hemisphere * uActorFill * actorWeight * clamp(dot(N, V), 0.0, 1.0) * (1.0 - lambert) * spare;
   #endif
 
   // A coloured lift added where the key does not reach, fading out as the smooth key lights the surface, whatever the
-  // albedo; it adds light rather than setting a floor, so a shadow keeps the depth order of its albedos. Under a low key
-  // the smooth key is small on lit ground too (0.26 on level ground at 15 degrees), so there the lift also greys the lit
-  // meadow; preset B3 leaves it at 0 and deepens its shadow depth instead. The grade's contrast pivots at mid grey, and
-  // preset B's 1.35 crushed every shadow toward navy-black. It lives here rather than in the grade because the grade
-  // cannot tell ink from a dark it should lift once fog has touched the ink: keyed on the ink's luminance, a grade lift
-  // raised the hull ink beside Bulwark from 5 to 27 luma at the hero camera. The ink is never drawn with this material,
-  // so it stays black.
+  // albedo; it adds light rather than setting a floor, so a shadow keeps the depth order of its albedos. The smooth key
+  // is under 1 on lit ground too, so the lift reaches it as well: 0.43 of the lift on level ground under the default
+  // 35 degree key, and 0.74 under a 15 degree key (where the smooth key is 0.26), which is how it greys a golden hour's
+  // lit meadow. Preset B3 leaves it at 0 and raises its shadow depth instead, from B2's 0.5 to 0.62: the shadow band's
+  // direct light is the shadow tint times the depth, so that lights the shadows about a quarter more in the saturated
+  // tint rather than greying them. The grade's contrast pivots at mid grey, and preset B's 1.35 crushed every shadow
+  // toward navy-black. It lives here rather than in the grade because the grade cannot tell ink from a dark it should
+  // lift once fog has touched the ink: keyed on the ink's luminance, a grade lift raised the hull ink beside Bulwark
+  // from 5 to 27 luma at the hero camera. The ink is never drawn with this material, so the lift never reaches it.
   color += uShadowLiftColor * uShadowLift * (1.0 - lambert) * spare;
 
   // The rim separates characters and props from the ground; on terrain, at grazing angles, it lifts the whole field.

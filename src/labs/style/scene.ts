@@ -74,6 +74,22 @@ export const SCATTER_PLAN: readonly ScatterEntry[] = [
  */
 export const NO_EDGE_PIECES: readonly string[] = ['grass_tuft', 'flowers'];
 
+/**
+ * The range each scattered piece's size is drawn from, as a multiple of its size in the kit. The sun's shadow box
+ * (SHADOW_HALF_WIDTH in main.ts) has to hold a crown at the top of this range, which tests/unit/labs/shadow-reach.test.ts
+ * checks, so the test reads the range from here.
+ */
+export const SCATTER_SIZE_MIN = 0.8;
+export const SCATTER_SIZE_MAX = 1.25;
+
+/**
+ * How far a scattered piece's up leans from the planet's up toward the ground's normal, as place()'s alignToGround:
+ * rocks lie close to the slope under them, and trees, bushes and flowers stand close to plumb. A lean tips a crown out
+ * over its slope, so the shadow reach test places each piece at its own.
+ */
+export const ROCK_LEAN = 0.8;
+export const SCATTER_LEAN = 0.2;
+
 const UP = new Vector3(0, 1, 0);
 const HOME_ANGLE = Math.atan2(BULWARK_HOME.z, BULWARK_HOME.x);
 const HOME_YAW = Math.PI;
@@ -152,9 +168,9 @@ function scatter(root: Group, patch: StylePatch, kit: LoadedAsset, ctx: Material
         radius = Math.sqrt(rng.range(minRadius * minRadius, maxRadius * maxRadius));
       } while (solid && Math.abs(radius - HUSK_RADIUS) < HUSK_PATH_CLEARANCE);
       const yaw = rng.range(0, Math.PI * 2);
-      const size = rng.range(0.8, 1.25);
+      const size = rng.range(SCATTER_SIZE_MIN, SCATTER_SIZE_MAX);
       if (i >= count) continue;
-      place(holder, patch, Math.cos(angle) * radius, Math.sin(angle) * radius, yaw, name.startsWith('rock') ? 0.8 : 0.2);
+      place(holder, patch, Math.cos(angle) * radius, Math.sin(angle) * radius, yaw, name.startsWith('rock') ? ROCK_LEAN : SCATTER_LEAN);
       holder.scale.setScalar(size);
       holder.updateMatrix();
       instanced.setMatrixAt(i, matrix.multiplyMatrices(holder.matrix, piece));

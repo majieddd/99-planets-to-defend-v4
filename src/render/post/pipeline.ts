@@ -51,19 +51,22 @@ export const WARM_BLUE_NONE = 0.35;
  * The ink gate. A pixel takes none of the bloom's glow at or under INK_GATE_HEADROOM times the ink's linear luminance
  * (the inkColor dial, which KeyedBloomEffect holds as uInkLuminance) and all of it, up to GLOW_LIFT_MAX, from
  * INK_GATE_WIDTH above that. The hull ink is drawn in the ink colour itself, so where it wholly covers a pixel near the
- * camera it sits under the gate and stays black. The edges follow the dial because fixed edges let a lighter ink take
+ * camera it sits under the gate and stays as drawn. The edges follow the dial because fixed edges let a lighter ink take
  * the glow again: at 0.006 and 0.015 they sat only 1.24 times over the default ink's 0.0049, and #102030 (0.0136) took
  * 93 percent of the glow, which lifted the heart's outline at the hero camera by 42 luma on the low tier and 46 on the
  * high tier; following the ink, that outline gains 0.2 and 16 luma, as it does in the default ink. The trade-off is that
  * a lighter ink is harder to tell from dark paint by luminance, so its gate also takes the halo off paint as dark as it:
  * at #102030 the gate spans 0.0168 to 0.0258, where the darkest paint near energy begins, and the halo around energy at
  * the hero camera keeps 99 and 96 percent of the default ink's on the low and high tiers; a mid-grey ink (#808080,
- * 0.216) keeps 28 and 11 percent.
+ * 0.216) keeps 28 and 11 percent. And because the width is added rather than scaled, the ramp narrows as the ink
+ * lightens: between the sRGB greys at its two edges it spans about 14.8 levels of 255 at the default ink, 9.6 at
+ * #102030 and 2.2 at #808080. At #ffffff the gate opens at 1.24, over the full-sun white the default key is calibrated
+ * to (about 1.0, painted.ts), so almost no paint gets a halo.
  *
  * INK_GATE_HEADROOM is 0.006 over the default ink's 0.0048552, to the seven digits that make the default ink's edges the
- * fixed 0.006 and 0.015 they replace, exactly in fp32, so frames in the default ink are unchanged bit for bit (on all
- * three tiers: the four cameras at the defaults, the hero camera at heartHalo 7, and the hero and strategic cameras at
- * the art preset). Painted surfaces sit above those edges: over the hero, close-up and strategic cameras on all three
+ * fixed 0.006 and 0.015 they replace, and frames in the default ink measured unchanged bit for bit (on all three tiers:
+ * the four cameras at the defaults, the hero camera at heartHalo 7, and the hero and strategic cameras at the art
+ * preset). Painted surfaces sit above those edges: over the hero, close-up and strategic cameras on all three
  * tiers, at the defaults and at the art preset, the darkest ink-free pixels near energy were 0.0167 (1st percentile),
  * and under 0.3 percent of the ink-free pixels in any frame fell below 0.015. A pixel counted as ink where its luma
  * changed between frames drawn with the ink black and then white, with the bloom off.
@@ -231,18 +234,19 @@ export interface KeyedBloomOptions {
  * threshold and ramp as the input mask, from the frame's alpha, which still carries the key here because the ink and fog
  * pass keep it.
  *
- * The ink gate keeps the glow off hull ink that wholly covers a pixel near the camera, so an outline there stays black
- * and a halo starts outside it. An outline pixel has a key of 0, so the shield let the whole glow onto it, and AgX lifts
- * dark pixels most: at heartHalo 4 the heart crystal's outline at the hero camera gained 119 luma against 16 for the sky
- * beside it and survived only where MSAA left a partly keyed pixel, dashed on the high tier (32.7 percent of its right
- * edge's rows had no pixel darker than 100) and gone on the low tier (all of them), which phones and the browser tests
- * render. The lift cap then covers dark pixels the gate lets through (see GLOW_LIFT_MAX). With both, that outline at the
- * hero camera averages 12.9, 12.0 and 1.9 luma on the high, medium and low tiers at heartHalo 4 and 7 (1.9 is its value
- * with the bloom off), and no row of it breaks. Both read only this pixel, so they cost no taps; a widened shield would
- * have taken the rails' halos, which have no ink around them, and a gate alone left the art preset's fogged outline as
- * washed as before.
+ * The ink gate keeps the glow off hull ink that wholly covers a pixel near the camera, so an outline there stays as
+ * drawn and a halo starts outside it. An outline pixel has a key of 0, so the shield let the whole glow onto it, and
+ * AgX lifts dark pixels most: at heartHalo 4 the heart crystal's outline at the hero camera gained 119 luma against 16
+ * for the sky beside it and survived only where MSAA left a partly keyed pixel, dashed on the high tier (32.7 percent of
+ * its right edge's rows had no pixel darker than 100) and gone on the low tier (all of them), which phones and the
+ * browser tests render. The lift cap then covers dark pixels the gate lets through (see GLOW_LIFT_MAX). With both, that
+ * outline at the hero camera averages 12.9, 12.0 and 1.9 luma on the high, medium and low tiers at heartHalo 4 and 7
+ * (1.9 is its value with the bloom off), and no row of it breaks. Both read only this pixel, so they cost no taps; a
+ * widened shield would have taken the rails' halos, which have no ink around them, and a gate alone left the art
+ * preset's fogged outline as washed as before.
  *
- * The gate finds ink by luminance alone, so it misses ink that no longer reads darker than paint:
+ * The gate finds ink by luminance alone, so it misses ink that no longer reads darker than paint, and takes paint that
+ * reads as dark as the ink:
  * - Fog lifts distant ink through it. At the default fog, ink more than about 22 to 30 m from the camera rises past the
  *   gate and takes the glow: the heart's outline at the strategic camera reads 62, 57 and 49 luma with the bloom off and
  *   101, 99 and 116 with it on (high, medium, low tier), on the high and medium tiers what it read before the gate. At
@@ -253,6 +257,8 @@ export interface KeyedBloomOptions {
  *   32 at the close-up (high tier).
  * - A background darker than the gate gets no halo, or a capped one, so glow cannot read against a sky or ground as dark
  *   as the ink, such as Ashen Moon's black sky (M8) or Ember Rift's charcoal basalt (M2).
+ * - A lighter ink takes the halo off paint as dark as it: around energy at the hero camera #3a1f5c keeps about 85
+ *   percent of the default ink's halo, and #808080 11 to 28 percent (see INK_GATE_HEADROOM).
  * The proper fix, needed before M2, is a per-pixel ink signal read in place of luminance: the hull and edge ink could
  * write a reserved key band under the lowest bloom threshold of 0.2, or carry an ink coverage flag.
  */
