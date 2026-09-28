@@ -153,8 +153,8 @@ describe('keyed bloom effect', () => {
     // its frames measured unchanged bit for bit.
     expect(
       inkGateEdges(DEFAULT_DIALS.inkColor),
-      "the default ink or the gate constants changed, so the ink gate's figures (INK_GATE_HEADROOM and KeyedBloomEffect " +
-        'in pipeline.ts, and their Render constants and Render defaults rows) need re-measuring',
+      "the default ink or the gate constants changed, so the ink gate's figures (INK_GATE_HEADROOM, INK_GATE_WIDTH and " +
+        'KeyedBloomEffect in pipeline.ts, and their Render constants and Render defaults rows) need re-measuring',
     ).toEqual([Math.fround(0.006), Math.fround(0.015)]);
     // Every ink sits under its own gate, so where it wholly covers a pixel it takes no glow, and a black ink, whose
     // luminance is 0, still has a ramp (GLSL leaves smoothstep undefined when its edges meet).

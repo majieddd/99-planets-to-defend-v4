@@ -3,8 +3,9 @@ import { Uniform, Vector2 } from 'three';
 import type { RenderDials } from '../defaults';
 
 // This runs after AgX but before the output sRGB encode, so it sees display-linear light, where equal steps are
-// far from equal to the eye. Grain wants to read evenly from ink to highlights ("light film grain"), and a gamma 2
-// space is close enough to sRGB for that. Reduced motion freezes the grain, because a per-frame shimmer is motion.
+// far from equal to the eye. Grain, off by default but kept as a dial, wants to read evenly from ink to highlights,
+// and a gamma 2 space is close enough to sRGB for that. Reduced motion freezes the grain, because a per-frame shimmer
+// is motion.
 const fragmentShader = /* glsl */ `
 uniform float uVignette;
 uniform float uGrain;
@@ -36,6 +37,7 @@ export class FinishEffect extends Effect {
         ['uVignette', new Uniform(dials.vignette)],
         ['uGrain', new Uniform(dials.grain)],
         ['uSeed', new Uniform(0)],
+        // A placeholder size: EffectComposer.addPass sizes the pass, and so this effect, before the first draw.
         ['uResolution', new Uniform(new Vector2(1920, 1080))],
       ]),
     });

@@ -104,8 +104,8 @@ describe('post effect dials', () => {
   });
 
   it('freeze the grain under reduced motion', () => {
-    // The default grain is 0, where any seed draws the same frame and a seed that failed to freeze would pass unseen, so
-    // the grain is turned on here (preset B3's old 0.06) and the test checks it reached the shader.
+    // The default grain is 0, where the seed has no visible effect, so the freeze is tested where it matters: the grain
+    // is turned on here (preset B3's old 0.06), and the test checks it reached the shader.
     const grainy = { ...DEFAULT_DIALS, grain: 0.06 };
     const still = new FinishEffect(grainy, true);
     const moving = new FinishEffect(grainy, false);

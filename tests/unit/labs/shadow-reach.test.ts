@@ -207,9 +207,16 @@ describe('the Style Lab shadow box', () => {
     // passed every test here.
     const placement = 'sun.position.copy(sunDir).multiplyScalar(SUN_DISTANCE);';
     expect(MAIN.split(placement).length - 1, `${placement} at creation and in syncSun`).toBe(2);
+    // Those two lines must also be the only mentions of the sun's position. With the lines pinned alone, a
+    // sun.position.multiplyScalar(0.3) added after either one pulled the sun in and passed, since both lines survived.
+    const positions = MAIN.match(/\bsun\.position\b/g)?.length ?? 0;
+    expect(positions, "main.ts touches the sun's position outside its two placement lines, which reach() assumes are all").toBe(2);
     // reach() aims the shadow camera at the centre, where three's DirectionalLight keeps its target unless something
-    // moves it, and a moved target would slide the whole box off the scatter this test holds inside it.
-    expect(MAIN, 'main.ts moves or replaces the sun\'s target, which reach() assumes stays at the centre').not.toMatch(/\bsun\.target(?:\.position\b|\s*=(?!=))/);
+    // moves it, and a moved target would slide the whole box off the scatter this test holds inside it. Adding the target
+    // to the scene, pinned above, is the one mention allowed. The pattern this replaced caught only a write to the
+    // target's position or the target itself, so sun.target.translateX(5) passed; a count of every mention does not.
+    const targets = MAIN.match(/\bsun\.target\b/g)?.length ?? 0;
+    expect(targets, "main.ts moves or replaces the sun's target, which reach() assumes stays at the centre").toBe(1);
   });
 
   it('measures each piece where the scene puts it: leaned by its own share, and never over the largest scatter size', () => {
