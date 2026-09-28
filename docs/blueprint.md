@@ -1265,7 +1265,8 @@ The order of construction:
 |---|---|---|
 | Browser game: TypeScript, Three.js on WebGL2, Vite, GitHub Pages | partial | toolchain, CI and Pages live (docs/evidence/m0/pages-placeholder.png); no game yet |
 | Repository majieddd/99-planets-to-defend-v4, public | partial | repository created holding this blueprint, 2026-09-23 |
-| Approach A: painted assets, shader lighting, two-pass ink | partial | renderer v1 and the Style Lab were verified on placeholders (docs/evidence/m0/style-placeholder-*.png) and now load M0c's assets (docs/evidence/assets/style_lab_hero.png); the owner style gate is next |
+| Approach A: painted assets, shader lighting, two-pass ink | partial | renderer v1 and the Style Lab were verified on placeholders (docs/evidence/m0/style-placeholder-*.png) and now load M0c's assets (docs/evidence/assets/style_lab_hero.png); the owner style gate is open and the defaults are not yet locked |
+| Painted-Anime-Inkline 4.0 render defaults locked from the owner's tuned dials link | not yet | owner chose to tune live in the Style Lab after seeing looks A, B and C, 2026-09-27; the defaults stay at A until the link arrives, with preset B3 (Render defaults) as a starting point |
 | Every asset built by script in Blender 5.2.1 | partial | style-scene set built by npm run assets; assets:check pass=8 fail=0; sheets in docs/evidence/assets |
 | Stylized, visored commanders | not yet | owner choice, 2026-09-23 |
 | Every v3 system returns, staged by milestone for quality | not yet | owner choice, 2026-09-23 |
@@ -1311,8 +1312,13 @@ The order of construction:
       attack), Worldheart, nest, Verdant kit (rocks, flora, grass cards), brush atlas
 - [x] Style Lab with live dials, the reference board and the colour audit
 - [x] Simulation kernel: fixed tick, seeded RNG streams, event log, save envelope, bot harness
-- [ ] Owner style gate; lock the Painted-Anime-Inkline 4.0 defaults
+- [ ] Owner style gate: the owner tunes the dials live in the deployed Style Lab and sends a dials
+      link; lock the Painted-Anime-Inkline 4.0 defaults from it
 - [ ] Owner: choose a license (none yet, so all rights are reserved by default)
+- [ ] For M2, from the M0 gate: a per-pixel ink signal so the bloom never lifts fogged or edge ink;
+      per-theme seeds for the sun dials, which override the theme's light; a bloom rule for warm
+      hazards such as magma, which would take heartHalo because warm glow means the heart; a
+      triangle readout in the lab, and a LOD for the Verdant clumps if M2's scatter budgets need one
 
 ## Where we are
 
@@ -1342,3 +1348,18 @@ docs/evidence/assets. The check now also holds the Kit's ground contract, which 
 asset's root at its ground contact point. The Style Lab now loads these assets from the manifest,
 and `npm run e2e` renders all four camera presets with them (docs/evidence/assets/style_lab_hero.png).
 Next: the owner's style gate (M0d plan Task 11) on these assets.
+2026-09-27. The M0 style gate is open and waits on the owner's live tuning, so M0 is not complete.
+M0a, M0b and M0c are merged, as are M0d's renderer and Style Lab (PR #3) and its pre-gate fixes
+(PR #4). M0d plan Task 11 has run up to the owner's decision: the lab renders M0c's assets, the
+Verdant crowns and bushes are rounder, and ten new dials cover the heart's warm halo, height fog,
+the sun, a brush-broken soil edge and the look (Render defaults); actors stay readable under a low
+key, the ink stays black under the bloom near the camera, and the terrain terminator stays hard on
+the planet's curve. The colour audit passes, and `npm run e2e` passes 16 of 16. The owner saw three
+looks, A (the defaults), B (Sifu golden hour) and C (Sifu overcast); the coordinator recommended B
+as the base, and two look passes made it preset B3 (Render defaults). The owner chose to tune live
+first, so `DEFAULT_DIALS` stay at A and nothing is locked. Next: once this work is live on Pages,
+the owner opens the Style Lab (https://majieddd.github.io/99-planets-to-defend-v4/labs/style.html),
+tunes its dials from the defaults or from B3, presses "Copy dials link" and sends that link. A small
+lock pull request then decodes it into `DEFAULT_DIALS` as Painted-Anime-Inkline 4.0, takes the
+evidence frames, sets the Render defaults rows to the locked values and records M0 as complete;
+M1 (commander feel) and M2 (planets and the headless end-to-end playable) follow.
