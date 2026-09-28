@@ -23,10 +23,13 @@ export interface WorldPanelState {
   speed: number;
   paused: boolean;
   tier: TierName;
+  /** Whether Pip-A is out on the patch under the keys (the play prototype, play.ts). */
+  play: boolean;
 }
 
 export interface WorldPanelHandlers {
   onFocus(): void;
+  onPlay(on: boolean): void;
   onHeartLevel(level: number): void;
   onTier(tier: TierName): void;
   openStyleLab(): void;
@@ -67,7 +70,12 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
   gui.onOpenClose(syncOpenClass);
   syncOpenClass();
 
+  // First, so the owner finds it without scrolling the panel on a phone.
   gui
+    .add(state, 'play')
+    .name('Play Pip (prototype)')
+    .onChange((on: boolean) => handlers.onPlay(on));
+  const viewControl: Controller = gui
     .add(state, 'view', viewOptions())
     .name('view')
     .onChange(() => {
@@ -85,7 +93,7 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
     memberControl.options(memberOptions(state.view));
   };
   // The frame loop reads the turntable and the labels from the state every frame, so neither toggle needs a handler.
-  gui.add(state, 'turntable').name('turntable');
+  const turntableControl = gui.add(state, 'turntable').name('turntable');
   gui.add(state, 'labels').name('labels');
   // The slider's top is the heart's last stage, read from HEART_STAGES rather than kept as a copy that could drift.
   gui.add(state, 'heartLevel', 0, HEART_STAGES - 1, 1).name('slider heart level').onChange((level: number) => handlers.onHeartLevel(level));
@@ -97,6 +105,8 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
   return {
     refresh() {
       rebuildMembers();
+      // While he plays, the camera follows him, so the controls that would glide it to a view or turn it wait.
+      for (const controller of [viewControl, memberControl, turntableControl]) controller.enable(!state.play);
       for (const controller of gui.controllersRecursive()) controller.updateDisplay();
     },
   };

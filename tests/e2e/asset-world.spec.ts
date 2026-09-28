@@ -43,6 +43,17 @@ interface LabelReading {
   fontPx: number;
 }
 
+/** What `__P99__.play()` reads of the play prototype (labs/world/play.ts). */
+interface PlayReading {
+  on: boolean;
+  position: number[] | null;
+  tangent: number[] | null;
+  speed: number;
+  runWeight: number;
+  runTimeScale: number;
+  stride: { loopMetres: number; loopSeconds: number; clipSpeed: number } | null;
+}
+
 const manifest = JSON.parse(readFileSync('public/assets/manifest.json', 'utf8')) as { assets: ManifestEntry[] };
 
 /**
@@ -356,6 +367,48 @@ test.describe('the Asset World', () => {
       expect(wide.focusedLabel!.room, wideLine).toBeGreaterThan(member.focusedLabel!.room);
       expect(wide.focusedLabel!.room, wideLine).toBeLessThanOrEqual(FOCUSED_MEMBER_LABEL_ROOM_PX);
       expect(wide.lookTabIndex, wideLine).toBe(-1);
+      expect(log.errors, line).toEqual([]);
+    });
+
+    test('opens Play Pip from ?play=pip, walks him along the ground on a held key, and follows him', async ({ page }) => {
+      test.setTimeout(240_000);
+      const log = collectConsole(page);
+      await open(page, '?tier=low&play=pip');
+      const read = () =>
+        page.evaluate(() => {
+          const p99 = window.__P99__!;
+          const play = (p99['play'] as () => PlayReading)();
+          const surface = play.tangent ? (p99['surfaceAt'] as (x: number, z: number) => number[])(play.tangent[0]!, play.tangent[1]!) : null;
+          return { play, surface, target: (p99['camera'] as () => CameraReading)().target, search: location.search };
+        });
+      const start = await read();
+      // Held until he has covered half a metre, since SwiftShader's frames are slow and each moves him at most 1/20 s.
+      await page.keyboard.down('KeyW');
+      await page.waitForFunction(
+        (from) => {
+          const now = (window.__P99__!['play'] as () => PlayReading)().tangent;
+          return now !== null && Math.hypot(now[0]! - from[0]!, now[1]! - from[1]!) > 0.5;
+        },
+        start.play.tangent ?? [0, 0],
+        { timeout: 60_000 },
+      );
+      const held = await read();
+      await page.keyboard.up('KeyW');
+      const moved = Math.hypot(held.play.tangent![0]! - start.play.tangent![0]!, held.play.tangent![1]! - start.play.tangent![1]!);
+      const offGround = Math.hypot(...held.play.position!.map((value, i) => value - held.surface![i]!));
+      const followed = Math.hypot(...held.target.map((value, i) => value - start.target[i]!));
+      const line =
+        `asset world play [${test.info().project.name}]: moved ${moved.toFixed(2)} m at ${held.play.speed.toFixed(2)} m/s ` +
+        `(run weight ${held.play.runWeight.toFixed(2)}, run rate ${held.play.runTimeScale.toFixed(2)}), ${(offGround * 1000).toFixed(2)} mm off the ground, ` +
+        `camera target followed ${followed.toFixed(2)} m; run loop ${held.play.stride ? `${held.play.stride.loopMetres.toFixed(3)} m in ${held.play.stride.loopSeconds.toFixed(3)} s` : 'unread'}; address ${held.search}`;
+      console.log(line);
+      expect(start.play.on, line).toBe(true);
+      expect(start.search, line).toContain('play=pip');
+      expect(moved, line).toBeGreaterThan(0.5);
+      expect(held.play.speed, line).toBeGreaterThan(0);
+      expect(offGround, line).toBeLessThan(0.001);
+      expect(followed, line).toBeGreaterThan(0.1);
+      expect(held.play.stride, line).not.toBeNull();
       expect(log.errors, line).toEqual([]);
     });
 

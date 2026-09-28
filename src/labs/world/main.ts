@@ -14,12 +14,14 @@ import { createRenderer } from '../../render/renderer';
 import { createPaintedSky } from '../../render/sky';
 import { createStylePatch, STYLE_PLANET_RADIUS } from '../../render/terrain/stylePatch';
 import { VERDANT } from '../../render/themes';
-import type { FacePose } from '../shared/commanderFace';
+import { FACE_SEED, type FacePose } from '../shared/commanderFace';
 import { flatTexture, loadManifestTexture, loadNamedAsset } from '../shared/labAssets';
 import { NARROW_SCREEN } from '../style/referenceBoard';
 import { WorldLabels, type LabelSpec } from './labels';
 import { buildAssetWorld, type AssetWorld } from './layout';
 import { createWorldPanel, type WorldPanelState } from './panel';
+import { createPipPlay } from './play';
+import { createPlayInput } from './playInput';
 import { coverageGaps, MEMBERS } from './registry';
 import { createWorldSun } from './sun';
 import {
@@ -42,6 +44,11 @@ const PAGE = 'Asset World';
 const TURNTABLE_SECONDS = 40;
 /** How long a view chosen in the panel takes to arrive, in seconds; reduced motion and the test handle jump at once. */
 const TRANSITION_SECONDS = 0.8;
+/** The one value `?play=` takes: Pip-A under the keys (the play prototype). */
+const PLAY_PIP = 'pip';
+/** The play hint's words, mechanics first: the keys on a keyboard, the thumb pad on a touch screen. */
+const PLAY_HINT_KEYS = 'Play Pip (prototype): WASD or the arrow keys move him, Shift sprints, drag to orbit, wheel to zoom.';
+const PLAY_HINT_TOUCH = 'Play Pip (prototype): the pad moves him, pushed to its rim he sprints; drag elsewhere to orbit, pinch to zoom.';
 
 // start() fills these in, so a failure at any point can stop the loop and word the banner for when it happened.
 let activeRenderer: WebGLRenderer | null = null;
@@ -109,6 +116,7 @@ async function start(): Promise<void> {
     speed: 1,
     paused: false,
     tier: parseTier(params.get('tier')) ?? (probe ? detectTier(probe, navigator.userAgent) : 'low'),
+    play: false,
   };
   let tier = TIERS[state.tier];
   const renderer = createRenderer(stage, tier);
@@ -174,6 +182,10 @@ async function start(): Promise<void> {
   if (gaps.length) showBanner(`Not in the Asset World yet: ${gaps.join('; ')}`);
   const assets = manifest ? await loadEntries(manifest, ctx) : new Map<string, LoadedAsset>();
   if (!manifest) showBanner('The Asset World needs the built assets (npm run assets); none were found.');
+  // Before the world is built: the play prototype keeps a copy of Pip-A's rig in the bind pose, which the world's mixers
+  // would otherwise have posed by the time it is copied. He goes in the scene, not the world's root, so the world's
+  // members, bounds and labels stay exactly what they are with play off.
+  const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS);
   const world: AssetWorld = buildAssetWorld(
     patch,
     assets,
@@ -242,6 +254,8 @@ async function start(): Promise<void> {
    * assets did not load, the registry's overview, so the camera never stays at the origin inside the ground.
    */
   function applyFocus(animate: boolean): void {
+    // While Pip-A plays the camera follows him: a resize or the slider heart must not glide it off to a view.
+    if (pipPlay.active) return;
     const lens = { fov: camera.fov, aspect: camera.aspect, heightPx };
     const pose = frameView(current(), world.members, specs, { labels: state.labels, widthPx }, lens) ?? registryOverview(patch, lens);
     userMoved = false;
@@ -256,6 +270,8 @@ async function start(): Promise<void> {
     next.delete('member');
     if (state.member) next.set('member', state.member);
     else if (state.view !== OVERVIEW) next.set('family', state.view);
+    next.delete('play');
+    if (state.play) next.set('play', PLAY_PIP);
     const query = next.toString();
     history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}`);
   }
@@ -272,6 +288,48 @@ async function start(): Promise<void> {
     if (member) openView({ view: member.zone, member: member.name });
     else if (isViewName(name)) openView({ view: name, member: '' });
     else return false;
+    return true;
+  }
+  // The play prototype: Pip-A out on the patch under the keys or the thumb pad, the camera following him.
+  const playHint = document.getElementById('play-hint') as HTMLElement;
+  const pad = document.getElementById('pad') as HTMLElement;
+  const input = createPlayInput(pad, pad.querySelector('.pad-knob') as HTMLElement);
+  const coarse = matchMedia('(pointer: coarse)');
+  function syncPlayUi(): void {
+    const touch = coarse.matches;
+    playHint.hidden = !state.play;
+    playHint.textContent = touch ? PLAY_HINT_TOUCH : PLAY_HINT_KEYS;
+    pad.hidden = !(state.play && touch);
+    document.body.classList.toggle('pad-shown', !pad.hidden);
+  }
+  coarse.addEventListener('change', syncPlayUi);
+  /** Puts Pip-A out to play or brings him in, and is false when the page has no Pip-A to play. */
+  function setPlay(on: boolean): boolean {
+    if (on && !pipPlay.available) {
+      state.play = false;
+      panel.refresh();
+      showBanner('Play Pip needs Pip-A and his idle and run clips, which this build does not have.');
+      return false;
+    }
+    if (on !== pipPlay.active) {
+      if (on) {
+        transition = null;
+        state.turntable = false;
+        // Each face on the page blinks on its own seed, and his follows the world's (FACE_SEED).
+        pipPlay.enter(camera, controls, world.members, FACE_SEED + world.faces().length, frozen);
+      } else {
+        pipPlay.exit(controls);
+        state.view = OVERVIEW;
+        state.member = '';
+      }
+    }
+    state.play = on;
+    input.setActive(on);
+    panel.refresh();
+    syncPlayUi();
+    // Leaving play glides back to the overview, which applyFocus skips while he plays.
+    if (!on) applyFocus(true);
+    syncAddress();
     return true;
   }
   controls.addEventListener('start', () => {
@@ -337,6 +395,7 @@ async function start(): Promise<void> {
       applyFocus(true);
       syncAddress();
     },
+    onPlay: (on) => setPlay(on),
     onHeartLevel: (level) => setHeartLevel(level),
     onTier: setTier,
     openStyleLab: () => {
@@ -373,6 +432,14 @@ async function start(): Promise<void> {
   let frozen = params.get('freeze') === '1';
   // The faces hold with the clips, a blink included, so a frozen frame is the same frame on every load.
   world.setFrozen(frozen);
+  // `?play=pip` opens the play prototype over the view the address opened, once the freeze it must respect is read;
+  // any other value is named and skipped.
+  const playParam = params.get('play');
+  if (playParam === PLAY_PIP) setPlay(true);
+  else if (playParam) {
+    console.warn(`${PAGE}: no play mode named "${playParam}" in the address`);
+    showBanner(`No play mode named "${playParam}"; only ?play=${PLAY_PIP} opens one.`);
+  }
   const fpsBox = document.getElementById('fps') as HTMLElement;
   let last = performance.now();
   let frames = 0;
@@ -437,10 +504,22 @@ async function start(): Promise<void> {
     freeze: (on: boolean) => {
       frozen = on;
       world.setFrozen(on);
+      pipPlay.setFrozen(on);
     },
+    // The play prototype: puts Pip-A out or brings him in (false when the page has none), and reads where he is.
+    setPlay: (on: boolean) => setPlay(on),
+    play: () => pipPlay.reading(),
     // A face pose held on a member for an evidence frame, or null to hand it back to its blink and demo.
     setFace: (name: string, pose: FacePose | null) => world.setFace(name, pose),
     faces: () => world.faces(),
+    // A debug hook for evidence captures: places the camera and the orbit's centre exactly, ending any glide, so a frame
+    // can be taken from a chosen pose. Nothing on the page calls it.
+    setCamera: (position: number[], target: number[]) => {
+      transition = null;
+      camera.position.fromArray(position);
+      controls.target.fromArray(target);
+      controls.update();
+    },
   };
   loopStarted = true;
   renderer.setAnimationLoop(() => {
@@ -460,8 +539,11 @@ async function start(): Promise<void> {
         controls.target.lerpVectors(transition.from.target, transition.to.target, eased);
         if (t >= 1) transition = null;
       }
-      // The turntable turns around the open view, and waits while a view glides in.
-      controls.autoRotate = state.turntable && transition === null;
+      // Pip-A moves on the frame's own step, which the freeze stops, and not on the animation speed dial, which is the
+      // world's clips'; the camera then follows him before the controls apply a drag or the wheel.
+      if (pipPlay.active) pipPlay.update(dt, input.read(), camera, controls);
+      // The turntable turns around the open view, and waits while a view glides in or Pip-A plays.
+      controls.autoRotate = state.turntable && transition === null && !pipPlay.active;
       controls.update(frozen ? 0 : Math.min(interval / 1000, 1 / 20));
       sky.follow(camera);
       pipeline.render(dt);
