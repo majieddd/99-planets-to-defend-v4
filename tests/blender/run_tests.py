@@ -202,6 +202,40 @@ def test_rigid_binding_and_action_export(tmp):
     assert arm.data.pose_position == 'POSE', arm.data.pose_position
 
 
+def test_morph_export_is_opt_in(tmp):
+    # A skinned head with one face shape key, as the commander's body carries five.
+    arm = rig.humanoid('rig')
+    head = geo.box('head', (0.2, 0.2, 0.24), location=(0, 0, 1.6))
+    body = rig.bind_rigid(arm, [(head, 'head')], 'body')
+    top = max(v.co.z for v in body.data.vertices)
+    body.shape_key_add(name='Basis', from_mix=False)
+    blink = body.shape_key_add(name='blink_L', from_mix=False)
+    for v in body.data.vertices:
+        if v.co.z > top - 1e-4:
+            blink.data[v.index].co.z -= 0.05
+    # Off by default: a recipe that names nothing exports as every recipe always has, with no targets.
+    plain = glb_json(export.export_glb([arm, body], tmp / 'plain.glb'))
+    assert all('targets' not in p for m in plain['meshes'] for p in m['primitives']), plain['meshes']
+    # On: the shape key ships as a named morph target of positions alone, and the mesh stays skinned.
+    face = glb_json(export.export_glb([arm, body], tmp / 'face.glb', morphs=True))
+    prim = face['meshes'][0]['primitives'][0]
+    assert face['meshes'][0].get('extras', {}).get('targetNames') == ['blink_L'], face['meshes'][0]
+    assert [sorted(t) for t in prim['targets']] == [['POSITION']], prim['targets']
+    assert 'JOINTS_0' in prim['attributes'] and 'WEIGHTS_0' in prim['attributes'], prim['attributes']
+    # glTF is Y-up, so the lid's -0.05 along Blender's z is -0.05 along the accessor's y, its required min.
+    delta = face['accessors'][prim['targets'][0]['POSITION']]
+    assert abs(delta['min'][1] + 0.05) < 1e-5 and abs(delta['max'][1]) < 1e-5, (delta['min'], delta['max'])
+    # Modifiers are applied on every export, and one that changes the topology drops the mesh's shape keys without a
+    # word, so the export refuses rather than ship a face that never blinks.
+    body.modifiers.new('tri', 'TRIANGULATE')
+    try:
+        export.export_glb([arm, body], tmp / 'dropped.glb', morphs=True)
+    except RuntimeError as error:
+        assert "body's shape keys ['blink_L'] are missing from dropped.glb" in str(error) and 'tri (TRIANGULATE)' in str(error), error
+    else:
+        raise AssertionError('a triangulated mesh lost its shape keys and the export passed')
+
+
 def _flat(value, shape=(4, 4)):
     return np.full(shape, value, np.float64)
 

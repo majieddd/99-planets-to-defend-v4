@@ -185,6 +185,33 @@ export const BAND_EDGE_RADIUS = 25;
 export const DEFAULT_STANDARD_BLEND = 0.1;
 
 /**
+ * Skin, where a mesh's _skin weight is 1 (a commander's face, ears and neck), is lit more softly than the cel bands light
+ * everything else, in the Sifu manner: smooth gradients inside a simple form, never a hard light and dark split down the
+ * face. The weight lerps four values toward these, so a weight of 0 takes each dial exactly (mix(a, b, 0.0) is a).
+ *
+ * SKIN_BAND_SOFTNESS is the band edge's half-width in band units, as the bandSoftness dial is, so at the locked 2 bands
+ * the light ramps over ndl from -0.35 to +0.35, about 20 degrees to each side of the terminator, where the locked 0.03
+ * spans under 2 degrees. It must stay at or under 0.5: past half a band the smoothstep no longer reaches 1 before the
+ * next band's floor, and the ramp would step at every band's top.
+ *
+ * SKIN_TERMINATOR_NOISE is 0: the brush-broken terminator, the locked 0.3, flips whole brush strokes between light and
+ * shadow, which on a face printed dark flecks across a cheek.
+ *
+ * SKIN_STANDARD_BLEND is the blend of standard (Lambert) lighting against the bands that skin takes in place of its
+ * material's (Bulwark's 0.35 at the locked dial's 9/7 is 0.45), leaning further toward smooth light.
+ *
+ * SKIN_PROP_BRUSH is 0: the prop brush strokes albedo from the brush atlas at 0.7 tiles per metre, so one stroke is about
+ * twice a head's width, and on a sphere face in the locked look it laid angular light and dark patches across the cheek
+ * and brow that read as dirt. The face keeps its own baked paint, which the commander's atlas carries.
+ *
+ * The values were chosen on a sphere face in the locked look (docs/blueprint.md, Render constants, where the figures are).
+ */
+export const SKIN_BAND_SOFTNESS = 0.35;
+export const SKIN_TERMINATOR_NOISE = 0;
+export const SKIN_STANDARD_BLEND = 0.65;
+export const SKIN_PROP_BRUSH = 0;
+
+/**
  * Whether a material is an actor's, which takes the actorFill dial. The test is the authored standard blend, decided once
  * at creation (the shader branch is a define), so it needs nothing from the loader: every asset already passes its blend.
  */
@@ -210,6 +237,11 @@ export interface PaintedOptions {
    * vertex colour so the soilBreakup dial can break the soil's edge into the brush strokes.
    */
   soilColor?: Color;
+  /**
+   * The geometry carries a per-vertex skin weight (the loader's skinMask, from a GLB's _skin), which softens the light
+   * toward the SKIN_ values. Only a material created with this declares the attribute, for the reason PAINT_SOIL gives.
+   */
+  skin?: boolean;
   vertexColors?: boolean;
   /** 0 is pure cel banding; characters blend toward standard lighting, as Sifu does. */
   standardBlend?: number;
@@ -217,9 +249,17 @@ export interface PaintedOptions {
   alphaTest?: number;
 }
 
+// Morph targets follow three r186's own order (ShaderLib/meshlambert.glsl.js): the instanced influences first, the
+// morphed normal before skinning bends it, and the morphed position before skinning moves it, so a blink closes the lid
+// in the bind pose and the skeleton then carries the closed lid. three sets USE_MORPHTARGETS, MORPHTARGETS_COUNT and
+// MORPHTARGETS_TEXTURE_STRIDE itself for any non-raw ShaderMaterial drawn on a geometry with morph attributes
+// (WebGLPrograms.getParameters reads geometry.morphAttributes, WebGLProgram writes the defines), and uploads the
+// influences and the morph texture before each draw (WebGLMorphtargets.update), so every chunk below compiles to
+// nothing on a mesh without morphs. morphcolor_vertex is left out: no asset exports morphed colours.
 const vertexShader = /* glsl */ `
 #include <common>
 #include <batching_pars_vertex>
+#include <morphtarget_pars_vertex>
 #include <skinning_pars_vertex>
 #include <shadowmap_pars_vertex>
 
@@ -234,6 +274,10 @@ varying vec3 vBrushNormal;
   attribute float soilWeight;
   varying float vSoil;
 #endif
+#ifdef PAINT_SKIN
+  attribute float skinMask;
+  varying float vSkin;
+#endif
 
 void main() {
   vUv = uv;
@@ -245,12 +289,18 @@ void main() {
   #ifdef PAINT_SOIL
     vSoil = soilWeight;
   #endif
+  #ifdef PAINT_SKIN
+    vSkin = skinMask;
+  #endif
+  #include <morphinstance_vertex>
   #include <batching_vertex>
   #include <beginnormal_vertex>
+  #include <morphnormal_vertex>
   #include <skinbase_vertex>
   #include <skinnormal_vertex>
   #include <defaultnormal_vertex>
   #include <begin_vertex>
+  #include <morphtarget_vertex>
   #include <skinning_vertex>
   #include <project_vertex>
   vViewPosition = -mvPosition.xyz;
@@ -260,7 +310,8 @@ void main() {
     vBrushPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
     vBrushNormal = vWorldNormal;
   #else
-    // Object space before skinning: strokes stay on the body as it moves instead of swimming.
+    // Object space before skinning: strokes stay on the body as it moves instead of swimming. Before the morphs too,
+    // so a blinking lid carries its strokes with it, as it carries its UVs, instead of sliding under them.
     vBrushPos = position;
     vBrushNormal = normal;
   #endif
@@ -316,6 +367,9 @@ uniform float uStandardBlendScale;
   uniform float uSoilBreakup;
   varying float vSoil;
 #endif
+#ifdef PAINT_SKIN
+  varying float vSkin;
+#endif
 
 varying vec2 vUv;
 varying vec3 vWorldNormal;
@@ -339,6 +393,13 @@ vec3 withSaturation(vec3 c, float amount) {
 
 void main() {
   float brush = brushSample(vBrushPos, vBrushNormal);
+  #ifdef PAINT_SKIN
+    // Skin lerps the prop brush, the terminator's break-up, the band softness and the standard blend toward the SKIN_
+    // values by its weight (see SKIN_BAND_SOFTNESS). Each lerp takes the dial exactly at a weight of 0, and these lines
+    // exist only in a material made for a mesh that carries the weight, so every other material compiles the shader it
+    // always did.
+    float skin = clamp(vSkin, 0.0, 1.0);
+  #endif
   vec3 albedo = uBaseColor * vColor;
   float alpha = 1.0;
   #ifdef USE_PAINT_MAP
@@ -361,7 +422,11 @@ void main() {
   #else
     // The baked paint is broad at hero distance (Bulwark's plates read smooth), so the brush atlas strokes it too, in
     // object space so the strokes ride the body; the terminator had been the only place the brush reached a prop.
-    albedo *= 1.0 + (brush - 0.5) * uPropBrush;
+    #ifdef PAINT_SKIN
+      albedo *= 1.0 + (brush - 0.5) * mix(uPropBrush, SKIN_PROP_BRUSH, skin);
+    #else
+      albedo *= 1.0 + (brush - 0.5) * uPropBrush;
+    #endif
   #endif
   if (alpha < uAlphaTest) discard;
   albedo = withSaturation(albedo, uSaturation);
@@ -424,6 +489,9 @@ void main() {
     float nearTerminator = 1.0 - smoothstep(reach, 2.0 * reach, abs(ndl));
     breakup = mix(breakup, min(breakup, ndlRate * TERMINATOR_BAND_TILES / uBrushScale), nearTerminator);
   #endif
+  #ifdef PAINT_SKIN
+    breakup = mix(breakup, SKIN_TERMINATOR_NOISE, skin);
+  #endif
   float t = ndl + (brush - 0.5) * 2.0 * breakup;
   t = min(t, shadow * 2.0 - 1.0);
   // Exactly uBands light levels with the first step on the terminator, so the whole form-shadow side takes the
@@ -440,10 +508,17 @@ void main() {
     softness = min(uBandSoftness, max(uBandSoftness * min(1.0, ndlRate * BAND_EDGE_RADIUS), 0.5 * fwidth(x)));
     softness = max(softness, 1e-4);
   #endif
+  #ifdef PAINT_SKIN
+    softness = mix(softness, SKIN_BAND_SOFTNESS, skin);
+  #endif
   float stepped = (floor(x) + smoothstep(0.5 - softness, 0.5 + softness, fract(x))) / (uBands - 1.0);
   float lambert = max(ndl, 0.0) * shadow;
   // The standardBlend dial rescales the authored blend; the clamp stops mix extrapolating past standard lighting.
-  float lit = clamp(mix(stepped, lambert, clamp(uStandardBlend * uStandardBlendScale, 0.0, 1.0)), 0.0, 1.0);
+  #ifdef PAINT_SKIN
+    float lit = clamp(mix(stepped, lambert, mix(clamp(uStandardBlend * uStandardBlendScale, 0.0, 1.0), SKIN_STANDARD_BLEND, skin)), 0.0, 1.0);
+  #else
+    float lit = clamp(mix(stepped, lambert, clamp(uStandardBlend * uStandardBlendScale, 0.0, 1.0)), 0.0, 1.0);
+  #endif
 
   // Shadows take the theme's colour instead of going grey.
   vec3 direct = mix(uShadowTint * uShadowDepth, sunColor, lit);
@@ -546,6 +621,15 @@ export function createPaintedMaterial(shared: PaintUniforms, options: PaintedOpt
     defines['PAINT_SOIL'] = '';
     defines['SOIL_EDGE_GAIN'] = glslFloat(SOIL_EDGE_GAIN);
     defines['SOIL_EDGE_SOFTNESS'] = glslFloat(SOIL_EDGE_SOFTNESS);
+  }
+  // The skin weight's attribute is declared the same way, for the same reason: a mesh without it would read a stale
+  // constant as its weight.
+  if (options.skin) {
+    defines['PAINT_SKIN'] = '';
+    defines['SKIN_BAND_SOFTNESS'] = glslFloat(SKIN_BAND_SOFTNESS);
+    defines['SKIN_TERMINATOR_NOISE'] = glslFloat(SKIN_TERMINATOR_NOISE);
+    defines['SKIN_STANDARD_BLEND'] = glslFloat(SKIN_STANDARD_BLEND);
+    defines['SKIN_PROP_BRUSH'] = glslFloat(SKIN_PROP_BRUSH);
   }
   const material = new ShaderMaterial({
     name: 'PaintedMaterial',

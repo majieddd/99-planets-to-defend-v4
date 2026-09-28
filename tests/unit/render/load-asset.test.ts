@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { collectMeshes, paintAndInk } from '../../../src/render/assets/loadAsset';
 import { DEFAULT_DIALS } from '../../../src/render/defaults';
 import { createHullMaterial, createInkUniforms } from '../../../src/render/ink/hull';
+import { LAYERS } from '../../../src/render/layers';
 import { createPaintUniforms } from '../../../src/render/materials/painted';
 import { VERDANT } from '../../../src/render/themes';
 
@@ -61,5 +62,31 @@ describe('paintAndInk', () => {
     expect(uniforms['uEmissiveColor']?.value).toEqual(shared.emissive);
     expect(uniforms['uEmissiveIntensity']?.value).toBe(3);
     expect(rock.castShadow && rock.receiveShadow).toBe(true);
+  });
+
+  it('lights a mesh that carries _skin as skin and keeps it out of the edge pass, while its hull and its armour stay as they were', () => {
+    const shared = new MeshStandardMaterial({ color: 0xd9a07f });
+    const body = inkedMesh('commander_body', 0.5, shared);
+    const count = body.geometry.getAttribute('position').count;
+    // GLTFLoader lower-cases a glTF's _SKIN; 1 on the face, 0 elsewhere, soft between.
+    const weight = new Float32BufferAttribute(Array.from({ length: count }, (_, i) => (i % 3) / 2), 1);
+    body.geometry.setAttribute('_skin', weight);
+    const armour = inkedMesh('commander_armour', 0.5, shared);
+    const root = new Group();
+    root.add(body, armour);
+    paintAndInk(root, ctx, 0.35);
+    // The weight reaches the shader as skinMask, the very attribute, and only the body's material declares it.
+    expect(body.geometry.getAttribute('skinMask')).toBe(weight);
+    expect(painted(body).defines['PAINT_SKIN']).toBe('');
+    expect(painted(armour).defines['PAINT_SKIN']).toBeUndefined();
+    expect(armour.geometry.getAttribute('skinMask')).toBeUndefined();
+    // One source material, two painted ones: a mesh without the weight must not read a skinMask it lacks.
+    expect(body.material).not.toBe(armour.material);
+    // The body leaves the world layer, which the edge pass draws, for noEdge; the armour keeps its crease ink.
+    expect(body.layers.mask).toBe(1 << LAYERS.noEdge);
+    expect(armour.layers.mask).toBe(1 << LAYERS.world);
+    // Both keep their silhouette hulls on the hull layer.
+    expect(body.children.map((child) => [child.name, child.layers.mask])).toEqual([['commander_body_hull', 1 << ctx.hullLayer]]);
+    expect(armour.children.map((child) => child.name)).toEqual(['commander_armour_hull']);
   });
 });

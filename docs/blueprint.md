@@ -240,6 +240,27 @@ the shared strike timings and this ground contract, using the numbers the build 
 compares the manifest with the Content tables. Every design noun in Mechanics through Content must
 be in this catalogue before the milestone that uses it starts.
 
+**Face morphs and skin.** A model may carry morph targets, Blender shape keys exported by
+`export_glb(..., morphs=True)` (blender/lib/export.py) with morph normals and tangents off, on the terms
+the ground contract keeps: no target may move any vertex within 5 mm of its placeable's lowest point,
+the ground contact, nor carry any other vertex down to within 5 mm of it, at any weight from 0 to 1, and
+the file's default weights must lie in that range (Morph targets against the ground contact,
+Performance budgets). The build measures this through the skin in the bind pose and fails before it
+publishes, naming the target. A commander's face morphs (`blink_L`, `blink_R`, `smile`, `brows_up`,
+`pucker`) pass; a morph that moves a foot is refused. `inspect.mjs` reads each model's morph names; the
+manifest does not record them yet. Every export applies its modifiers, and one that changes the
+topology (triangulate, bevel, subdivision) drops the mesh's shape keys, so a morph export fails unless
+every shape key reached the file: a recipe applies such modifiers before it adds the shape keys. A mesh
+may also carry `_SKIN`, a per-vertex float that is 1 on face, ears and neck skin, 0 elsewhere and soft
+at the borders, where a missing attribute means 0. The painted material lights skin softly (Soft skin
+light, Render constants), and the loader moves a mesh that carries `_SKIN` to the noEdge layer, out of
+the screen-space edge pass, so a face shows no crease ink at the nose, lips and eyes while its hull
+keeps the silhouette (on the GPU in the locked look, a box nose on a sphere head drew 511 pixels of edge
+ink inside the face on the world layer, at its outline and its crease, and none on noEdge). The choice
+is per mesh: garments and hair on the skinned body lose their crease
+ink too, while armour exported as a mesh of its own keeps it. `_INK` may be 0 on hair that overlaps the
+face, so the hull does not outline the hair across it.
+
 | Class | Planned count | Recipe | First milestone |
 |---|---|---|---|
 | Commanders | 5 archetypes on one shared skeleton (Bulwark, Twinfang, Longsight, Kettle, Emberline) | `bulwark.py` (M0); one recipe per commander after | M0 (Bulwark), M4 (all five) |
@@ -1001,6 +1022,7 @@ The same check holds these tolerances.
 | Ground contact, the bind-pose minimum Y of each placeable | within 5 mm of 0 | The runtime stands each root on the ground, so any miss floats or sinks the asset; 5 mm allows only rounding |
 | Designed sink, named by the recipe | at most 0.14 m, matched by the measured depth within 5 mm | Lets a rock bury its base edge; the cap stops a sink from hiding a misplaced root |
 | Clip length and strike time against `src/shared/timings.json` | within 1/30 s | One frame at the clips' 30 fps, so animation and simulation never disagree by more than a frame |
+| Morph targets against the ground contact (tools/assets/inspect.mjs, checked by the build, not by assets:check) | no target moves a vertex within 5 mm of its placeable's lowest point or carries one down to within 5 mm of it, judged at weight 1; default weights 0 to 1; a displacement counts past 0.1 mm (`MORPH_STILL`) | The ground measurement reads only base positions, so a morph is allowed only where it cannot move what that measurement stands for: 5 mm is the ground tolerance itself, and a displacement is linear in its weight, so judging each target at weight 1 covers every weight from 0 to 1, the range Blender's shape key sliders and the face driver keep to. A face morph passes; a morph that moves a foot, even sideways, is refused. The placeable's lowest point is used rather than the whole asset's, which for a commander, one placeable, is the same point and for a kit is the stricter one. 0.1 mm is the manifest's rounding of ground contact; a target leaves the vertices it does not move at exactly 0, which the quantizer keeps exact. Before M1 any morph target was refused; the synthetic GLBs in tests/unit/assets/morphs.test.ts run the rule through the build's own optimizer |
 
 ### Render defaults
 
@@ -1087,6 +1109,7 @@ set.
 | Grain hash, `fract(sin(dot(p, vec2(12.9898, 78.233)) + uSeed) * 43758.5453)` on the pixel index `floor(uv * uResolution)` (post/finishEffect.ts) | 12.9898, 78.233 and 43758.5453 | A pseudo-random value from 0 to 1 for each screen pixel and seed: the dot product folds the pixel's column and row into one number, the seed offsets it, and the sine scaled by 43758.5453 changes so fast between neighbours that its fractional part reads as noise. Indexing by the screen pixel is what pins the grain to the glass rather than to the painted surfaces (Film grain, Render defaults). These are the constants of the widely used one-line shader hash; renderer v1 took it from the M0d plan, and why this hash was chosen over another was not recorded |
 | Grain space, `sqrt(c)` before the grain and `g * g` after (post/finishEffect.ts) | gamma 2 | The grain is added to the square root of the display-linear colour and the sum is squared back, a gamma 2 space close enough to sRGB that equal steps of grain read evenly from ink to highlights. Added in display-linear light it was six to nine times louder in shadows and ink, a spread of 14.9 sRGB levels in ink against 1.8 in highlights, and clipping it there lifted black into grey speckle; in gamma 2 it spreads 2.6 to 3.8 levels across all tones (83db415, measured in headless Chromium). The sum is still clipped at 0, so grain can only brighten black ink, which is why B3's old 0.06 lifted the ink beside Bulwark from 4.3 to 6.3 luma (Film grain, Render defaults) |
 | `DEFAULT_STANDARD_BLEND` (materials/painted.ts) | 0.1 | The blend a painted material takes when its creator names none, a prop's; above 0 the material is an actor's and takes the actor fill |
+| Soft skin light: `SKIN_BAND_SOFTNESS`, `SKIN_TERMINATOR_NOISE`, `SKIN_STANDARD_BLEND` and `SKIN_PROP_BRUSH` (materials/painted.ts) | 0.35, 0, 0.65 and 0 | Where a mesh's `_skin` weight is 1 (Kit, Face morphs and skin), the band edge softness, the terminator's brush noise, the standard blend and the prop brush lerp toward these by the weight, in the Sifu manner: smooth gradients inside a simple form, never a hard light and dark split down a face. The lines exist only in a material made for a mesh that carries the weight, and each takes its dial exactly at a weight of 0. The softness is a half-width in band units, so at the locked 2 bands the light ramps over ndl from -0.35 to +0.35, and it must stay at or under 0.5, past which the ramp steps at every band's top. The terminator noise is 0 because the locked 0.3 flips whole brush strokes between light and shadow. The blend replaces the material's own (Bulwark's 0.35 is 0.45 at the locked dial), leaning toward smooth light. The prop brush is 0 because the atlas tiles 0.7 times per metre, so one stroke is about twice a head's width: at the locked 1.3 it laid angular light and dark patches across a sphere face's cheek and brow, and turning the head's cast shadow off changed nothing, so the patches were the brush's alone. Measured in the locked look on the RTX 4080 laptop, high tier, 1920 x 1080, on a 0.12 m sphere head 14 m over the clearing seen from 0.75 m, face to the camera, key at 15 degrees: along the face's centre row the largest step between neighbouring pixels is 2.1, 14.9, 7.6, 6.4 and 2.0 luma on the cel face with the key 0, 45, 90, 120 and 150 degrees from the camera, against 0.8, 1.4, 1.0, 1.1 and 1.0 on skin, and over four pixels 8.1, 47.5, 28.6, 22.3 and 6.9 against 0.9, 5.1, 2.9, 2.9 and 2.9; no pixel on skin is a sliver (4 luma or more under its neighbourhood on both sides), and the cel face has one at 45 degrees. With the key at 90 degrees the lit side reads 158 luma and the shadow side 83, the terminator's middle 129. Against the softness and blend pairs 0.25 and 0.55, 0.5 and 0.65, and 0.5 and 0.75, the four-pixel step at 45 degrees reads 7.3, 4.5 and 4.6 against 5.1 here: 0.25 keeps a narrower band and the 0.5 pairs read airbrushed, while 0.35 keeps a soft terminator the eye still finds. In the lines' arithmetic (tests/unit/render/skin-lighting.test.ts), the largest change of linear luminance over 0.04 of ndl on camera-facing skin is 0.344 on the cel bands and 0.029 on skin, it never falls as the face turns toward the key, and the brush moves it by 0.41 on the cel bands and not at all on skin. A skin weight of 0 matches a mesh with no weight bit for bit on the GPU: 0 of 2,073,600 pixels differ with the key at 45, 90 and 150 degrees |
 | `FAMILY_STANDARD_BLEND` (assets/familyBlend.ts) | commanders 0.35, xeno 0.3, towers, heart and nests 0.1, env 0 | The blend each manifest family's materials are authored at, which the Style Lab and the Asset World both load with, so an asset lights alike on the two pages: Bulwark's `AUTHORED_CHARACTER_BLEND`, the Husk's 0.3 (Actor fill, Render defaults), a structure's 0.1 (`DEFAULT_STANDARD_BLEND`) and paint alone for the kit, the values the Style Lab loaded each asset with before the table existed. A family the table does not name throws with its name rather than loading as a prop, because a character loaded as a prop would lose the actor fill and nothing on screen would say why |
 | `SOIL_EDGE_GAIN` and `SOIL_EDGE_SOFTNESS` (materials/painted.ts) | 2.2 and 0.06 | How far the brush sample moves the soil edge's threshold, in soil weight, and the threshold's half-width. The brush atlas spans 0.29 to 0.71 between its 5th and 95th percentiles, so 2.2 spreads the threshold over the whole of the old soft band where 1 would jitter it by a fifth; 0.06 is about 10 cm of ground on the ring's ramps, a crisp stroke edge at hero distance that still anti-aliases from the strategic camera |
 | Hull ink distance scale, `clamp(uDistanceRef / max(-mvPosition.z, 0.001), 0.35, 1.0)` with `uDistanceRef` 25 (ink/hull.ts) | 25 m and 0.35 | The hull ink keeps its full screen width out to 25 m from the camera and beyond that thins in proportion to 25 m over the distance, so far props do not turn to ink blots; the clamp stops the thinning at 0.35 of the full width, reached 71 m out, and the width is then held to the Hull ink width row's 1.2 to 4 px (Render defaults). At the default 2.2 px, on ink authored at width 1, the 1.2 px floor takes over from about 46 m, so the 0.35 clamp shows only on wider ink. Renderer v1's values, from the M0d plan; why 25 m and 0.35 were chosen was not recorded |
@@ -1129,6 +1152,21 @@ world's centre on the pole.
 | `WORLD_CASTER_MARGIN` and `WORLD_SHADOW_HALF_WIDTH` (labs/world/sun.ts) | 7 m; the furthest root's 17 m plus 7, so 24 m | A member's point lies at most its root's distance, plus its footprint's half-width, plus its height from the centre, and the largest of each in the manifest are the broad tree's 1.71 m and the stage 10 heart's 5.19 m (measured from the GLBs), 6.9 m rounded up. The high tier's 2048 map then has 2.3 cm texels, against the Style Lab's 4.9 cm |
 | The browser test's ground allowances (tests/e2e/asset-world.spec.ts) | 5 mm, plus 4.4 cm for the structures, 2.5 cm for the kit and 4 cm for the characters | Each member's lowest drawn point, along the planet's up at its spot (`PlacedMember.lowest`, measured with its bounds), against the ground on the planet's radius through it, less its designed sink. The bounds' lowest corner cannot stand for it: the planet's curve tilts a member 17 m out by 6 degrees, which alone put rock B's bounds 14 cm under its root. The Kit's 5 mm contract, then the structures' lean stray (`LEAN`; Mark III reads 4.1 cm), the kit's rocks and flora leaning on the arc's slopes as the Style Lab's scatter does (rock A reads 2.3 cm), and the characters' opening poses rather than the bind pose the contract measures (Bulwark's run reads 3.8 cm up). Every read is the same on every load, since the layout, the ground and the opening poses are fixed |
 | The Style Lab's frame (labs/world/main.ts) | a 50 degree lens from 0.1 to 2500 m, orbit to 400 m; the scene's step clamped to 1/20 s; the frame interval a 0.95 running average, shown every 30 frames; ready at frame 3; flat textures of 128 (materials) and 0 (sky) | Taken as the Style Lab has them, so the two pages measure and draw alike |
+
+### Face driver
+
+The labs' face for a commander (`src/labs/shared/faceDriver.ts`): render and lab code, driven by the lab's frame
+delta, outside the simulation. It blinks both lids together (`blink_L`, `blink_R`), holds `smile`, `brows_up` and
+`pucker` at weights from 0 to 1 set for a demo, opens the `jaw` bone if the rig has one, and holds the face while the
+lab is frozen. The hull ink shares the body's morph influences, so the ink closes with the lid (Kit, Face morphs and
+skin).
+
+| Constant | Value | Why |
+|---|---|---|
+| `BLINK_INTERVAL_MIN_SECONDS` and `BLINK_INTERVAL_MAX_SECONDS` | 2.5 to 5 s, drawn evenly from an injected random source (`seededFaceRandom` for a seed) | People at rest blink every few seconds; a drawn wait never settles into a metronome, and a slower rate reads as a stare on a face this close to the camera. The unit test holds every wait inside the range at 60 fps and at the labs' slowest step of 1/20 s |
+| `BLINK_CLOSE_SECONDS` and `BLINK_OPEN_SECONDS` | 0.06 and 0.09 s, 150 ms in all, each eased by a smoothstep | A lid closes faster than it opens, and 150 ms sits inside a real blink's 100 to 400 ms. A long frame delta runs through every phase it spans, so one 10 s step and a thousand 10 ms steps land on the same lid |
+| `DOUBLE_BLINK_CHANCE` and `DOUBLE_BLINK_GAP_SECONDS` | 0.2 and 0.1 s | One blink in five comes twice, 100 ms apart, which reads as life rather than a timer; the second of a pair is never followed by a third |
+| `JAW_OPEN_MAX_DEG` and `JAW_BONE_NAME` | 14 degrees about the jaw axis (the bone's own x unless the lab names another), from the bone's rest pose; `jaw` | A mouth open to speak, not a yawn; the commander's rig decides the axis, which the lab passes once the asset arrives. A lab updates the driver after its animation mixer, which would otherwise overwrite the morphs and the jaw with any track its clips carry |
 
 ## Content: planets and families
 
@@ -1449,10 +1487,12 @@ The order of construction:
       5 heads tall, oversized hands and feet, slim limbs, chunky rounded volumes) and a visible
       cartoon face with painted features and blink and jaw shape keys, modelled in the Blender
       pipeline against the published Bo and Pip GLBs as measured proportion references; M0 locked on
-      the current, visored Bulwark; the face's known blockers are that `tools/assets/inspect.mjs`
-      refuses any primitive with morph targets, the `commanders` budget has no shape-key line, the
-      painted and hull materials have no morph support, and the Kit's Commanders row does not list
-      the M1 rebuild
+      the current, visored Bulwark; the renderer's face support is built and tested on synthetic
+      meshes (face morphs allowed under the ground rule, morph targets in the painted and hull
+      materials, soft skin light from `_SKIN`, no crease ink on skin meshes, the labs' face driver;
+      Kit, Face morphs and skin), and the face's remaining blockers are that the `commanders` budget
+      has no shape-key line, the manifest does not record morph names, and the Kit's Commanders row
+      does not list the M1 rebuild
 - [ ] For M2, from the M0 gate: a per-pixel ink signal so the bloom never lifts fogged or edge ink;
       per-theme seeds for the sun dials, which override the theme's light; a bloom rule for warm
       hazards such as magma, which would take heartHalo because warm glow means the heart; deciding
