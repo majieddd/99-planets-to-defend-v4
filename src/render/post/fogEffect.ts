@@ -12,7 +12,7 @@ export interface FogPlanet {
 /**
  * The segments the height fog integrates each ray over. Measured against a 4000-step reference on the ground rays of the
  * style scene's four cameras (the bare 160 m sphere), the worst ray is always the strategic camera's grazing limb, 40 to
- * 120 m out. There 8 segments keep the fog-weighted length within 2.3 percent at a falloff of 0.3 from the default
+ * 120 m out. There 8 segments keep the fog-weighted length within 2.3 percent at a falloff of 0.3 from renderer v1's
  * fogStart of 20 m and within 3.3 percent from a fogStart of 0, and within 3.9 and 5.5 percent at the dial's top falloff
  * of 0.5, at most 0.018 of fog amount at density 0.02. 4 segments let the same rays drift by 8.9 and 12.5 percent at 0.3
  * and by 14.4 and 19.9 percent at 0.5. The low cameras, whose ground ends within 34 m, stay under 0.5 percent with 8.

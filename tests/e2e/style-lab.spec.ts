@@ -132,23 +132,27 @@ test.describe('the style lab test handle', () => {
 
     const original = await page.evaluate(() => (window.__P99__!['dials'] as () => Record<string, unknown>)());
     await step('before');
-    const moved = (await step('sun', { sunElevation: 8 })) as SetDialsResult;
+    // The locked sun is at 15 degrees, so the move goes to the Verdant theme's own 35: from 15 up to 35 the frame
+    // changed by 3.25 under SwiftShader, and from 15 down to 8 by only 2.2, against a floor of 2 for the check below.
+    const moved = (await step('sun', { sunElevation: 35 })) as SetDialsResult;
 
     // With the sun still moved, one bad value of each kind next to one good move: out of range, not a colour, not a
     // dial at all, a string for a number, and a string outside Latin-1 (btoa threw on it, so once nothing moved at all).
-    // A refused dial keeps the value it had: the moved sun stays at 8, not the default.
+    // A refused dial keeps the value it had: the moved sun stays at 35, not the default.
     const refused = await setDials({ sunElevation: 200, shadowTint: 'teal', notADial: 1, bandSoftness: '0.1', inkColor: '#12345☃', exposure: 0.5 });
 
     // Restored after the refusal, the frame is the very first one: the refusal left nothing behind, and the frozen
     // scene did not move in between.
     const restored = (await step('back', original)) as SetDialsResult;
 
-    // Each look pass dial changes the frame when moved, and moving it back gives the first frame again exactly.
+    // Each look pass dial changes the frame when moved, and moving it back gives the first frame again exactly. The
+    // locked look already has a prop brush of 1.3, lit saturation of 1.09 and an actor fill of 1.4, so each move goes to a
+    // value away from its locked one: renderer v1's start for the brush and the fill, a restraint for the saturation.
     const looks: [string, number][] = [
-      ['propBrush', 1.3],
+      ['propBrush', 0],
       ['litSaturation', 0.8],
       ['shadowLift', 0.05],
-      ['actorFill', 1.2],
+      ['actorFill', 0],
     ];
     const lookMoves: Record<string, SetDialsResult> = {};
     for (const [key, value] of looks) {
@@ -170,10 +174,10 @@ test.describe('the style lab test handle', () => {
       `, refused ${JSON.stringify(refused.rejected)}`;
     console.log(line);
     expect(moved.rejected, line).toEqual([]);
-    expect(moved.dials.sunElevation, line).toBe(8);
+    expect(moved.dials.sunElevation, line).toBe(35);
     expect(differences['sun'], line).toBeGreaterThan(2);
     expect([...refused.rejected].sort(), line).toEqual(['bandSoftness', 'inkColor', 'notADial', 'shadowTint', 'sunElevation']);
-    expect(refused.dials.sunElevation, line).toBe(8);
+    expect(refused.dials.sunElevation, line).toBe(35);
     expect(refused.dials.shadowTint, line).toBe(original['shadowTint']);
     expect(refused.dials.bandSoftness, line).toBe(original['bandSoftness']);
     expect(refused.dials.inkColor, line).toBe(original['inkColor']);
@@ -188,8 +192,9 @@ test.describe('the style lab test handle', () => {
     }
 
     // Unfrozen, the scene moves (the Husk walks, Bulwark cycles), which shows the freeze held it. The grain is off at the
-    // defaults, so the difference is the scene's motion alone: 0.26 to 0.29 in five runs under SwiftShader, where the
-    // grain's re-seeding at the old default of 0.04 had made it about 2.8 and would have hidden a scene that never moved.
+    // defaults, so the difference is the scene's motion alone: 0.26 to 0.29 in five runs under SwiftShader at renderer
+    // v1's dials and 0.29 and 0.30 in two at the locked ones. The grain's re-seeding at its old default of 0.04 had made
+    // the difference about 2.8, which would have hidden a scene that never moved.
     await page.evaluate(() => (window.__P99__!['freeze'] as (on: boolean) => void)(false));
     await page.waitForTimeout(600);
     await step('running');

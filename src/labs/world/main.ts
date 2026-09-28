@@ -3,13 +3,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { standardBlendFor } from '../../render/assets/familyBlend';
 import type { LoadedAsset, MaterialContext } from '../../render/assets/loadAsset';
 import { assetUrl, fetchManifest, type Manifest } from '../../render/assets/manifest';
-import type { RenderDials } from '../../render/defaults';
+import { DEFAULT_DIALS, type RenderDials } from '../../render/defaults';
 import { acceptDial, decodeDials, encodeDials, type SetDialsResult } from '../../render/dialsCodec';
 import { applyInkDials, createHullMaterial, createInkUniforms } from '../../render/ink/hull';
 import { LAYERS } from '../../render/layers';
 import { applyPaintDials, createPaintUniforms } from '../../render/materials/painted';
 import { createPipeline, type Pipeline } from '../../render/post/pipeline';
-import { GOLDEN_HOUR_B3 } from '../../render/presets';
 import { detectTier, parseTier, TIERS, type TierName } from '../../render/quality';
 import { createRenderer } from '../../render/renderer';
 import { createPaintedSky } from '../../render/sky';
@@ -95,9 +94,15 @@ async function start(): Promise<void> {
   const params = new URLSearchParams(location.search);
   const probe = document.createElement('canvas').getContext('webgl2');
   const linked = params.get('dials');
-  // Preset B3 unless the address carries a dials link. A link's dials apply over the Style Lab's defaults, exactly as
-  // the Style Lab applies the same link, so a look tuned there opens here unchanged rather than mixed into B3.
-  const dials: RenderDials = linked ? decodeDials(linked) : { ...GOLDEN_HOUR_B3 };
+  // The locked Painted-Anime-Inkline 4.0 defaults, which the Style Lab opens on too, unless the address carries a dials
+  // link, whose dials apply over those defaults exactly as the Style Lab applies the same link, so a look tuned there
+  // opens here unchanged. The page opened in its own copy of preset B3 while the style gate was open, built as B3's
+  // changes over DEFAULT_DIALS; once the lock moved DEFAULT_DIALS that copy silently became neither B3 nor the locked
+  // look (the locked edge fade with B3's edge ink and lit saturation), so the page now reads the one locked set.
+  const dials: RenderDials = linked ? decodeDials(linked) : { ...DEFAULT_DIALS };
+  // Named for what the dials are, not for whether the address has a link: both pages' buttons always write one, and a
+  // link that moves no dial opens the locked look.
+  const lookKind = (Object.keys(DEFAULT_DIALS) as (keyof RenderDials)[]).some((key) => dials[key] !== DEFAULT_DIALS[key]) ? 'link' : 'locked';
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const state: WorldPanelState = {
     view: OVERVIEW,
@@ -115,7 +120,7 @@ async function start(): Promise<void> {
 
   const look = document.getElementById('look') as HTMLButtonElement;
   const lookName = look.querySelector('.look-name') as HTMLElement;
-  lookName.textContent = linked ? 'Look: a dials link over the Style Lab defaults' : 'Look: golden-hour preset B3';
+  lookName.textContent = lookKind === 'locked' ? 'Look: Painted-Anime-Inkline 4.0 (locked)' : 'Look: a dials link over the locked defaults';
   const narrow = matchMedia(NARROW_SCREEN);
   // On a phone the note shows its first line and opens on a tap; on a wider screen it is always open.
   look.setAttribute('aria-expanded', String(!narrow.matches));
@@ -179,6 +184,9 @@ async function start(): Promise<void> {
   let pipeline: Pipeline = createPipeline({ renderer, scene, camera, tier, dials, theme, inkNoise, sunDirection: sun.direction, reducedMotion, planet });
   const drawing = new Vector2();
 
+  // Everything that reads the sun, as in the Style Lab: the light, the sky and the fog's sunward warming. Run once here
+  // too, because the sky starts from the theme's sun colour, which the locked defaults already override, and
+  // createWorldSun leaves the light's position to the first sync.
   function syncSun(): void {
     sun.sync(dials);
     sky.setSun(sun.direction, dials.sunColor);
@@ -380,7 +388,7 @@ async function start(): Promise<void> {
     page: 'world',
     tier: state.tier,
     assets: manifest !== null && gaps.length === 0 && world.members.length === MEMBERS.length,
-    look: linked ? 'link' : 'B3',
+    look: lookKind,
     placed: [...new Set(world.members.flatMap((entry) => [entry.member.entry, entry.member.name]))],
     roots: () =>
       world.members.map((entry) => ({

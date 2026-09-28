@@ -6,10 +6,12 @@ import { sunDirection, type Theme } from '../../render/themes';
 import { WORLD_REACH } from './registry';
 
 /**
- * The Asset World's sun, which the page moves with the sun dials as the Style Lab moves its own. It keeps the Style Lab's
- * distance, depth range, biases and single-tap filter (labs/style/main.ts, Render constants), whose reasons hold here
- * too: at 90 m out every member, all within 24 m of the centre, lies well past the 1 m near plane, and the patch's
- * farthest corner, 96.9 m from the centre, inside the 220 m far plane. Only the box's width follows this page's layout.
+ * The Asset World's sun, which the page moves with the sun dials as the Style Lab moves its own: the elevation, colour
+ * and intensity come from the dials, whose locked defaults override the theme's light, and the theme keeps the azimuth,
+ * so both pages draw the same key from the same dials. It keeps the Style Lab's distance, depth range, biases and
+ * single-tap filter (labs/style/main.ts, Render constants), whose reasons hold here too: at 90 m out every member, all
+ * within 24 m of the centre, lies well past the 1 m near plane, and the patch's farthest corner, 96.9 m from the centre,
+ * inside the 220 m far plane. Only the box's width follows this page's layout.
  */
 export const WORLD_SUN_DISTANCE = 90;
 export const WORLD_SHADOW_NEAR = 1;

@@ -136,12 +136,14 @@ function farOf(origin: Vec, direction: Vec): number {
   return disc > 0 && t > 0 ? Math.min(t, 2000) : 2000;
 }
 
-// Camera heights from the strategic camera's 38 m to 1.9 km, which OrbitControls panning reaches, at the falloffs the
-// art presets use (0.3) and the dial's top (0.5). The form this replaced, e0 * (1 - e^-x) / x, returned NaN from 1.44 km
-// up at 0.5 and from 1.8 km at 0.4, where a descending segment's e^-x passed fp32's limit.
+// Camera heights from the strategic camera's 38 m to 1.9 km, which OrbitControls panning reaches, at the locked falloff
+// (0.3) and the dial's top (0.5). The form this replaced, e0 * (1 - e^-x) / x, returned NaN from 1.44 km up at 0.5 and
+// from 1.8 km at 0.4, where a descending segment's e^-x passed fp32's limit. The starts are the locked 0 and renderer
+// v1's 20 m, which the lock replaced, so a start above 0 stays covered.
 const HEIGHTS = [38, 400, 1500, 1900];
-const FALLOFFS = [0.3, 0.5];
-const STARTS = [DEFAULT_DIALS.fogStart, 0];
+const FALLOFFS = [DEFAULT_DIALS.fogHeightFalloff, 0.5];
+const V1_FOG_START = 20;
+const STARTS = [V1_FOG_START, DEFAULT_DIALS.fogStart];
 
 describe('height fog length in fp32', () => {
   it('is the analytic integral on straight-down rays, where altitude falls linearly and the segments are exact', () => {
@@ -200,11 +202,12 @@ describe('height fog length in fp32', () => {
 
   it('counts every metre at the surface density through a hollow, and nothing on a ray that ends before the fog starts', () => {
     // Constant altitude makes x exactly 0, where the quotient is 0 / 0: a ray under the sphere's surface (a hollow in the
-    // terrain) has altitude 0 throughout, and a ray shorter than fogStart has segments of no length.
+    // terrain) has altitude 0 throughout, and a ray shorter than fogStart (renderer v1's 20 m here; the locked look starts
+    // at 0, where no ray is that short) has segments of no length.
     for (const falloff of FALLOFFS) {
       expect(fogLength([0, -2, 0], [1, 0, 0], 20, 0, falloff), `hollow, f ${falloff}`).toBe(f(20));
       expect(fogLength([0, -2, 0], [1, 0, 0], 20, 5, falloff), `hollow from 5 m, f ${falloff}`).toBe(f(15));
-      expect(fogLength([0, 1.7, 0], [1, 0, 0], 10, DEFAULT_DIALS.fogStart, falloff), `short ray, f ${falloff}`).toBe(0);
+      expect(fogLength([0, 1.7, 0], [1, 0, 0], 10, V1_FOG_START, falloff), `short ray, f ${falloff}`).toBe(0);
     }
   });
 

@@ -163,10 +163,11 @@ async function start(): Promise<void> {
   camera.layers.enable(LAYERS.sky);
   camera.layers.enable(LAYERS.noEdge); // grass and flowers: drawn, and cast shadows (r186 tests this camera's layers)
 
-  // The sun's elevation, colour and intensity are dials that default to the theme's light; the theme keeps the azimuth.
-  // The light rides a sphere of SUN_DISTANCE around the scene centre, where its target stays, and syncSun moves it. The
-  // shadow camera's box, SHADOW_HALF_WIDTH to each side and SHADOW_NEAR to SHADOW_FAR deep, holds every shadow caster at
-  // every elevation the dial allows. The old 45 m box did not: at 85 degrees it cut the outermost conifer's shadow.
+  // The sun's elevation, colour and intensity are dials whose locked defaults override the theme's light; the theme
+  // keeps the azimuth. The light rides a sphere of SUN_DISTANCE around the scene centre, where its target stays, and
+  // syncSun moves it. The shadow camera's box, SHADOW_HALF_WIDTH to each side and SHADOW_NEAR to SHADOW_FAR deep, holds
+  // every shadow caster at every elevation the dial allows. The old 45 m box did not: at 85 degrees it cut the outermost
+  // conifer's shadow.
   const sunDirectionAt = (elevationDeg: number): Vector3 => new Vector3(...sunDirection({ ...theme, sun: { ...theme.sun, elevationDeg } }));
   const sunDir = sunDirectionAt(dials.sunElevation);
   const sun = new DirectionalLight(dials.sunColor, dials.sunIntensity);
@@ -226,8 +227,8 @@ async function start(): Promise<void> {
   const drawing = new Vector2();
 
   // Everything that reads the sun: the light (and so every painted material and the shadows), the sky's disc, glow and
-  // cloud light, and the fog's sunward warming. Run once here too, because the sky starts from the theme's sun colour
-  // and a dials link can open the lab with another.
+  // cloud light, and the fog's sunward warming. Run once here too, because the sky starts from the theme's sun colour,
+  // which the locked defaults already override, and a dials link can open the lab with yet another.
   function syncSun(): void {
     sunDir.copy(sunDirectionAt(dials.sunElevation));
     sun.position.copy(sunDir).multiplyScalar(SUN_DISTANCE);

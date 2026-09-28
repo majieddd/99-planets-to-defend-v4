@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { DEFAULT_DIALS } from '../../src/render/defaults';
 import { encodeDials } from '../../src/render/dialsCodec';
-import { GOLDEN_HOUR_B3 } from '../../src/render/presets';
 
 interface ManifestEntry {
   name: string;
@@ -83,7 +82,7 @@ test.describe('the Asset World', () => {
   // A small canvas keeps SwiftShader's frames cheap, as the Style Lab's handle test does.
   test.use({ viewport: { width: 480, height: 270 } });
 
-  test('places every manifest model and kit piece on the patch, inside the overview, in preset B3', async ({ page }) => {
+  test('places every manifest model and kit piece on the patch, inside the overview, in the locked defaults', async ({ page }) => {
     test.setTimeout(240_000);
     const errors = collectErrors(page);
     const started = Date.now();
@@ -147,8 +146,9 @@ test.describe('the Asset World', () => {
     expect(worstGap, line).toBeLessThan(1e-3);
     expect(outside, line).toEqual([]);
     expect(unframed, line).toEqual([]);
-    expect(state.look, line).toBe('B3');
-    expect(state.dials, line).toEqual(GOLDEN_HOUR_B3);
+    // With no dials link the world opens on DEFAULT_DIALS, Painted-Anime-Inkline 4.0, the set the Style Lab opens on.
+    expect(state.look, line).toBe('locked');
+    expect(state.dials, line).toEqual(DEFAULT_DIALS);
     expect(errors, line).toEqual([]);
   });
 
@@ -182,7 +182,7 @@ test.describe('the Asset World', () => {
     expect(member.search, line).toContain('member=bolt_mk2');
     expect(at.w > 0 && Math.abs(at.x) < 0.9 && Math.abs(at.y) < 0.9, line).toBe(true);
     expect(member.labels, line).toEqual(expect.arrayContaining(['Mark II', 'Bolt Sentinel']));
-    // A link names only what differs from the Style Lab's defaults, and the rest takes the defaults, not preset B3.
+    // A link names only what differs from the locked defaults, and every dial it does not name keeps its default.
     expect(member.look, line).toBe('link');
     expect(member.dials, line).toEqual({ ...DEFAULT_DIALS, sunElevation: 30 });
 

@@ -58,7 +58,8 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth,
   // A tap under half a texel lands back on the centre texel (depth and normals are read with nearest filtering),
   // so thin lines vanished where the noise was low. The floor is one texel of the edge buffers, which the medium tier
   // draws at 0.75 scale: a floor of one screen pixel let taps land back on the centre texel there. At full scale the
-  // floor changes nothing at the default width of 1.2.
+  // floor changes nothing at renderer v1's width of 1.2 or the locked 1.4: their narrowest taps, 0.72 and 0.84 of a
+  // texel, already land on the neighbouring texel.
   vec2 offset = max(uTexel * uLineWidth * mix(0.6, 1.4, wobble), uEdgeTexel);
   vec2 ox = vec2(offset.x, 0.0);
   vec2 oy = vec2(0.0, offset.y);
