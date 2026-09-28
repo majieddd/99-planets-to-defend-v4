@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
-import { coverageGaps, LEAN, MEMBERS, type CoverageManifest } from '../../src/labs/world/registry';
+import { clipHasReason, coverageGaps, LEAN, MEMBERS, type CoverageManifest } from '../../src/labs/world/registry';
+import { FOCUSED_MEMBER_LABEL_ROOM_PX } from '../../src/labs/world/views';
 import { DEFAULT_DIALS } from '../../src/render/defaults';
 import { encodeDials } from '../../src/render/dialsCodec';
 import { STYLE_PLANET_RADIUS } from '../../src/render/terrain/stylePatch';
@@ -36,6 +37,9 @@ interface LabelReading {
   text: string;
   line: string | null;
   shown: boolean;
+  /** The point the label marks, in CSS pixels from the canvas's top left. */
+  x: number;
+  y: number;
   fontPx: number;
 }
 
@@ -159,8 +163,11 @@ test.describe('the Asset World', () => {
     // The registry accounts for the manifest (models, pieces, clips, textures), and the page placed the whole registry.
     const gaps = coverageGaps(manifest as CoverageManifest);
     const registry = [...new Set(MEMBERS.flatMap((m) => [m.entry, m.name]))];
+    // A clip CLIPS_NOT_SHOWN gives a written reason for needs no root, as the coverage check accepts.
     const unlooped = manifest.assets.flatMap((entry) =>
-      (entry.animations ?? []).filter((clip) => !state.roots.some((root) => root.entry === entry.name && root.clip === clip.name)).map((clip) => `${entry.name}/${clip.name}`),
+      (entry.animations ?? [])
+        .filter((clip) => !clipHasReason(entry.name, clip.name) && !state.roots.some((root) => root.entry === entry.name && root.clip === clip.name))
+        .map((clip) => `${entry.name}/${clip.name}`),
     );
 
     // Ground contact: each member's lowest drawn point, against the ground on the planet's radius through it, sits at
@@ -168,10 +175,13 @@ test.describe('the Asset World', () => {
     const centre = [0, -STYLE_PLANET_RADIUS, 0];
     const fromCentre = (point: number[]) => Math.hypot(...point.map((v, i) => v - (centre[i] as number)));
     const contacts = state.contacts.map((contact) => {
-      const member = MEMBERS.find((m) => m.name === contact.name)!;
-      const record = manifest.assets.find((entry) => entry.name === member.entry)!.ground!.find((r) => r.node === member.node)!;
+      const member = MEMBERS.find((m) => m.name === contact.name);
+      expect(member, `the page placed "${contact.name}", which the registry does not list`).toBeDefined();
+      const { entry, node } = member!;
+      const record = manifest.assets.find((asset) => asset.name === entry)?.ground?.find((r) => r.node === node);
+      expect(record, `the manifest has no ground record for member "${contact.name}" (entry "${entry}", node ${JSON.stringify(node)})`).toBeDefined();
       const height = fromCentre(contact.lowest) - fromCentre(contact.ground);
-      return { name: contact.name, off: height + record.sink, limit: CONTRACT_M + groundAllowance(member) };
+      return { name: contact.name, off: height + record!.sink, limit: CONTRACT_M + groundAllowance(member!) };
     });
     const unground = contacts.filter((contact) => Math.abs(contact.off) > contact.limit);
     const worst = contacts.reduce((a, b) => (Math.abs(b.off) > Math.abs(a.off) ? b : a));
@@ -218,7 +228,13 @@ test.describe('the Asset World', () => {
       const member = await page.evaluate((lockedSun) => {
         const p99 = window.__P99__!;
         const call = <T>(name: string, ...args: unknown[]) => (p99[name] as (...a: unknown[]) => T)(...args);
+        // The focused label's box, and the room it takes above the point it marks, box and tail together, which the
+        // view keeps in frame as FOCUSED_MEMBER_LABEL_ROOM_PX.
+        const reading = call<LabelReading[]>('labels').find((label) => label.key === 'bolt_mk2' && label.shown);
+        const box = document.querySelector('.world-label-focused:not([hidden])')?.getBoundingClientRect();
         const read = {
+          focusedLabel: reading && box ? { height: box.height, room: reading.y - box.top } : null,
+          lookTabIndex: (document.getElementById('look') as HTMLButtonElement).tabIndex,
           focused: call<string>('focused'),
           search: location.search,
           banner: document.getElementById('banner')!.hidden ? '' : document.getElementById('banner')!.textContent,
@@ -238,9 +254,11 @@ test.describe('the Asset World', () => {
         return read;
       }, DEFAULT_DIALS.sunElevation);
       const at = project(member.camera, member.root.position);
+      const labelBox = (box: { height: number; room: number } | null) => (box ? `${box.height.toFixed(1)} px tall, ${box.room.toFixed(1)} px of room` : 'not shown');
       const line =
         `asset world address [${test.info().project.name}]: member view ${member.focused} (${member.search}), banner "${member.banner}", ` +
         `warnings ${JSON.stringify(log.warnings)}, mark II at ndc ${at.x.toFixed(3)}, ${at.y.toFixed(3)}, labels ${JSON.stringify(member.labels)}, ` +
+        `focused label ${labelBox(member.focusedLabel)} (limit ${FOCUSED_MEMBER_LABEL_ROOM_PX}), look chip tab index ${member.lookTabIndex}, ` +
         `look ${member.look} then ${member.relocked} ("${member.relockedChip}"), sun ${String(member.dials['sunElevation'])}, ${log.errors.length} console errors`;
       console.log(line);
       // The bad family is named in the console and the banner; the good member opens, and the address keeps only it.
@@ -251,6 +269,12 @@ test.describe('the Asset World', () => {
       expect(at.w > 0 && Math.abs(at.x) < 0.9 && Math.abs(at.y) < 0.9, line).toBe(true);
       // A member's view names the member alone, with its family as the label's second line, and no family placard.
       expect(member.labels, line).toEqual([{ text: 'Mark II', line: 'Bolt Sentinel' }]);
+      // The two-line label takes no more room above its point than the view keeps for it.
+      expect(member.focusedLabel, line).not.toBeNull();
+      expect(member.focusedLabel!.room, line).toBeGreaterThan(member.focusedLabel!.height);
+      expect(member.focusedLabel!.room, line).toBeLessThanOrEqual(FOCUSED_MEMBER_LABEL_ROOM_PX);
+      // Under the phone line the look chip is a toggle, and a tab stop.
+      expect(member.lookTabIndex, line).toBe(0);
       // A link names only what differs from the locked defaults, and every dial it does not name keeps its default.
       expect(member.look, line).toBe('link');
       expect(member.dials, line).toEqual({ ...DEFAULT_DIALS, sunElevation: 30 });
@@ -299,6 +323,33 @@ test.describe('the Asset World', () => {
       expect(turned, panelLine).toBeGreaterThan(0.1);
       expect(Math.abs(radius(after) - radius(before.camera)), panelLine).toBeLessThan(0.01);
       expect(after.target, panelLine).toEqual(before.camera.target);
+
+      // Past the phone line a label's text and tail are at their largest (world.css), so its room is read there too, on a
+      // canvas just wide enough to cross the line; there the look chip is no toggle and leaves the tab order.
+      await page.evaluate(() => {
+        const p99 = window.__P99__!;
+        (p99['setTurntable'] as (on: boolean) => void)(false);
+        (p99['focus'] as (name: string) => boolean)('bolt_mk2');
+      });
+      await page.setViewportSize({ width: 800, height: 450 });
+      const wide = await page.evaluate(async () => {
+        // The resize refits the view, and the labels follow it in the frames after.
+        await new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+        const p99 = window.__P99__!;
+        const reading = (p99['labels'] as () => LabelReading[])().find((label) => label.key === 'bolt_mk2' && label.shown);
+        const box = document.querySelector('.world-label-focused:not([hidden])')?.getBoundingClientRect();
+        return {
+          width: innerWidth,
+          focusedLabel: reading && box ? { height: box.height, room: reading.y - box.top } : null,
+          lookTabIndex: (document.getElementById('look') as HTMLButtonElement).tabIndex,
+        };
+      });
+      const wideLine = `asset world wide [${test.info().project.name}]: at ${wide.width} px the focused label is ${labelBox(wide.focusedLabel)} (limit ${FOCUSED_MEMBER_LABEL_ROOM_PX}), look chip tab index ${wide.lookTabIndex}`;
+      console.log(wideLine);
+      expect(wide.focusedLabel, wideLine).not.toBeNull();
+      expect(wide.focusedLabel!.room, wideLine).toBeGreaterThan(member.focusedLabel!.room);
+      expect(wide.focusedLabel!.room, wideLine).toBeLessThanOrEqual(FOCUSED_MEMBER_LABEL_ROOM_PX);
+      expect(wide.lookTabIndex, wideLine).toBe(-1);
       expect(log.errors, line).toEqual([]);
     });
 

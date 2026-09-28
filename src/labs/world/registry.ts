@@ -177,9 +177,19 @@ export const NON_PLACEABLE: Readonly<Record<string, string>> = {
 /**
  * Clips a model exports that no member loops, each keyed `entry/clip` with the reason it is not shown. Every clip is
  * shown today, so the table is empty; a clip added to a GLB fails the coverage check by name until it has a member or
- * a reason here.
+ * a reason here, and a reason fails it too once its clip leaves the manifest or a member loops it.
  */
 export const CLIPS_NOT_SHOWN: Readonly<Record<string, string>> = {};
+
+/**
+ * Whether CLIPS_NOT_SHOWN, or the table given, explains a clip of a manifest entry: a blank reason is no reason. The
+ * coverage check and the tests that list unlooped clips all ask this, so a written reason passes all of them; the
+ * browser test and the registry test once asked only whether a member looped the clip, and failed a reason the
+ * coverage check accepted.
+ */
+export function clipHasReason(entry: string, clip: string, clipsNotShown: Readonly<Record<string, string>> = CLIPS_NOT_SHOWN): boolean {
+  return Boolean(clipsNotShown[`${entry}/${clip}`]?.trim());
+}
 
 /** The part of public/assets/manifest.json the coverage check reads. */
 export interface CoverageManifest {
@@ -210,8 +220,9 @@ export function requiredPieces(entry: CoverageManifest['assets'][number]): strin
  * list means every entry is accounted for. A model with no member, a placeable the world leaves out, a kit piece with no
  * place, a clip no member loops and CLIPS_NOT_SHOWN does not explain, and a texture that is neither placed nor given a
  * reason each fail; so does a member whose entry the manifest no longer lists, or whose family disagrees with its
- * entry's. The clips were once left out: the Husk's idle shipped in its GLB and the world showed only its walk and
- * attack, while the blueprint promised every animation.
+ * entry's, and a CLIPS_NOT_SHOWN reason whose clip the manifest no longer lists or a member loops. The clips were once
+ * left out: the Husk's idle shipped in its GLB and the world showed only its walk and attack, while the blueprint
+ * promised every animation.
  */
 export function coverageGaps(
   manifest: CoverageManifest,
@@ -241,7 +252,7 @@ export function coverageGaps(
       }
     }
     for (const { name: clip } of entry.animations ?? []) {
-      if (own.some((m) => m.clip === clip) || clipsNotShown[`${entry.name}/${clip}`]?.trim()) continue;
+      if (own.some((m) => m.clip === clip) || clipHasReason(entry.name, clip, clipsNotShown)) continue;
       gaps.push(`manifest entry "${entry.name}" has a clip "${clip}" that no Asset World member loops and CLIPS_NOT_SHOWN gives no reason for (${where})`);
     }
     for (const m of own) {
@@ -251,6 +262,17 @@ export function coverageGaps(
   }
   for (const m of members) {
     if (!manifest.assets.some((entry) => entry.name === m.entry && entry.kind === 'model')) gaps.push(`member "${m.name}" comes from "${m.entry}", which the manifest does not list as a model (${where})`);
+  }
+  // A reason must still explain something: one kept after its clip left the manifest, or after a member took the clip
+  // up, would silently explain the next clip given that name, or say a shown clip is hidden.
+  for (const key of Object.keys(clipsNotShown)) {
+    const slash = key.indexOf('/');
+    const entryName = slash < 0 ? key : key.slice(0, slash);
+    const clip = slash < 0 ? '' : key.slice(slash + 1);
+    const listed = manifest.assets.some((entry) => entry.name === entryName && entry.kind === 'model' && (entry.animations ?? []).some((animation) => animation.name === clip));
+    const looping = members.find((m) => m.entry === entryName && m.clip === clip);
+    if (!listed) gaps.push(`CLIPS_NOT_SHOWN gives a reason for "${key}", which is no clip the manifest lists; remove it (${where})`);
+    else if (looping) gaps.push(`CLIPS_NOT_SHOWN gives a reason for "${key}", but member "${looping.name}" loops that clip; remove the reason (${where})`);
   }
   return gaps;
 }

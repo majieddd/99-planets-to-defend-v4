@@ -4,6 +4,7 @@ import { FAMILY_STANDARD_BLEND, standardBlendFor } from '../../../src/render/ass
 import {
   BULWARK_ROW_START,
   CHARACTER_SPACING,
+  clipHasReason,
   CLIPS_NOT_SHOWN,
   coverageGaps,
   HUSK_ROW_START,
@@ -28,7 +29,12 @@ describe('the Asset World registry', () => {
     expect(coverageGaps(manifest)).toEqual([]);
     const models = manifest.assets.filter((entry) => entry.kind === 'model');
     for (const entry of models) expect(MEMBERS.some((m) => m.entry === entry.name), entry.name).toBe(true);
-    for (const entry of models) for (const clip of entry.animations) expect(MEMBERS.some((m) => m.entry === entry.name && m.clip === clip.name), `${entry.name} ${clip.name}`).toBe(true);
+    // A clip with a written reason in CLIPS_NOT_SHOWN is accounted for without a member, as coverageGaps accepts it.
+    for (const entry of models) {
+      for (const clip of entry.animations.filter((animation) => !clipHasReason(entry.name, animation.name))) {
+        expect(MEMBERS.some((m) => m.entry === entry.name && m.clip === clip.name), `${entry.name} ${clip.name}`).toBe(true);
+      }
+    }
     const kit = manifest.assets.filter((entry) => entry.family === 'env').flatMap((entry) => entry.nodes);
     expect(kit.length).toBeGreaterThan(0);
     for (const piece of kit) expect(MEMBERS.some((m) => m.node === piece), piece).toBe(true);
@@ -66,14 +72,35 @@ describe('the Asset World registry', () => {
     const gaps = coverageGaps(grown);
     expect(gaps).toEqual([expect.stringMatching(/"husk" has a clip "leap" that no Asset World member loops and CLIPS_NOT_SHOWN/)]);
     expect(gaps[0]).toContain('src/labs/world/registry.ts');
-    expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, { 'husk/leap': 'a one-off intro, shown in the cutscene lab' })).toEqual([]);
-    // A blank reason is no reason, and a reason for another entry's clip covers nothing here.
+    const reason = { 'husk/leap': 'a one-off intro, shown in the cutscene lab' };
+    expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, reason)).toEqual([]);
+    expect(clipHasReason('husk', 'leap', reason)).toBe(true);
+    // A blank reason is no reason, and a reason for another entry's clip covers nothing here (and is itself a stale
+    // reason, since Bulwark ships no such clip).
     expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, { 'husk/leap': '  ' })).toHaveLength(1);
-    expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, { 'bulwark/leap': 'Bulwark does not leap' })).toHaveLength(1);
+    expect(clipHasReason('husk', 'leap', { 'husk/leap': '  ' })).toBe(false);
+    expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, { 'bulwark/leap': 'Bulwark does not leap' })).toEqual([
+      expect.stringContaining('"husk" has a clip "leap"'),
+      expect.stringContaining('reason for "bulwark/leap", which is no clip the manifest lists'),
+    ]);
     // The shipped registry loops every shipped clip, so the table of reasons starts empty.
     expect(CLIPS_NOT_SHOWN).toEqual({});
     const withoutIdle = MEMBERS.filter((m) => m.name !== 'husk_idle');
     expect(coverageGaps(manifest, withoutIdle)).toEqual([expect.stringContaining('"husk" has a clip "idle"')]);
+    expect(coverageGaps(manifest, withoutIdle, NON_PLACEABLE, { 'husk/idle': 'the idle Husk stands in the wave lab' })).toEqual([]);
+  });
+
+  it('fails a CLIPS_NOT_SHOWN reason whose clip left the manifest, or that a member loops, by its key', () => {
+    // The clip left the GLB, so its reason explains nothing, and would silently cover a new clip of that name.
+    const stale = coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { 'husk/leap': 'a one-off intro, shown in the cutscene lab' });
+    expect(stale).toEqual([expect.stringMatching(/CLIPS_NOT_SHOWN gives a reason for "husk\/leap", which is no clip the manifest lists/)]);
+    // A key that names no entry, or has no clip part, is as stale.
+    expect(coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { 'mortar_bastion/fire': 'not built yet' })).toHaveLength(1);
+    expect(coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { husk: 'every clip' })).toHaveLength(1);
+    // A member loops the clip, so the reason says a shown clip is hidden.
+    const looped = coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { 'husk/walk': 'shown in the wave lab instead' });
+    expect(looped).toEqual([expect.stringMatching(/CLIPS_NOT_SHOWN gives a reason for "husk\/walk", but member "husk_walk" loops that clip/)]);
+    for (const gap of [...stale, ...looped]) expect(gap).toContain('src/labs/world/registry.ts');
   });
 
   it('fails a member whose entry left the manifest', () => {

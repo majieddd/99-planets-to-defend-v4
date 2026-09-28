@@ -23,7 +23,6 @@ import { coverageGaps, MEMBERS } from './registry';
 import { createWorldSun } from './sun';
 import {
   frameView,
-  isMemberName,
   isViewName,
   labelRule,
   labelSpecs,
@@ -123,10 +122,12 @@ async function start(): Promise<void> {
   // On a phone the note starts closed behind the chip's first line, and a tap opens or closes it. On a wider screen the
   // note always shows and the chip is no toggle: a click there used to hide the note for good, since nothing reopened
   // it, and turning a phone past the line kept the other width's state. Crossing the line starts that width afresh.
+  // On a wider screen the chip also leaves the tab order, where it was a stop on a button that did nothing when pressed.
   const narrow = matchMedia(NARROW_SCREEN);
   const syncLookOpen = (): void => {
     if (narrow.matches) look.setAttribute('aria-expanded', 'false');
     else look.removeAttribute('aria-expanded');
+    look.tabIndex = narrow.matches ? 0 : -1;
   };
   syncLookOpen();
   narrow.addEventListener('change', syncLookOpen);
@@ -266,7 +267,7 @@ async function start(): Promise<void> {
   }
   /** The test handle's way in: opens a view or a member by name, and is false for a name that is neither. */
   function focus(name: string): boolean {
-    const member = isMemberName(name) ? MEMBERS.find((m) => m.name === name) : undefined;
+    const member = MEMBERS.find((m) => m.name === name);
     if (member) openView({ view: member.family, member: member.name });
     else if (isViewName(name)) openView({ view: name, member: '' });
     else return false;

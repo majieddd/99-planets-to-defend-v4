@@ -32,12 +32,14 @@ import {
   CHARACTERS,
   familyLabelAnchor,
   familyLabelKey,
+  FAMILY_MEMBER_LABELS_MIN_WIDTH,
   FIT_NDC,
+  fitFloorOf,
   fitPoints,
-  FOCUSED_MEMBER_LABEL_ROOM_PX,
   frameView,
   labelRule,
   labelSpecs,
+  MEMBER_MIN_FIT_HALF_SIZE,
   MEMBER_PITCH_DEG,
   memberLabelAnchor,
   MIN_FIT_HALF_SIZE,
@@ -70,7 +72,8 @@ const manifest = JSON.parse(readFileSync('public/assets/manifest.json', 'utf8'))
 /**
  * Stand-in sizes, width and height in metres, rounded from the shipped assets as the world draws them (measured in the
  * browser from __P99__.bounds() on 2026-09-28), so a view's fit meets the proportions it meets on the page: a flower
- * smaller than MIN_FIT_HALF_SIZE, a tree taller than a phone frame is wide, a heart's stage 10 over five metres.
+ * smaller than even a member view's MEMBER_MIN_FIT_HALF_SIZE, a tree taller than a phone frame is wide, a heart's stage
+ * 10 over five metres.
  */
 const KIT_SIZE: Readonly<Record<string, readonly [number, number]>> = {
   flowers: [0.4, 0.45],
@@ -379,9 +382,12 @@ const SCREENS = [
 ] as const;
 
 /**
- * How much further a member's own view may stand than a fit to the member's bounds alone. The label and its tail rise
- * FOCUSED_MEMBER_LABEL_ROOM_PX over the member's top, a sixth of a 667 px phone's half height, which only a view as tall
- * as it is wide feels in full; framing the family's placard as well stood the flowers 3.75 times as far on a phone.
+ * How much further a member's own view may stand than a fit to the member's bounds alone, at the same least half-size
+ * (MEMBER_MIN_FIT_HALF_SIZE), so a small member's view is held to its own close fit rather than to the family views'
+ * larger one. The label and its tail rise FOCUSED_MEMBER_LABEL_ROOM_PX over the member's top, a sixth of a 667 px
+ * phone's half height, which only a view as tall as it is wide feels in full; framing the family's placard as well stood
+ * the flowers 3.75 times as far on a phone with these stand-ins (3.90 in the browser, on the shipped assets), both at
+ * the 1.2 m floor member views then had.
  */
 const MEMBER_VIEW_REACH = 1.3;
 
@@ -424,15 +430,18 @@ describe('the Asset World views', () => {
           reach = Math.max(reach, Math.abs(ndc.x), top, -bottom);
           expect(Math.max(Math.abs(ndc.x), top, -bottom), `a label point in ${name}`).toBeLessThanOrEqual(FIT_NDC + 1e-6);
         }
-        // The fit is tight: something reaches FIT_NDC, a corner, a label's room, or, for a view smaller than
-        // MIN_FIT_HALF_SIZE along some axis, the padding cube the fit frames around the middle of its points.
+        // The fit is tight: something reaches FIT_NDC, a corner, a label's room, or, for a view smaller than its least
+        // half-size along some axis (MIN_FIT_HALF_SIZE, or a member view's MEMBER_MIN_FIT_HALF_SIZE), the padding cube
+        // the fit frames around the middle of its points. So the flowers' view framed at the family views' larger floor
+        // would stand back from its own padding cube and fail here.
         const points = viewPoints(open, world.members, specs, context)!.map((point) => point.point);
         const middle = new Vector3();
         const lo = points.reduce((a, p) => a.min(p), points[0]!.clone());
         const hi = points.reduce((a, p) => a.max(p), points[0]!.clone());
         middle.addVectors(lo, hi).multiplyScalar(0.5);
+        expect(fitFloorOf(open), name).toBe(open.member ? MEMBER_MIN_FIT_HALF_SIZE : MIN_FIT_HALF_SIZE);
         for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) {
-          ndc.set(x, y, z).multiplyScalar(MIN_FIT_HALF_SIZE).add(middle).project(camera);
+          ndc.set(x, y, z).multiplyScalar(fitFloorOf(open)).add(middle).project(camera);
           reach = Math.max(reach, Math.abs(ndc.x), Math.abs(ndc.y));
         }
         expect(reach, name).toBeGreaterThan(FIT_NDC - 0.01);
@@ -454,6 +463,7 @@ describe('the Asset World views', () => {
           boundsCorners([entry]).map((point) => ({ point })),
           MEMBER_PITCH_DEG,
           lens,
+          MEMBER_MIN_FIT_HALF_SIZE,
         );
         const ratio = page.position.distanceTo(page.target) / alone.position.distanceTo(alone.target);
         worst = Math.max(worst, ratio);
@@ -464,7 +474,6 @@ describe('the Asset World views', () => {
         expect(shown, entry.member.name).toEqual([entry.member.label ? entry.member.name : familyLabelKey(entry.member.family)]);
       }
       expect(worst, rows.join(', ')).toBeLessThanOrEqual(MEMBER_VIEW_REACH);
-      expect(FOCUSED_MEMBER_LABEL_ROOM_PX).toBeGreaterThan(0);
     });
   }
 
@@ -498,6 +507,16 @@ describe('the Asset World views', () => {
     expect(shown({ view: OVERVIEW, member: '' }, true, OVERVIEW_MEMBER_LABELS_MIN_WIDTH)).toEqual([...families, ...labelled]);
     expect(shown({ view: 'towers', member: '' })).toEqual(['family:towers', 'bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
     expect(shown({ view: CHARACTERS, member: '' })).toEqual(['family:xeno', 'family:commanders', 'husk_idle', 'husk_walk', 'husk_attack', 'bulwark_idle', 'bulwark_run', 'bulwark_attack']);
+    // The kit's eight labels crowd a narrow screen, so there its view names the kit alone, as the overview does, and each
+    // piece keeps its own view; the other families' views name their members on a phone.
+    const kit = MEMBERS.filter((m) => m.family === 'env').map((m) => m.name);
+    const kitWidth = FAMILY_MEMBER_LABELS_MIN_WIDTH['env']!;
+    for (const widthPx of [375, 390, kitWidth - 1]) expect(shown({ view: 'env', member: '' }, true, widthPx), `${widthPx} px`).toEqual(['family:env']);
+    expect(shown({ view: 'env', member: '' }, true, kitWidth)).toEqual(['family:env', ...kit]);
+    expect(shown({ view: 'env', member: 'flowers' }, true, 375)).toEqual(['flowers']);
+    expect(Object.keys(FAMILY_MEMBER_LABELS_MIN_WIDTH)).toEqual(['env']);
+    expect(shown({ view: 'towers', member: '' }, true, 375)).toEqual(['family:towers', 'bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
+    expect(shown({ view: CHARACTERS, member: '' }, true, 375)).toHaveLength(8);
     expect(shown({ view: 'towers', member: 'bolt_mk2' })).toEqual(['bolt_mk2']);
     // A member opened from the overview's list is named the same way.
     expect(shown({ view: OVERVIEW, member: 'rock_a' })).toEqual(['rock_a']);

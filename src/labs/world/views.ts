@@ -14,8 +14,14 @@ export const FAMILY_PITCH_DEG = 26;
 export const MEMBER_PITCH_DEG = 18;
 /** The framed points, labels included, reach at most this far from the frame's middle toward each edge (1 is the edge). */
 export const FIT_NDC = 0.9;
-/** The least half-size a view frames, in metres, so a single flower or grass tuft is seen with some meadow around it. */
+/**
+ * The least half-size a view frames, in metres: the overview's and a family's 1.2 m, and a member's own view's 0.5 m.
+ * A family of small pieces keeps some meadow around it, and a member's own view comes close enough to study it. At 1.2 m
+ * in its own view, a flower 0.4 m across filled 0.07 by 0.14 of a 1920 x 1080 frame, and 16 of the 22 members stood at
+ * the same 4.36 m there, however small each was.
+ */
 export const MIN_FIT_HALF_SIZE = 1.2;
+export const MEMBER_MIN_FIT_HALF_SIZE = 0.5;
 /** A family's label stands this far in front of its zone's front edge, in metres, on the ground, like a placard. */
 export const FAMILY_LABEL_GAP = 0.8;
 /**
@@ -27,10 +33,19 @@ export const MEMBER_LABEL_ROOM_PX = 36;
 export const FOCUSED_MEMBER_LABEL_ROOM_PX = 52;
 export const FAMILY_LABEL_ROOM_PX = 56;
 /**
- * The overview names every member only on a screen at least this wide, in CSS pixels; narrower, the labels of 22
- * members crowd each other, so the overview names the families alone and a family's view names its members.
+ * The overview names every member only on a screen at least this wide, in CSS pixels; narrower, the 21 member labels
+ * (22 members, but the nest, its family's only member, has none) crowd each other, so the overview names the families
+ * alone and a family's view names its members.
  */
 export const OVERVIEW_MEMBER_LABELS_MIN_WIDTH = 1280;
+/**
+ * The narrowest screen, in CSS pixels, on which a family's view names its members, for each family whose member labels
+ * crowd below it; narrower, the view names the family alone, as the overview does, and each member stays one step away
+ * in its own view and in the panel's member list. The Verdant kit's eight pieces stand 4.1 m apart on an arc 25 m across,
+ * which a portrait phone fits into its width: at 375 x 667 six pairs of their labels overlapped and "Flowers" ran 9.7 px
+ * off the left edge, one pair still overlapped at 667 x 375 and at 768 x 1024, and from 1024 x 768 up none did.
+ */
+export const FAMILY_MEMBER_LABELS_MIN_WIDTH: Readonly<Record<string, number>> = { env: 1024 };
 
 /** The views the page opens, besides one per family and one per member. */
 export const OVERVIEW = 'overview';
@@ -77,11 +92,6 @@ export function familyLabelKey(family: string): string {
   return `family:${family}`;
 }
 
-/** Whether a name is a member's, as `?member=` takes it: the registry's, whether or not its asset loaded. */
-export function isMemberName(name: string): boolean {
-  return MEMBERS.some((m) => m.name === name);
-}
-
 /** Whether a name is a view's, as `?family=` takes it: the overview, the characters or a zone's family. */
 export function isViewName(name: string): boolean {
   return name === OVERVIEW || name === CHARACTERS || ZONES.some((zone) => zone.family === name);
@@ -104,6 +114,11 @@ function framedBy(open: OpenView, members: readonly PlacedMember[]): PlacedMembe
 export function pitchOf(open: OpenView): number {
   if (open.member) return MEMBER_PITCH_DEG;
   return open.view === OVERVIEW ? OVERVIEW_PITCH_DEG : FAMILY_PITCH_DEG;
+}
+
+/** The least half-size an open view frames: a member's own view's, or the overview's and a family's. */
+export function fitFloorOf(open: OpenView): number {
+  return open.member ? MEMBER_MIN_FIT_HALF_SIZE : MIN_FIT_HALF_SIZE;
 }
 
 /** The eight corners of each member's visible bounds. */
@@ -166,11 +181,12 @@ export function labelSpecs(members: readonly PlacedMember[], ground: Ground): La
 /**
  * Which labels an open view shows, as a test on a label, resolved once per view so the frame loop only calls it. The
  * overview names every family, and on a wide screen every member too; the characters' view names both character
- * families and their members; a family's view names the family and its members. A member's view names the member alone,
- * its label carrying the family's name: its family's placard stands in front of the whole zone, and framing it too took
- * an end-of-row member's camera back until the zone fitted (the flowers at 27.9 m on a phone, against 7.5 m for the
- * flowers alone). A family's only member has no label, so its view shows its family's placard, which stands just in
- * front of it. Other families' names stay off a close view, where they would crowd its edges.
+ * families and their members; a family's view names the family and, on a screen wide enough to part their labels
+ * (FAMILY_MEMBER_LABELS_MIN_WIDTH), its members. A member's view names the member alone, its label carrying the family's
+ * name: its family's placard stands in front of the whole zone, and framing it too took an end-of-row member's camera
+ * back until the zone fitted (the flowers at 29.1 m on a phone, against 7.5 m for the flowers alone, both at the 1.2 m
+ * floor member views then had). A family's only member has no label, so its view shows its family's placard, which
+ * stands just in front of it. Other families' names stay off a close view, where they would crowd its edges.
  */
 export function labelRule(open: OpenView, members: readonly PlacedMember[], context: LabelContext): (spec: Pick<LabelSpec, 'kind' | 'key' | 'family'>) => boolean {
   if (!context.labels) return () => false;
@@ -184,8 +200,9 @@ export function labelRule(open: OpenView, members: readonly PlacedMember[], cont
     const everyMember = context.widthPx >= OVERVIEW_MEMBER_LABELS_MIN_WIDTH;
     return (spec) => spec.kind === 'family' || everyMember;
   }
-  if (open.view === CHARACTERS) return (spec) => CHARACTER_FAMILIES.includes(spec.family);
-  return (spec) => spec.family === open.view;
+  const named = (spec: Pick<LabelSpec, 'kind' | 'family'>): boolean => spec.kind === 'family' || context.widthPx >= (FAMILY_MEMBER_LABELS_MIN_WIDTH[spec.family] ?? 0);
+  if (open.view === CHARACTERS) return (spec) => CHARACTER_FAMILIES.includes(spec.family) && named(spec);
+  return (spec) => spec.family === open.view && named(spec);
 }
 
 /**
@@ -193,17 +210,17 @@ export function labelRule(open: OpenView, members: readonly PlacedMember[], cont
  * room its label takes, within FIT_NDC of the frame's middle, and centred on them: the distance is searched (a point's
  * reach from the middle falls as the camera backs away), then the target shifts to centre the points' screen extent,
  * twice over. So a portrait phone backs away until a row's width fits and a wide screen until its height does, and a
- * zone fills its frame instead of floating in a sphere fitted around it.
+ * zone fills its frame instead of floating in a sphere fitted around it. Points closer together than the least
+ * half-size (fitFloorOf) are framed as if they spread that far from their middle in every direction.
  */
-export function fitPoints(points: readonly FitPoint[], pitchDeg: number, lens: Lens): ViewPose {
+export function fitPoints(points: readonly FitPoint[], pitchDeg: number, lens: Lens, minHalfSize = MIN_FIT_HALF_SIZE): ViewPose {
   const camera = new PerspectiveCamera(lens.fov, lens.aspect, 0.05, 5000);
   const pitch = (pitchDeg * Math.PI) / 180;
   const toward = new Vector3(TOWARD_CAMERAS.x * Math.cos(pitch), Math.sin(pitch), TOWARD_CAMERAS.z * Math.cos(pitch));
   const box = new Box3().setFromPoints(points.map((entry) => entry.point));
   const target = box.getCenter(new Vector3());
-  // A tiny member is framed as if it were MIN_FIT_HALF_SIZE across in every direction.
   const padded = [...points];
-  for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) padded.push({ point: target.clone().add(new Vector3(x, y, z).multiplyScalar(MIN_FIT_HALF_SIZE)) });
+  for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) padded.push({ point: target.clone().add(new Vector3(x, y, z).multiplyScalar(minHalfSize)) });
   const halfHeightPx = lens.heightPx / 2;
   const view = new Vector3();
   const ndc = new Vector3();
@@ -226,7 +243,7 @@ export function fitPoints(points: readonly FitPoint[], pitchDeg: number, lens: L
     }
     return { worst: Math.max(-minX, maxX, -minY, maxY), minX, maxX, minY, maxY };
   };
-  const radius = Math.max(box.getSize(new Vector3()).length() / 2, MIN_FIT_HALF_SIZE * Math.sqrt(3));
+  const radius = Math.max(box.getSize(new Vector3()).length() / 2, minHalfSize * Math.sqrt(3));
   const nearest = (): number => {
     let high = radius * 4;
     for (let i = 0; i < 12 && extent(high).worst > FIT_NDC; i++) high *= 2;
@@ -267,10 +284,13 @@ export function viewPoints(open: OpenView, members: readonly PlacedMember[], spe
   return points;
 }
 
-/** The pose the page opens a view in: its points (viewPoints) fitted at its pitch, or null when it frames no member. */
+/**
+ * The pose the page opens a view in: its points (viewPoints) fitted at its pitch and above its least half-size, or null
+ * when it frames no member.
+ */
 export function frameView(open: OpenView, members: readonly PlacedMember[], specs: readonly LabelSpec[], context: LabelContext, lens: Lens): ViewPose | null {
   const points = viewPoints(open, members, specs, context);
-  return points ? fitPoints(points, pitchOf(open), lens) : null;
+  return points ? fitPoints(points, pitchOf(open), lens, fitFloorOf(open)) : null;
 }
 
 /**
