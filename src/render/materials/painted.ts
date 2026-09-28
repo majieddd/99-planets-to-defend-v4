@@ -5,6 +5,7 @@ import {
   ShaderMaterial,
   UniformsLib,
   UniformsUtils,
+  Vector2,
   Vector3,
   type IUniform,
   type Texture,
@@ -212,6 +213,55 @@ export const SKIN_STANDARD_BLEND = 0.65;
 export const SKIN_PROP_BRUSH = 0;
 
 /**
+ * An expression decal is a face's eyes or mouth drawn as a mesh just off the skin, whose map UVs point at cell 0 of an
+ * expression atlas (docs/blueprint.md, Kit, Expression atlases). Its material adds its own uCellOffset to those UVs, so
+ * an expression is one uniform write, a texture swap, with no morph and no extra draw.
+ *
+ * DECAL_ALPHA_CUTOFF is the alpha under which a decal texel is discarded when its GLB names no cutoff of its own, glTF's
+ * default for alphaMode MASK. The cutout is a test rather than a blend because alpha carries the emissive key to the
+ * bloom (post/pipeline.ts): a blended decal would write its opacity into the key and glow, and alpha to coverage would
+ * read the key, 0 on anything that does not emit, as coverage and drop the whole decal.
+ */
+export const DECAL_ALPHA_CUTOFF = 0.5;
+
+/**
+ * A decal wins the depth test against the skin under it by its authored lift near the camera and by a polygon offset
+ * everywhere. The lift alone holds only close up: the labs' cameras run from 0.1 m to 2500 m on a 24-bit depth buffer, so
+ * one depth step is about z * z * 6e-7 m, 2.4 micrometres at 2 m but 0.37 mm at 25 m and 2.1 mm at 60 m, and a lift under
+ * a millimetre flickers against the skin from the third-person camera outward. The offset is in depth steps, so it grows
+ * with distance as the steps do: the units pull the decal 4 steps nearer (0.09 mm at 6 m, 1.5 mm at 25 m) and the factor
+ * one pixel's depth slope more, which covers the decal and the skin being interpolated across different triangles where
+ * the face turns away. Hair a few millimetres in front of the eyes still covers them wherever the face is more than a
+ * pixel or two tall. Render order is left alone: with the pull the decal wins whichever of the two draws first, and three's
+ * front-to-back sort of opaque surfaces keeps its early depth rejection. On the GPU in the locked look, a 0.5 mm lift alone
+ * let the skin through 28, 1,139 and 2,792 of about 10,000 eye pixels at 25, 60 and 120 m, and with the offset none
+ * (docs/blueprint.md, Render constants, where the figures are).
+ */
+export const DECAL_POLYGON_OFFSET_FACTOR = -1;
+export const DECAL_POLYGON_OFFSET_UNITS = -4;
+
+/**
+ * A decal's expression atlas, read from its GLB node's p99_atlas extras (assets/loadAsset.ts, readDecalAtlas): a grid of
+ * cols by rows cells, each cellUV wide and high in UV, named in states from cell 0, left to right and then top to bottom
+ * in glTF's UV space (its origin at the image's top-left corner, which GLTFLoader keeps by leaving flipY off). role is
+ * which face feature it is, from the node's name, or null for a decal the face driver does not drive.
+ */
+export interface DecalAtlas {
+  cols: number;
+  rows: number;
+  states: string[];
+  cellUV: [number, number];
+  role: 'eyes' | 'mouth' | null;
+}
+
+/** The UV offset that moves a decal from cell 0 to the given cell, written into `out` (its uCellOffset value). */
+export function decalCellOffset(atlas: DecalAtlas, cell: number, out: Vector2): Vector2 {
+  const col = cell % atlas.cols;
+  const row = Math.floor(cell / atlas.cols);
+  return out.set(col * atlas.cellUV[0], row * atlas.cellUV[1]);
+}
+
+/**
  * Whether a material is an actor's, which takes the actorFill dial. The test is the authored standard blend, decided once
  * at creation (the shader branch is a define), so it needs nothing from the loader: every asset already passes its blend.
  */
@@ -242,6 +292,12 @@ export interface PaintedOptions {
    * toward the SKIN_ values. Only a material created with this declares the attribute, for the reason PAINT_SOIL gives.
    */
   skin?: boolean;
+  /**
+   * An expression decal (see DECAL_ALPHA_CUTOFF): the material gets its own uCellOffset, added to the map UVs, cuts out
+   * at alphaTest (DECAL_ALPHA_CUTOFF when none is named) and pulls itself toward the camera by the decal polygon offset.
+   * Only a material created with this declares the offset, so every other material compiles the shader it always did.
+   */
+  decal?: boolean;
   vertexColors?: boolean;
   /** 0 is pure cel banding; characters blend toward standard lighting, as Sifu does. */
   standardBlend?: number;
@@ -278,9 +334,17 @@ varying vec3 vBrushNormal;
   attribute float skinMask;
   varying float vSkin;
 #endif
+#ifdef PAINT_DECAL
+  uniform vec2 uCellOffset;
+#endif
 
 void main() {
   vUv = uv;
+  #ifdef PAINT_DECAL
+    // The decal's UVs point at its atlas's cell 0, and the offset moves them to the expression's cell, per vertex
+    // rather than per pixel since it is the same for the whole mesh. The map and the emissive map both follow it.
+    vUv += uCellOffset;
+  #endif
   #ifdef USE_COLOR
     vColor = color.rgb;
   #else
@@ -404,9 +468,16 @@ void main() {
   float alpha = 1.0;
   #ifdef USE_PAINT_MAP
     vec4 texel = texture2D(uMap, vUv);
+    #ifdef PAINT_DECAL
+      // A decal is line art on a cutout, not baked strokes over a broad region: its mip 6 averages its cell with the
+      // transparent texels and the cells beside it, so the paint strength dial would fade an eye toward its neighbours.
+      // At the locked strength of 1 the dial's mix returns the texel unchanged anyway.
+      albedo = texel.rgb * vColor;
+    #else
     // The paint strength dial fades the baked strokes toward the region's broad colour (a high mip).
     vec3 broad = textureLod(uMap, vUv, 6.0).rgb;
     albedo = mix(broad, texel.rgb, uPaintStrength) * vColor;
+    #endif
     alpha = texel.a;
   #endif
   #ifdef PAINT_SOIL
@@ -594,6 +665,10 @@ void main() {
 }
 `;
 
+// What each painted material was created from, so a decal's material can be made again for another mesh with the very
+// same dial uniforms (copyDecalMaterial). A WeakMap rather than userData, which Material.copy serializes as JSON.
+const created = new WeakMap<ShaderMaterial, { shared: PaintUniforms; options: PaintedOptions }>();
+
 /** Cloning (ShaderMaterial.clone) clones the uniforms, detaching the copy from the shared dials; call this instead. */
 export function createPaintedMaterial(shared: PaintUniforms, options: PaintedOptions): ShaderMaterial {
   const defines: Record<string, string> = {
@@ -631,6 +706,7 @@ export function createPaintedMaterial(shared: PaintUniforms, options: PaintedOpt
     defines['SKIN_STANDARD_BLEND'] = glslFloat(SKIN_STANDARD_BLEND);
     defines['SKIN_PROP_BRUSH'] = glslFloat(SKIN_PROP_BRUSH);
   }
+  if (options.decal) defines['PAINT_DECAL'] = '';
   const material = new ShaderMaterial({
     name: 'PaintedMaterial',
     lights: true,
@@ -650,12 +726,34 @@ export function createPaintedMaterial(shared: PaintUniforms, options: PaintedOpt
       // PAINT_ACTOR above was decided from this blend when the material was created, so changing one material's blend
       // later (a blend of 0 made positive, or the reverse) must rebuild the material, or the fill stays as it was.
       uStandardBlend: { value: standardBlend },
-      uAlphaTest: { value: options.alphaTest ?? 0 },
+      uAlphaTest: { value: options.alphaTest ?? (options.decal ? DECAL_ALPHA_CUTOFF : 0) },
       uSoilColor: { value: options.soilColor ?? new Color(0, 0, 0) },
+      // Each decal material holds its own offset, so one face's expression never moves another's.
+      ...(options.decal ? { uCellOffset: { value: new Vector2(0, 0) } } : {}),
     },
     vertexShader,
     fragmentShader,
   });
+  if (options.decal) {
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = DECAL_POLYGON_OFFSET_FACTOR;
+    material.polygonOffsetUnits = DECAL_POLYGON_OFFSET_UNITS;
+  }
   material.userData['painted'] = true;
+  created.set(material, { shared, options });
   return material;
+}
+
+/**
+ * A new decal material made as the given one was, sharing the same dial uniforms, with an offset of its own at cell 0. A
+ * clone of a rig (SkeletonUtils.clone, as the Asset World makes its commander instances) shares its source's materials,
+ * so without this every instance's eyes would show the one expression and blink together; ShaderMaterial.clone would
+ * detach the dials instead. Throws for a material createPaintedMaterial did not make as a decal.
+ */
+export function copyDecalMaterial(material: ShaderMaterial): ShaderMaterial {
+  const source = created.get(material);
+  if (!source?.options.decal) throw new Error(`copyDecalMaterial: ${material.name} is not a painted decal material`);
+  const copy = createPaintedMaterial(source.shared, source.options);
+  copy.userData = { ...material.userData };
+  return copy;
 }

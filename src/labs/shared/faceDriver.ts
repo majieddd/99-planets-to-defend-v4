@@ -1,10 +1,13 @@
-import { Quaternion, Vector3, type Mesh, type Object3D } from 'three';
+import { Quaternion, Vector3, type Mesh, type Object3D, type ShaderMaterial, type Vector2 } from 'three';
+import { copyDecalMaterial, decalCellOffset, type DecalAtlas } from '../../render/materials/painted';
 import { Rng, seedRng } from '../../sim/rng';
 
 /**
- * A commander's face in the labs: an automatic blink and held expressions, written to the face morphs and the jaw bone.
- * It is render and lab code, driven by the lab's frame delta; the simulation knows nothing of faces. Its numbers have
- * rows in docs/blueprint.md (Numbers, Face driver).
+ * A commander's face in the labs: an automatic blink and held expressions, written to the face morphs and the jaw bone,
+ * or to the expression decals of an anime face, whose expressions are cells of an atlas (docs/blueprint.md, Kit,
+ * Expression atlases). A face may have either kind or both, and the driver finds which from the rig. It is render and
+ * lab code, driven by the lab's frame delta; the simulation knows nothing of faces. Its numbers have rows in
+ * docs/blueprint.md (Numbers, Face driver).
  */
 
 /** The lids, which blink together. */
@@ -30,6 +33,37 @@ export const JAW_OPEN_MAX_DEG = 14;
 /** The jaw bone's node name in the commander's GLB. */
 export const JAW_BONE_NAME = 'jaw';
 
+/** The eye states a decal face can hold, each a cell its eyes atlas names. */
+export const EYE_STATES = ['open', 'half', 'closed', 'happy'] as const;
+export type EyeState = (typeof EYE_STATES)[number];
+/** The mouth states a decal face can hold, each a cell its mouth atlas names. */
+export const MOUTH_STATES = ['neutral', 'smile', 'talk', 'o'] as const;
+export type MouthState = (typeof MOUTH_STATES)[number];
+
+/**
+ * A decal face blinks through its eye cells on the morph lids' own closure curve, so both kinds of face keep one timing:
+ * open while the lids would be under a quarter closed, half from there to three quarters, closed beyond. The half cell
+ * then lasts 20.8 ms on the way down and 31.3 ms on the way up (the smoothstep crosses 0.25 and 0.75 at 0.326 and 0.674
+ * of each phase), both longer than a 60 Hz frame, so every blink drawn at 60 fps shows open, half, closed, half, open.
+ * Split in thirds, the half cell would last 13.6 ms on the way down and fall between two frames at 31 of 167 frame
+ * phases (checked every 0.1 ms).
+ */
+export const DECAL_HALF_CLOSURE = 0.25;
+export const DECAL_CLOSED_CLOSURE = 0.75;
+/**
+ * While talking, the mouth alternates its talk and neutral cells this often: four open-and-shut cycles a second, near
+ * the four to five syllables a second of conversational speech, and each cell held three frames of an anime's 24 a
+ * second, the lip flap drawn on threes.
+ */
+export const TALK_FLAP_SECONDS = 0.125;
+
+/** An expression decal the driver moves: the mesh, its atlas, and the cell offset its own material reads. */
+export interface FaceDecal {
+  mesh: Mesh;
+  atlas: DecalAtlas;
+  offset: Vector2;
+}
+
 export interface FaceDriverOptions {
   /** Draws from 0 (inclusive) to 1 (exclusive); inject one for reproducible timing. */
   random: () => number;
@@ -51,6 +85,8 @@ const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
 export class FaceDriver {
   /** The meshes that carry any face morph: the body, and its hull, which shares the body's influences anyway. */
   readonly meshes: Mesh[] = [];
+  /** The expression decals painted by the loader (assets/loadAsset.ts), eyes and mouth, in the rig's order. */
+  readonly decals: FaceDecal[] = [];
   readonly jaw: Object3D | null;
   private readonly random: () => number;
   private readonly jawAxis: Vector3;
@@ -65,6 +101,10 @@ export class FaceDriver {
   private frozen = false;
   private closure = 0;
   private blinkHold: number | null = null;
+  private heldEyes: EyeState = 'open';
+  private heldMouth: MouthState = 'neutral';
+  private talking = false;
+  private talkClock = 0;
 
   constructor(root: Object3D, options: FaceDriverOptions) {
     this.random = options.random;
@@ -73,20 +113,81 @@ export class FaceDriver {
     root.traverse((object) => {
       const dictionary = (object as Mesh).morphTargetDictionary;
       if (dictionary && names.some((name) => name in dictionary)) this.meshes.push(object as Mesh);
+      this.adoptDecal(object as Mesh);
     });
     this.jaw = root.getObjectByName(JAW_BONE_NAME) ?? null;
     if (this.jaw) this.jawRest.copy(this.jaw.quaternion);
     this.untilBlink = this.nextInterval();
+    // The decals open on the held states, open eyes and a neutral mouth, whichever cells the atlas gives them.
+    this.applyDecals();
   }
 
   /** Whether the root carries anything this driver moves. */
   get hasFace(): boolean {
-    return this.meshes.length > 0 || this.jaw !== null;
+    return this.meshes.length > 0 || this.decals.length > 0 || this.jaw !== null;
+  }
+
+  /** Which kind of face the rig has: morphs (Pip-A), expression decals (the anime head), both, or neither. */
+  get faceKind(): 'morph' | 'decal' | 'both' | null {
+    if (this.meshes.length > 0) return this.decals.length > 0 ? 'both' : 'morph';
+    return this.decals.length > 0 ? 'decal' : null;
   }
 
   /** How closed the lids are now, from 0 (open) to 1 (shut): the held weight while one is held, else the auto-blink's. */
   get blink(): number {
     return this.blinkHold ?? this.closure;
+  }
+
+  /**
+   * The eye state a decal face shows now. Open eyes blink: the lids' closure, the auto-blink's or a held one, steps
+   * them through half and closed (DECAL_HALF_CLOSURE). Any other held state holds, since a blink over happy or closed
+   * eyes would flash them open, and a blink from half would read as a flicker.
+   */
+  get eyes(): EyeState {
+    if (this.heldEyes !== 'open') return this.heldEyes;
+    const lids = this.blink;
+    return lids >= DECAL_CLOSED_CLOSURE ? 'closed' : lids >= DECAL_HALF_CLOSURE ? 'half' : 'open';
+  }
+
+  /** The mouth state a decal face shows now: the held one, or while talking, talk and neutral in turn from talk. */
+  get mouth(): MouthState {
+    if (!this.talking) return this.heldMouth;
+    return Math.floor(this.talkClock / TALK_FLAP_SECONDS) % 2 === 0 ? 'talk' : 'neutral';
+  }
+
+  /**
+   * Holds the eye decals at a state until it is set again; open hands them back to the blink. Like an expression, it
+   * applies at once, frozen or not. A state that is not an eye state, or that no eye decal's atlas names, is refused
+   * with a warning and the eyes stay as they were; the return says whether it was taken.
+   */
+  setEyes(state: EyeState): boolean {
+    if (!this.accepts('eyes', state, EYE_STATES)) return false;
+    this.heldEyes = state;
+    this.applyDecals();
+    return true;
+  }
+
+  /** Holds the mouth decal at a state until it is set again, on the terms setEyes keeps. Talking overrides it. */
+  setMouth(state: MouthState): boolean {
+    if (!this.accepts('mouth', state, MOUTH_STATES)) return false;
+    this.heldMouth = state;
+    this.applyDecals();
+    return true;
+  }
+
+  /**
+   * Starts or stops the talk cycle: talk and neutral in turn, TALK_FLAP_SECONDS each, from talk, while it is on, and the
+   * held mouth again when it stops. It advances with update, so a frozen face holds its mouth mid-cycle.
+   */
+  setTalking(on: boolean): void {
+    if (on && !this.talking) {
+      this.talkClock = 0;
+      if (!this.decals.some((decal) => decal.atlas.role === 'mouth' && decal.atlas.states.includes('talk'))) {
+        console.warn('face: no mouth decal has a cell named "talk", so talking shows nothing');
+      }
+    }
+    this.talking = on;
+    this.applyDecals();
   }
 
   /**
@@ -158,6 +259,7 @@ export class FaceDriver {
       }
     }
     this.closure = this.phase === 'close' ? smooth(this.elapsed / BLINK_CLOSE_SECONDS) : this.phase === 'open' ? 1 - smooth(this.elapsed / BLINK_OPEN_SECONDS) : 0;
+    if (this.talking) this.talkClock += deltaSeconds;
     this.apply();
   }
 
@@ -168,6 +270,56 @@ export class FaceDriver {
 
   private nextInterval(): number {
     return BLINK_INTERVAL_MIN_SECONDS + (BLINK_INTERVAL_MAX_SECONDS - BLINK_INTERVAL_MIN_SECONDS) * this.random();
+  }
+
+  /**
+   * Takes a mesh the loader painted as a decal into the driver, first giving it a material of its own if it shares its
+   * source's: a clone of a rig (SkeletonUtils.clone) keeps the source's materials, and each face must hold its own cell
+   * offset or every instance would show one expression and blink together. A decal that was never painted carries no
+   * atlas on its material and is left alone.
+   */
+  private adoptDecal(mesh: Mesh): void {
+    if (!mesh.isMesh || Array.isArray(mesh.material)) return;
+    const material = mesh.material as ShaderMaterial;
+    const atlas = material.userData['decalAtlas'] as DecalAtlas | undefined;
+    if (!atlas) return;
+    if (material.userData['decalOwner'] !== mesh.uuid) {
+      const own = copyDecalMaterial(material);
+      own.userData['decalOwner'] = mesh.uuid;
+      mesh.material = own;
+    }
+    const offset = (mesh.material as ShaderMaterial).uniforms['uCellOffset']?.value as Vector2;
+    this.decals.push({ mesh, atlas, offset });
+  }
+
+  private accepts(role: 'eyes' | 'mouth', state: string, known: readonly string[]): boolean {
+    const [feature, stays] = role === 'eyes' ? ['eye', 'the eyes stay as they were'] : ['mouth', 'the mouth stays as it was'];
+    if (!known.includes(state)) {
+      console.warn(`face: "${state}" is not ${feature === 'eye' ? 'an' : 'a'} ${feature} state (${known.join(', ')}), so ${stays}`);
+      return false;
+    }
+    if (!this.decals.some((decal) => decal.atlas.role === role && decal.atlas.states.includes(state))) {
+      console.warn(`face: no ${feature} decal has a cell named "${state}", so ${stays}`);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Moves each decal to its feature's state's cell. A state its atlas lacks, a blink's half on an atlas with only open
+   * and closed or talking without a talk cell, shows the held state instead, and a decal whose atlas names neither stays
+   * where it is.
+   */
+  private applyDecals(): void {
+    if (this.decals.length === 0) return;
+    const now = { eyes: this.eyes, mouth: this.mouth };
+    const held = { eyes: this.heldEyes, mouth: this.heldMouth };
+    for (const { atlas, offset } of this.decals) {
+      if (atlas.role === null) continue;
+      let cell = atlas.states.indexOf(now[atlas.role]);
+      if (cell < 0) cell = atlas.states.indexOf(held[atlas.role]);
+      if (cell >= 0) decalCellOffset(atlas, cell, offset);
+    }
   }
 
   private apply(): void {
@@ -188,5 +340,6 @@ export class FaceDriver {
       const angle = (this.jawOpen * JAW_OPEN_MAX_DEG * Math.PI) / 180;
       this.jaw.quaternion.copy(this.jawRest).multiply(this.jawTurn.setFromAxisAngle(this.jawAxis, angle));
     }
+    this.applyDecals();
   }
 }

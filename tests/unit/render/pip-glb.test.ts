@@ -91,6 +91,8 @@ describe('the shipped Pip-A through GLTFLoader', () => {
     const rest = chin();
     const face = createCommanderFace(scene, 1)!;
     expect(face.meshes.map((m) => m.name)).toContain('commander_body');
+    // Pip-A's face is morphs alone: no mesh of his carries p99_atlas extras, so the driver finds no expression decal.
+    expect([face.faceKind, face.decals.length]).toEqual(['morph', 0]);
     face.setJaw(1);
     const open = chin();
     face.setJaw(0);

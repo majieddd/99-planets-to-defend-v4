@@ -32,13 +32,14 @@ export function jawAxisOf(root: Object3D): Vector3 | null {
 
 /**
  * A face driver for one commander instance, blinking on its own seeded timing with the jaw axis its rig gives, or null
- * for a rig with no face morph, which the lab then leaves alone: Bulwark's visored rig, and any creature rig with a bone
- * that happens to be named jaw, whose clips' jaw keys the driver would otherwise overwrite with its rest pose every frame.
+ * for a rig with neither a face morph nor an expression decal, which the lab then leaves alone: Bulwark's visored rig,
+ * and any creature rig with a bone that happens to be named jaw, whose clips' jaw keys the driver would otherwise
+ * overwrite with its rest pose every frame. Pip-A's face is morphs and the anime head's decals (FaceDriver.faceKind).
  */
 export function createCommanderFace(root: Object3D, seed: number): FaceDriver | null {
   const jawAxis = jawAxisOf(root);
   const driver = new FaceDriver(root, jawAxis ? { random: seededFaceRandom(seed), jawAxis } : { random: seededFaceRandom(seed) });
-  return driver.meshes.length > 0 ? driver : null;
+  return driver.faceKind !== null ? driver : null;
 }
 
 /**
