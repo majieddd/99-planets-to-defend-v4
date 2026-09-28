@@ -83,7 +83,12 @@ function terminatorStep(d: RenderDials, s: Surface, weight: Weight = 'lambert'):
   return luminance(shade(d, s, e, 1, weight)) - luminance(shade(d, s, -e, 1, weight));
 }
 
-// The golden-hour key the fill and lift were built for (preset B2): a warm 15 degree sun, two bands, a deep teal shadow.
+// The locked key (Painted-Anime-Inkline 4.0, the M0 gate) is preset B3's: the owner's three adjustments (edgeStrength,
+// edgeFadeFar, litSaturation) are not in these lines. Two other keys stay covered because the dials still reach them.
+// The golden-hour key the fill and lift were built for (preset B2): B3's with a darker shadow band, a shadow depth of
+// 0.5 against 0.62, and a little more ambient. The shadow band's direct light is the tint times the depth, so the higher
+// depth leaves the smaller step at the terminator and the locked key is the harder of the two golden-hour keys (its
+// worst step 0.0205 against B2's 0.0209); the ambient lights both sides alike and cancels out of the step.
 const GOLDEN: RenderDials = {
   ...DEFAULT_DIALS,
   bands: 2,
@@ -96,23 +101,24 @@ const GOLDEN: RenderDials = {
   sunColor: '#ffc05c',
   sunIntensity: 6.6,
 };
-// Preset B3 (Render defaults), the look the owner's style gate starts from. Its key is B2's with a lighter shadow band,
-// a shadow depth of 0.62 against 0.5, and a little less ambient. The shadow band's direct light is the tint times the
-// depth, so the higher depth leaves the smaller step at the terminator and B3 is the harder of the two golden-hour keys
-// (its worst step 0.0205 against B2's 0.0209); the ambient lights both sides alike and cancels out of the step.
-const B3: RenderDials = {
+// Renderer v1's key, the start the locked dials replaced: the Verdant theme's own light (35 degrees, which these lines
+// do not read), three bands and a light teal shadow band, with no fill and no lift.
+const V1: RenderDials = {
   ...DEFAULT_DIALS,
-  bands: 2,
-  bandSoftness: 0.03,
-  shadowDepth: 0.62,
-  shadowTint: '#1b7078',
-  rimStrength: 0.6,
-  standardBlend: 0.45,
-  ambientStrength: 0.22,
-  sunColor: '#ffc05c',
-  sunIntensity: 6.6,
+  bands: 3,
+  bandSoftness: 0.06,
+  shadowDepth: 0.35,
+  shadowTint: '#2f8f8c',
+  rimStrength: 0.35,
+  rimPower: 3,
+  standardBlend: 0.35,
+  ambientStrength: 0.45,
+  sunColor: VERDANT.sun.color,
+  sunIntensity: VERDANT.sun.intensity,
+  actorFill: 0,
+  shadowLift: 0,
 };
-const KEYS: Record<string, RenderDials> = { defaults: DEFAULT_DIALS, golden: GOLDEN, b3: B3 };
+const KEYS: Record<string, RenderDials> = { locked: DEFAULT_DIALS, golden: GOLDEN, v1: V1 };
 // Bulwark, the Husk, a tower (or the heart, or the nest) and the terrain, each as authored.
 const BLENDS = { character: AUTHORED_CHARACTER_BLEND, husk: 0.3, structure: 0.1, terrain: 0 };
 const ALBEDOS = [1, 0.3, 0.1, 0.04];
@@ -130,7 +136,7 @@ describe("the terminator's step under the actor fill and the shadow lift", () =>
     for (const line of LINES) expect(f, line).toContain(line);
   });
 
-  it('stays positive across both ranges, on white and dark albedo, for every painted material, at the default key and both golden-hour keys', () => {
+  it("stays positive across both ranges, on white and dark albedo, for every painted material, at the locked key, B2's and renderer v1's", () => {
     // The step is linear in the fill and in the lift, so each range's ends and middle cover it.
     let worst = Infinity;
     for (const [name, key] of Object.entries(KEYS)) {
@@ -151,20 +157,29 @@ describe("the terminator's step under the actor fill and the shadow lift", () =>
 
   it('leaves the step the key gives: the fill does not shrink it on camera-facing white', () => {
     const face: Surface = { albedo: 1, up: 0, facing: 1, blend: AUTHORED_CHARACTER_BLEND, rim: false };
+    // At the locked key the step is 0.662 of linear luminance with no fill, 0.645 at the locked fill of 1.4 and 0.638 at
+    // the dial's top; at renderer v1's key it was 0.212 with no fill.
     const bare = terminatorStep({ ...DEFAULT_DIALS, actorFill: 0 }, face);
-    const filled = terminatorStep({ ...DEFAULT_DIALS, actorFill: FILL_MAX }, face);
-    expect(bare).toBeCloseTo(0.212, 3);
+    expect(bare).toBeCloseTo(0.662, 3);
+    expect(terminatorStep(DEFAULT_DIALS, face)).toBeCloseTo(0.645, 3);
+    expect(terminatorStep({ ...DEFAULT_DIALS, actorFill: FILL_MAX }, face)).toBeGreaterThan(0.95 * bare);
+    const v1Bare = terminatorStep(V1, face);
+    expect(v1Bare).toBeCloseTo(0.212, 3);
     // Only the smooth key's own slope across 0.031 of ndl to each side separates the two.
-    expect(filled).toBeGreaterThan(0.85 * bare);
+    expect(terminatorStep({ ...V1, actorFill: FILL_MAX }, face)).toBeGreaterThan(0.85 * v1Bare);
   });
 
-  it("would have caught the banded weight: (1 - lit) flattens the default key's step by 1.6 and inverts it at 2", () => {
+  it("would have caught the banded weight: (1 - lit) flattens renderer v1's step by 1.6 and inverts it at 2, and halves the locked key's", () => {
     const face: Surface = { albedo: 1, up: 0, facing: 1, blend: AUTHORED_CHARACTER_BLEND, rim: false };
-    expect(terminatorStep({ ...DEFAULT_DIALS, actorFill: 1.6 }, face, 'lit')).toBeLessThan(0.01);
-    expect(terminatorStep({ ...DEFAULT_DIALS, actorFill: 2 }, face, 'lit')).toBeLessThan(0);
-    // And the lift inverted it on dark albedo, which the smooth weight does not.
+    expect(terminatorStep({ ...V1, actorFill: 1.6 }, face, 'lit')).toBeLessThan(0.01);
+    expect(terminatorStep({ ...V1, actorFill: 2 }, face, 'lit')).toBeLessThan(0);
+    // At the locked fill the banded weight would have left 0.358 of the locked key's step, the smooth weight keeps 0.645.
+    expect(terminatorStep(DEFAULT_DIALS, face, 'lit')).toBeLessThan(0.6 * terminatorStep(DEFAULT_DIALS, face));
+    // And the lift inverted it on dark albedo under either key, which the smooth weight does not.
     const dark: Surface = { albedo: 0.04, up: 0, facing: 1, blend: 0, rim: false };
-    expect(terminatorStep({ ...DEFAULT_DIALS, shadowLift: 0.06 }, dark, 'lit')).toBeLessThan(0);
-    expect(terminatorStep({ ...DEFAULT_DIALS, shadowLift: 0.06 }, dark)).toBeGreaterThan(0);
+    for (const key of [V1, DEFAULT_DIALS]) {
+      expect(terminatorStep({ ...key, shadowLift: 0.06 }, dark, 'lit')).toBeLessThan(0);
+      expect(terminatorStep({ ...key, shadowLift: 0.06 }, dark)).toBeGreaterThan(0);
+    }
   });
 });

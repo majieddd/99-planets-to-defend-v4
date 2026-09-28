@@ -238,8 +238,11 @@ describe('height fog', () => {
     expect(off.defines.get('FOG_STEPS')).toMatch(/^\d+$/);
   });
 
-  it('is the distance fog without a planet or at a falloff of 0, so the default look is unchanged', () => {
-    expect(DEFAULT_DIALS.fogHeightFalloff).toBe(0);
+  it('is the distance fog without a planet or at a falloff of 0, and height fog at the locked falloff of 0.3', () => {
+    // The locked look lays the haze on the ground, so the style scene's fog takes the planet branch with a falloff above
+    // 0; the lines below keep the distance fog every other case falls back to.
+    expect(DEFAULT_DIALS.fogHeightFalloff).toBe(0.3);
+    expect(value(fog(true).uniforms, 'uHeightFalloff')).toBe(0.3);
     expect(shader).toContain('#ifdef FOG_PLANET\n    float travelled = fogLength(uViewInverse[3].xyz, direction, length(view.xyz));\n  #else\n    float travelled = max(length(view.xyz) - uStart, 0.0);\n  #endif');
     expect(shader).toContain('float near = min(uStart, far);');
     expect(shader).toContain('if (uHeightFalloff <= 0.0) return far - near;');
