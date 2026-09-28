@@ -1,5 +1,7 @@
 import { BlendFunction, BloomEffect, Effect, EffectComposer, EffectPass, NormalPass, RenderPass, ToneMappingEffect, ToneMappingMode } from 'postprocessing';
 import {
+  Color,
+  ColorManagement,
   DepthTexture,
   FloatType,
   HalfFloatType,
@@ -7,11 +9,11 @@ import {
   NoBlending,
   ShaderMaterial,
   Uniform,
+  Vector3,
   WebGLRenderTarget,
   type PerspectiveCamera,
   type Scene,
   type Texture,
-  type Vector3,
   type WebGLRenderer,
 } from 'three';
 import type { RenderDials } from '../defaults';
@@ -31,40 +33,74 @@ export const BLOOM_SMOOTHING = 0.25;
  * The key material's warm test ramps over a red-led pixel's blue as a fraction of its peak channel: at WARM_BLUE_FULL or
  * less the pixel is warm and takes heartHalo, at WARM_BLUE_NONE or more it takes bloomIntensity. The two edges encode
  * Pillar 5 (warm is the heart and its economy, magenta is Xeno, cyan is yours) on the committed assets lit at the
- * defaults: the heart crystal's texels sit at 0.041 to 0.074 (1st to 99th percentile), 0.126 under the first edge, and
- * the nest's magenta seams at 0.382 to 0.519, 0.032 over the second, while cyan's red never leads. The heart stays warm
- * through a fog amount of about 0.3 (at 0.4 its texels reach 0.198 to 0.237). Known failure, unreachable at the
- * defaults: a sunColor of #ff8844 at intensity 8 with a silhouette rim warms the seams until 89.5 percent of their
- * texels test at least half warm. Deciding warmth in painted.ts from the emitter's own colour, not the lit pixel, would
- * end it.
+ * defaults (tools/render/warm-texels.mjs lights the texels, and bloom-warm.test.ts holds what it wrote): the heart
+ * crystal's texels sit at 0.041 to 0.074 (1st to 99th percentile), 0.126 under the first edge, and the nest's magenta
+ * seams at 0.382 to 0.519, 0.032 over the second, while cyan's red never leads. The heart stays warm through a fog amount
+ * of about 0.3 (at 0.4 its texels reach 0.198 to 0.237). The art preset narrows the nest's margin to 0.017 (its seams
+ * start at 0.367), and a silhouette rim under it puts about 98 percent of the seam texels at least half warm; no preset
+ * camera showed it, the seams feeding at most 4.6 luma of heart halo (the strategic camera, high tier). Known failure,
+ * unreachable at the defaults, where a silhouette rim leaves no seam texel half warm: a sunColor of #ff8844 at intensity
+ * 8 with that rim warms the seams until 89.5 percent of their texels test at least half warm. Deciding warmth in
+ * painted.ts from the emitter's own colour, not the lit pixel, would end both.
  */
 export const WARM_BLUE_FULL = 0.2;
 /** See WARM_BLUE_FULL. */
 export const WARM_BLUE_NONE = 0.35;
 
 /**
- * The ink gate: the linear luminance over which a pixel goes from taking none of the bloom's glow to all of it (up to
- * GLOW_LIFT_MAX). The hull and edge ink, #0e0f14, is 0.0049, under INK_GATE_LOW, so ink stays as black as it is drawn.
- * Painted surfaces sit above INK_GATE_HIGH: over the hero, close-up and strategic cameras on all three tiers, at the
- * defaults and at the art preset, the darkest ink-free pixels near energy were 0.0167 (1st percentile), and under 0.3
- * percent of the ink-free pixels in any frame fell below 0.015. The ink's coverage came from drawing it black and white.
+ * The ink gate. A pixel takes none of the bloom's glow at or under INK_GATE_HEADROOM times the ink's linear luminance
+ * (the inkColor dial, which KeyedBloomEffect holds as uInkLuminance) and all of it, up to GLOW_LIFT_MAX, from
+ * INK_GATE_WIDTH above that. The hull ink is drawn in the ink colour itself, so where it wholly covers a pixel near the
+ * camera it sits under the gate and stays black. The edges follow the dial because fixed edges let a lighter ink take
+ * the glow again: at 0.006 and 0.015 they sat only 1.24 times over the default ink's 0.0049, and #102030 (0.0136) took
+ * 93 percent of the glow, which lifted the heart's outline at the hero camera by 42 luma on the low tier and 46 on the
+ * high tier; following the ink, that outline gains 0.2 and 16 luma, as it does in the default ink. The trade-off is that
+ * a lighter ink is harder to tell from dark paint by luminance, so its gate also takes the halo off paint as dark as it:
+ * at #102030 the gate spans 0.0168 to 0.0258, where the darkest paint near energy begins, and the halo around energy at
+ * the hero camera keeps 99 and 96 percent of the default ink's on the low and high tiers; a mid-grey ink (#808080,
+ * 0.216) keeps 28 and 11 percent.
+ *
+ * INK_GATE_HEADROOM is 0.006 over the default ink's 0.0048552, to the seven digits that make the default ink's edges the
+ * fixed 0.006 and 0.015 they replace, exactly in fp32, so frames in the default ink are unchanged bit for bit (on all
+ * three tiers: the four cameras at the defaults, the hero camera at heartHalo 7, and the hero and strategic cameras at
+ * the art preset). Painted surfaces sit above those edges: over the hero, close-up and strategic cameras on all three
+ * tiers, at the defaults and at the art preset, the darkest ink-free pixels near energy were 0.0167 (1st percentile),
+ * and under 0.3 percent of the ink-free pixels in any frame fell below 0.015. A pixel counted as ink where its luma
+ * changed between frames drawn with the ink black and then white, with the bloom off.
  */
-export const INK_GATE_LOW = 0.006;
-/** See INK_GATE_LOW. */
-export const INK_GATE_HIGH = 0.015;
+export const INK_GATE_HEADROOM = 1.235797;
+/**
+ * See INK_GATE_HEADROOM. The width is added, not scaled with the ink, so a black ink, whose luminance is 0, still gets a
+ * ramp: GLSL leaves smoothstep undefined when its edges meet.
+ */
+export const INK_GATE_WIDTH = 0.009;
 
 /**
- * The most glow the bloom may add to a pixel, as a multiple of the pixel's own luminance, so glow brightens nothing more
- * than five-fold (2.3 stops). It covers the ink the gate cannot see: fog lifts distant ink past INK_GATE_HIGH (the art
- * preset's fogStart of 0 put the heart's outline at 0.015 to 0.034 at the hero camera, 1st to 75th percentile, where
- * the darkest paint near energy is 0.019), and MSAA mixes the ink's edge pixels with what lies behind. It also holds dark
- * paint beside a strong emitter to a warm tint where the glow flooded it (the claws beside the heart crystal turned pale
- * peach at heartHalo 7). At 4 the art preset's heart outline stays under 55 luma at the 95th percentile on every tier,
- * against 72 at 6, while the heart's halo on ink-free pixels 1 to 4 px out keeps 98 percent of its luma on the high tier
- * at the defaults and 85 percent on the low tier, whose four-level blur piles the glow onto the claws; the rails keep 92
- * to 100 percent of theirs and the nest 97 to 100. A smaller cap darkens fogged ink further at the cost of that halo.
+ * The most glow the bloom may add to a pixel, as a multiple of the pixel's own luminance, so glow raises a pixel's
+ * luminance at most five-fold (2.3 stops). One channel can rise further, because a saturated glow carries its luminance
+ * in few channels: a Xeno magenta or violet glow (#ff3fa6, #d84dff) can add up to about 14.5 and 14.7 times the pixel's
+ * luminance to its strongest channel. The cap covers the ink the gate cannot see (KeyedBloomEffect lists it): fog lifts
+ * distant ink past the gate (the art preset's fogStart of 0 put the heart's outline at 0.015 to 0.034 at the hero
+ * camera, 1st to 75th percentile, where the darkest paint near energy is 0.019), edge ink is part paint, and MSAA mixes
+ * the ink's edge pixels with what lies behind. It also holds dark paint beside a strong emitter to a warm tint where the
+ * glow flooded it (the claws beside the heart crystal turned pale peach at heartHalo 7). At 4 the art preset's heart
+ * outline stays under 55 luma at the 95th percentile on every tier, against 72 at 6. The halo pays where it falls on
+ * dark paint: the heart's halo on ink-free pixels 1 to 4 px out keeps 98 percent of its luma on the high tier at the
+ * defaults and 85 percent on the low tier, whose four-level blur piles the glow onto the claws, and on the low tier 79
+ * percent at heartHalo 7 and 76 percent at the art preset; the rails keep 92 to 100 percent of theirs and the nest 97 to
+ * 100. A smaller cap darkens fogged ink further at the cost of that halo.
  */
 export const GLOW_LIFT_MAX = 4;
+
+/**
+ * A colour's linear luminance with the weights three writes into the effect shaders' luminance() (ColorManagement's
+ * coefficients for the working colour space), so the gate compares the ink with each pixel on the same scale.
+ */
+function linearLuminance(hex: string): number {
+  const color = new Color(hex);
+  const weights = ColorManagement.getLuminanceCoefficients(new Vector3());
+  return weights.x * color.r + weights.y * color.g + weights.z * color.b;
+}
 
 export type BloomDials = Pick<RenderDials, 'bloomThreshold' | 'bloomIntensity' | 'heartHalo'>;
 
@@ -173,10 +209,17 @@ export class BloomKeyMaterial extends ShaderMaterial {
   }
 }
 
+export interface KeyedBloomOptions {
+  blendFunction: BlendFunction;
+  levels: number;
+  /** The inkColor dial, which the ink gate follows (see INK_GATE_HEADROOM). */
+  inkColor: string;
+}
+
 /**
- * The bloom, keyed by a BloomKeyMaterial, adds its glow everywhere but on the emitters and the ink, and never more to a
- * pixel than GLOW_LIFT_MAX times its own luminance. The strengths live in the key material, so this effect's own
- * intensity stays 1.
+ * The bloom, keyed by a BloomKeyMaterial, adds its glow everywhere but on the emitters and on ink dark enough for the
+ * ink gate to find, and never more to a pixel than GLOW_LIFT_MAX times its own luminance. The strengths live in the key
+ * material, so this effect's own intensity stays 1.
  *
  * The shield keeps the glow off the pixels that fed it. Added on top of them too, the glow undid the emissive cap
  * (painted.ts EMISSIVE_PEAK) that keeps energy its colour under AgX: with a halo strong enough to read and only half the
@@ -188,25 +231,41 @@ export class BloomKeyMaterial extends ShaderMaterial {
  * threshold and ramp as the input mask, from the frame's alpha, which still carries the key here because the ink and fog
  * pass keep it.
  *
- * The ink gate keeps the glow off the ink, so an outline stays black and a halo starts outside it. An outline pixel has
- * a key of 0, so the shield let the whole glow onto it, and AgX lifts dark pixels most: at heartHalo 4 the heart
- * crystal's outline gained 119 luma against 16 for the sky beside it and survived only where MSAA left a partly keyed
- * pixel, dashed on the high tier (32.7 percent of its right edge's rows had no pixel darker than 100) and gone on the low
- * tier (all of them), which phones and the browser tests render. The lift cap then covers the ink the gate cannot tell
- * from paint, and dark paint under strong glow (see GLOW_LIFT_MAX). With both, that outline averages 13 luma or less on
- * every tier at heartHalo 4 and 7 (1.9 on the low tier, its value with the bloom off) and no row of it breaks. Both read
- * only this pixel, so they cost no taps; a widened shield would have taken the rails' halos, which have no ink around
- * them, and a gate alone left the art preset's fogged outline as washed as before.
+ * The ink gate keeps the glow off hull ink that wholly covers a pixel near the camera, so an outline there stays black
+ * and a halo starts outside it. An outline pixel has a key of 0, so the shield let the whole glow onto it, and AgX lifts
+ * dark pixels most: at heartHalo 4 the heart crystal's outline at the hero camera gained 119 luma against 16 for the sky
+ * beside it and survived only where MSAA left a partly keyed pixel, dashed on the high tier (32.7 percent of its right
+ * edge's rows had no pixel darker than 100) and gone on the low tier (all of them), which phones and the browser tests
+ * render. The lift cap then covers dark pixels the gate lets through (see GLOW_LIFT_MAX). With both, that outline at the
+ * hero camera averages 12.9, 12.0 and 1.9 luma on the high, medium and low tiers at heartHalo 4 and 7 (1.9 is its value
+ * with the bloom off), and no row of it breaks. Both read only this pixel, so they cost no taps; a widened shield would
+ * have taken the rails' halos, which have no ink around them, and a gate alone left the art preset's fogged outline as
+ * washed as before.
+ *
+ * The gate finds ink by luminance alone, so it misses ink that no longer reads darker than paint:
+ * - Fog lifts distant ink through it. At the default fog, ink more than about 22 to 30 m from the camera rises past the
+ *   gate and takes the glow: the heart's outline at the strategic camera reads 62, 57 and 49 luma with the bloom off and
+ *   101, 99 and 116 with it on (high, medium, low tier), on the high and medium tiers what it read before the gate. At
+ *   the art preset, whose fog starts at the camera, fogged ink beside energy reads dark brown, 30, 32 and 43 luma at the
+ *   hero camera against about 3 with the bloom off.
+ * - Edge ink at the default edgeStrength of 0.9 lets a tenth of the paint under it through, which lifts it past the gate
+ *   over all but the darkest paint, so the cap alone holds it: near energy it gains about 20 luma at the hero camera and
+ *   32 at the close-up (high tier).
+ * - A background darker than the gate gets no halo, or a capped one, so glow cannot read against a sky or ground as dark
+ *   as the ink, such as Ashen Moon's black sky (M8) or Ember Rift's charcoal basalt (M2).
+ * The proper fix, needed before M2, is a per-pixel ink signal read in place of luminance: the hull and edge ink could
+ * write a reserved key band under the lowest bloom threshold of 0.2, or carry an ink coverage flag.
  */
 export class KeyedBloomEffect extends BloomEffect {
-  constructor(key: BloomKeyMaterial, options: { blendFunction: BlendFunction; levels: number }) {
+  constructor(key: BloomKeyMaterial, { inkColor, ...options }: KeyedBloomOptions) {
     super({ ...options, intensity: 1, mipmapBlur: true });
     // The same Uniform objects as the key material's, so a threshold move reaches the mask and the shield at once.
     this.uniforms.set('threshold', key.uniforms['threshold'] as Uniform<number>);
     this.uniforms.set('smoothing', key.uniforms['smoothing'] as Uniform<number>);
     this.uniforms.set('keyRange', key.uniforms['keyRange'] as Uniform<number>);
-    this.defines.set('INK_GATE_LOW', glslFloat(INK_GATE_LOW));
-    this.defines.set('INK_GATE_HIGH', glslFloat(INK_GATE_HIGH));
+    this.uniforms.set('uInkLuminance', new Uniform(linearLuminance(inkColor)));
+    this.defines.set('INK_GATE_HEADROOM', glslFloat(INK_GATE_HEADROOM));
+    this.defines.set('INK_GATE_WIDTH', glslFloat(INK_GATE_WIDTH));
     this.defines.set('GLOW_LIFT_MAX', glslFloat(GLOW_LIFT_MAX));
     this.setFragmentShader(/* glsl */ `
 #ifdef FRAMEBUFFER_PRECISION_HIGH
@@ -218,11 +277,13 @@ uniform float intensity;
 uniform float threshold;
 uniform float smoothing;
 uniform float keyRange;
+uniform float uInkLuminance;
 void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
   vec4 glow = texture2D(map, uv) * intensity;
   float emitter = smoothstep(threshold, threshold + smoothing, inputColor.a * keyRange);
   float lum = luminance(inputColor.rgb);
-  float inkGate = smoothstep(INK_GATE_LOW, INK_GATE_HIGH, lum);
+  float inkLow = uInkLuminance * INK_GATE_HEADROOM;
+  float inkGate = smoothstep(inkLow, inkLow + INK_GATE_WIDTH, lum);
   float lift = min(1.0, GLOW_LIFT_MAX * lum / max(luminance(glow.rgb), 1e-4));
   outputColor = glow * (1.0 - emitter) * inkGate * lift;
 }
@@ -246,6 +307,11 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
    */
   get key(): BloomKeyMaterial {
     return this.luminancePass.fullscreenMaterial as BloomKeyMaterial;
+  }
+
+  /** The inkColor dial moved: the ink gate follows the new ink's luminance. */
+  setInkColor(inkColor: string): void {
+    (this.uniforms.get('uInkLuminance') as Uniform<number>).value = linearLuminance(inkColor);
   }
 }
 
@@ -305,8 +371,9 @@ export interface Pipeline {
  * bloom has read it (its input mask and its shield), the last effect sets alpha back to 1 for the canvas.
  *
  * The bloom shields every emitter's own pixels from its glow, not only the heart's, so energy keeps its saturated hue
- * (the hero camera's cyan went from 0.310 to 0.374 saturation), and it keeps the glow off the ink and caps what it adds
- * to dark paint; KeyedBloomEffect has the measurements.
+ * (the hero camera's cyan went from 0.310 to 0.374 saturation). It keeps the glow off ink that wholly covers a pixel
+ * near the camera and caps what it adds to any dark pixel, which holds fogged and edge ink only in part;
+ * KeyedBloomEffect has the measurements and the limits.
  */
 export function createPipeline(o: PipelineOptions): Pipeline {
   const composer = new EffectComposer(o.renderer, { frameBufferType: HalfFloatType, multisampling: o.tier.msaa });
@@ -334,6 +401,7 @@ export function createPipeline(o: PipelineOptions): Pipeline {
     // the only things meant to glow, sank under their own glow and the halo over bright ground was about halved.
     blendFunction: BlendFunction.ADD,
     levels: o.tier.bloomLevels,
+    inkColor: o.dials.inkColor,
   });
   const grade = new GradeEffect(o.theme, o.dials);
   const tone = new ToneMappingEffect({ mode: ToneMappingMode.AGX });
@@ -360,6 +428,7 @@ export function createPipeline(o: PipelineOptions): Pipeline {
       ink?.setDials(dials);
       fog.setDials(dials, theme);
       bloomKey.setDials(dials);
+      bloom.setInkColor(dials.inkColor);
       grade.setDials(dials, theme);
       finish.setDials(dials);
     },

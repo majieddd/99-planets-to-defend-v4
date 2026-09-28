@@ -1,5 +1,5 @@
 import { BlendFunction, BloomEffect, EffectPass, NormalPass, RenderPass, type Effect, type Pass } from 'postprocessing';
-import { Color, DepthTexture, FloatType, PerspectiveCamera, Scene, SRGBColorSpace, Texture, Vector2, Vector3, type WebGLRenderer, type WebGLRenderTarget } from 'three';
+import { DepthTexture, FloatType, PerspectiveCamera, Scene, SRGBColorSpace, Texture, Vector2, Vector3, type WebGLRenderer, type WebGLRenderTarget } from 'three';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DIALS, NUMERIC_RANGES } from '../../../src/render/defaults';
 import { LAYERS } from '../../../src/render/layers';
@@ -10,18 +10,17 @@ import {
   BloomKeyMaterial,
   createPipeline,
   GLOW_LIFT_MAX,
-  INK_GATE_HIGH,
-  INK_GATE_LOW,
+  INK_GATE_HEADROOM,
+  INK_GATE_WIDTH,
   KeyedBloomEffect,
   OpaqueOutputEffect,
-  WARM_BLUE_FULL,
-  WARM_BLUE_NONE,
   type Pipeline,
   type PipelineOptions,
 } from '../../../src/render/post/pipeline';
 import { InkEdgeEffect } from '../../../src/render/post/inkEdgeEffect';
 import { TIERS, type TierName } from '../../../src/render/quality';
 import { VERDANT } from '../../../src/render/themes';
+import { inkGateEdges, linearRgb, luminance, warmth } from './bloom-model';
 
 /**
  * Enough of a WebGLRenderer for the composer and its passes to be built and wired in node. Rendering still needs a GPU;
@@ -62,17 +61,7 @@ const targetOf = (pass: Pass): WebGLRenderTarget => (pass as unknown as { render
 const cameraOf = (pass: Pass): PerspectiveCamera => (pass as unknown as { renderPass: { camera: PerspectiveCamera } }).renderPass.camera;
 const bloomOf = (pipeline: Pipeline): KeyedBloomEffect =>
   effectsOf(pipeline.composer.passes.at(-1) as EffectPass).find((effect) => effect instanceof BloomEffect) as KeyedBloomEffect;
-
-/** The key material's warm test, as the shader runs it, for the colours the palettes name (sRGB hex). */
-function warmth(hex: string): number {
-  const c = new Color(hex);
-  const peak = Math.max(c.r, c.g, c.b, 1e-4);
-  const smoothstep = (a: number, b: number, x: number): number => {
-    const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
-    return t * t * (3 - 2 * t);
-  };
-  return (c.r >= Math.max(c.g, c.b) ? 1 : 0) * (1 - smoothstep(WARM_BLUE_FULL, WARM_BLUE_NONE, c.b / peak));
-}
+const inkLuminanceOf = (bloom: KeyedBloomEffect): unknown => bloom.uniforms.get('uInkLuminance')?.value;
 
 describe('bloom key material', () => {
   const dials = { bloomThreshold: 1.35, bloomIntensity: 0.55, heartHalo: 2.75 };
@@ -98,8 +87,8 @@ describe('bloom key material', () => {
     expect(fragmentShader).toContain('float warm = step(max(texel.g, texel.b), texel.r) * (1.0 - smoothstep(WARM_BLUE_FULL, WARM_BLUE_NONE, texel.b / peak));');
     // The palettes (blender/lib/palette.py): the heart's core, deep amber and inlay gold, against player cyan, Xeno
     // magenta and violet, and a warm white. The satellites' peach facet never reaches the threshold (key 0.66).
-    for (const hex of ['#ffc36b', '#ff8a3d', '#ffc857']) expect(warmth(hex), hex).toBe(1);
-    for (const hex of ['#59f2ff', '#ff3fa6', '#d84dff', '#ffffff', '#fff0dc']) expect(warmth(hex), hex).toBe(0);
+    for (const hex of ['#ffc36b', '#ff8a3d', '#ffc857']) expect(warmth(linearRgb(hex)), hex).toBe(1);
+    for (const hex of ['#59f2ff', '#ff3fa6', '#d84dff', '#ffffff', '#fff0dc']) expect(warmth(linearRgb(hex)), hex).toBe(0);
   });
 
   it('decodes the key with the range the painted material encodes it in', () => {
@@ -130,7 +119,8 @@ describe('bloom key material', () => {
 });
 
 describe('keyed bloom effect', () => {
-  const make = (): KeyedBloomEffect => new KeyedBloomEffect(new BloomKeyMaterial(DEFAULT_DIALS), { blendFunction: BlendFunction.ADD, levels: 8 });
+  const make = (inkColor = DEFAULT_DIALS.inkColor): KeyedBloomEffect =>
+    new KeyedBloomEffect(new BloomKeyMaterial(DEFAULT_DIALS), { blendFunction: BlendFunction.ADD, levels: 8, inkColor });
 
   it('keeps its glow off the pixels that fed it, by the same key, threshold and ramp', () => {
     const shader = make().getFragmentShader();
@@ -144,20 +134,31 @@ describe('keyed bloom effect', () => {
     const bloom = make();
     const shader = bloom.getFragmentShader();
     expect(shader).toContain('float lum = luminance(inputColor.rgb);');
-    expect(shader).toContain('float inkGate = smoothstep(INK_GATE_LOW, INK_GATE_HIGH, lum);');
+    expect(shader).toContain('float inkLow = uInkLuminance * INK_GATE_HEADROOM;');
+    expect(shader).toContain('float inkGate = smoothstep(inkLow, inkLow + INK_GATE_WIDTH, lum);');
     expect(shader).toContain('float lift = min(1.0, GLOW_LIFT_MAX * lum / max(luminance(glow.rgb), 1e-4));');
     // GLSL ES 3.0 has no implicit int to float conversion, so each define must be a float literal.
     expect([...bloom.defines.entries()]).toEqual([
-      ['INK_GATE_LOW', String(INK_GATE_LOW)],
-      ['INK_GATE_HIGH', String(INK_GATE_HIGH)],
+      ['INK_GATE_HEADROOM', String(INK_GATE_HEADROOM)],
+      ['INK_GATE_WIDTH', String(INK_GATE_WIDTH)],
       ['GLOW_LIFT_MAX', `${GLOW_LIFT_MAX}.0`],
     ]);
     for (const [, literal] of bloom.defines) expect(literal).toMatch(/^\d+\.\d+$/);
-    // The hull ink, #0e0f14, is 0.0049 in linear light: under the gate's low edge, so it takes no glow at all.
-    const ink = new Color('#0e0f14');
-    expect(0.2126 * ink.r + 0.7152 * ink.g + 0.0722 * ink.b).toBeLessThan(INK_GATE_LOW);
-    expect(INK_GATE_LOW).toBeLessThan(INK_GATE_HIGH);
     expect(GLOW_LIFT_MAX).toBeGreaterThan(0);
+  });
+
+  it('opens its ink gate just over the ink colour, at the fixed edges it replaced for the default ink', () => {
+    // At fixed edges of 0.006 and 0.015, #102030 (0.0136) took 93 percent of the glow and its outline at the hero camera
+    // turned 42 to 46 luma lighter. The default ink keeps those edges exactly in fp32, which keeps its frames unchanged.
+    expect(inkGateEdges(DEFAULT_DIALS.inkColor)).toEqual([Math.fround(0.006), Math.fround(0.015)]);
+    // Every ink sits under its own gate, so where it wholly covers a pixel it takes no glow, and a black ink, whose
+    // luminance is 0, still has a ramp (GLSL leaves smoothstep undefined when its edges meet).
+    for (const hex of [DEFAULT_DIALS.inkColor, '#000000', '#102030', '#3a1f5c']) {
+      const [low, high] = inkGateEdges(hex);
+      expect(luminance(linearRgb(hex)), hex).toBeLessThanOrEqual(low);
+      expect(high, hex).toBeGreaterThan(low);
+      expect(inkLuminanceOf(make(hex)), hex).toBeCloseTo(luminance(linearRgb(hex)), 12);
+    }
   });
 
   it('disposes its key material once, through the luminance pass', () => {
@@ -275,7 +276,8 @@ describe('createPipeline', () => {
       expect(effectsOf(pass)[0]).toBe(bloomOf(pipeline));
       const merged = (pass.fullscreenMaterial as unknown as { fragmentShader: string }).fragmentShader;
       expect(merged).toContain('float emitter = smoothstep(e0Threshold, e0Threshold + e0Smoothing, inputColor.a * e0KeyRange);');
-      expect(merged).toContain('float inkGate = smoothstep(e0INK_GATE_LOW, e0INK_GATE_HIGH, lum);');
+      expect(merged).toContain('float inkLow = e0UInkLuminance * e0INK_GATE_HEADROOM;');
+      expect(merged).toContain('float inkGate = smoothstep(inkLow, inkLow + e0INK_GATE_WIDTH, lum);');
       expect(merged).toContain('outputColor = glow * (1.0 - emitter) * inkGate * lift;');
       const main = merged.slice(merged.indexOf('void main()'));
       expect(main.match(/e\dMainImage\(/g)?.[0]).toBe('e0MainImage(');
@@ -299,6 +301,16 @@ describe('createPipeline', () => {
     // The strengths live in the key material; the effect's own intensity would multiply them.
     expect(bloomOf(pipeline).intensity).toBe(1);
     expect(bloomOf(pipeline).uniforms.get('threshold')!.value).toBe(1.85);
+  });
+
+  it('moves the ink gate with the ink colour, at creation and on a live move', () => {
+    // Off the default ink, so a gate left at the default (or never written) fails.
+    const created = build('high', undefined, { dials: { ...DEFAULT_DIALS, inkColor: '#3a1f5c' } });
+    expect(inkLuminanceOf(bloomOf(created))).toBeCloseTo(luminance(linearRgb('#3a1f5c')), 12);
+    const moved = build('high');
+    expect(inkLuminanceOf(bloomOf(moved))).toBeCloseTo(luminance(linearRgb(DEFAULT_DIALS.inkColor)), 12);
+    moved.applyDials({ ...DEFAULT_DIALS, inkColor: '#102030' }, VERDANT);
+    expect(inkLuminanceOf(bloomOf(moved))).toBeCloseTo(luminance(linearRgb('#102030')), 12);
   });
 
   it('hands the planet to the fog, and turns the fog\'s sunward warming with the sun', () => {

@@ -56,7 +56,9 @@ float fogLength(vec3 origin, vec3 direction, float far) {
     // falls below -88.7 on a long descending segment: at a falloff of 0.5 from about 1.44 km up (1.8 km at 0.4), heights
     // OrbitControls panning reaches, that was infinity times an e0 of 0, a NaN pixel that the bloom's blur spread. At
     // |x| = 1e-3 e0 and e1 agree in their first 3 digits, so their difference keeps only about 4 of fp32's 7; below it
-    // the limit e0 * (1 - x / 2), off by x^2 / 6 of e0 there, takes over.
+    // the first-order expansion e0 * (1 - x / 2), off by x^2 / 6 of e0 there, takes over. It also carries x = 0, where
+    // the quotient is 0 / 0: a segment of constant altitude (a ray through a hollow under the sphere) or of no length
+    // (a ray that ends before uStart, which makes every segment empty).
     total += segment * (abs(x) > 1e-3 ? (e0 - e1) / x : e0 * (1.0 - 0.5 * x));
     h0 = h1;
     e0 = e1;
