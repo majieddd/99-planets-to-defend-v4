@@ -22,9 +22,12 @@ import type { FaceDriver } from '../shared/faceDriver';
 import { NO_EDGE_PIECES } from '../shared/meadow';
 
 export type BulwarkMode = 'cycle' | 'idle' | 'run' | 'attack';
-/** The commander the scene shows at home and on the lap: the locked Bulwark, or Pip-A, the M1 commander preview. */
-export type CommanderKind = 'bulwark' | 'pip';
-export const COMMANDERS: readonly CommanderKind[] = ['bulwark', 'pip'];
+/**
+ * The commander the scene shows at home and on the lap: the locked Bulwark, Pip-A, the M1 commander preview, or the anime
+ * head test, a tech-validation preview of the expression-atlas face that is outside the manifest (main.ts, ANIME_URL).
+ */
+export type CommanderKind = 'bulwark' | 'pip' | 'anime';
+export const COMMANDERS: readonly CommanderKind[] = ['bulwark', 'pip', 'anime'];
 export type PresetName = 'hero' | 'strategic' | 'closeup' | 'horizon';
 export const PRESETS: PresetName[] = ['hero', 'strategic', 'closeup', 'horizon'];
 
@@ -44,8 +47,8 @@ export interface StyleScene {
   /** The commander's mode, whichever commander is shown; the name is Bulwark's, from before Pip-A joined. */
   setBulwarkMode(mode: BulwarkMode): void;
   /**
-   * Shows a commander in the same home pose and cycle, starting its mode over. Pip-A needs his loaded asset the first
-   * time; the scene keeps it for later switches.
+   * Shows a commander in the same home pose and cycle, starting its mode over. Pip-A and the anime head need their loaded
+   * asset the first time; the scene keeps it for later switches.
    */
   setCommander(kind: CommanderKind, asset?: LoadedAsset): void;
   commander(): CommanderKind;
@@ -225,12 +228,12 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
   root.add(husk.root);
   const bulwark = new Actor(assets.bulwark.root, assets.bulwark);
   root.add(bulwark.root);
-  // The commander on show, Bulwark until the lab switches. Pip-A's actor and face are built on the first switch to him,
-  // so a lab that never shows him draws exactly what it drew before he existed.
+  // The commander on show, Bulwark until the lab switches. A preview's actor and face (Pip-A's, the anime head's) are
+  // built on the first switch to it, so a lab that never shows one draws exactly what it drew before it existed.
   let commander = bulwark;
   let commanderKind: CommanderKind = 'bulwark';
   let face: FaceDriver | null = null;
-  let pip: { actor: Actor; face: FaceDriver | null } | null = null;
+  const previews = new Map<CommanderKind, { actor: Actor; face: FaceDriver | null }>();
   let faceFrozen = false;
 
   scatter(root, patch, assets.kit, ctx, scatterScale);
@@ -350,12 +353,15 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
     },
     setCommander(kind, asset) {
       if (kind === commanderKind) return;
-      if (kind === 'pip' && !pip) {
-        if (!asset) throw new Error('the Style Lab needs the loaded commander_pip asset to show Pip-A');
+      let next = kind === 'bulwark' ? { actor: bulwark, face: null } : previews.get(kind);
+      if (!next) {
+        if (!asset) throw new Error(`the Style Lab needs the loaded ${kind === 'pip' ? 'commander_pip asset to show Pip-A' : 'anime head test asset to show it'}`);
         // The face is made before the actor's mixer first moves the rig, because it reads the jaw's axis from the bind pose.
-        pip = { actor: new Actor(asset.root, asset), face: createCommanderFace(asset.root, FACE_SEED) };
+        // The anime head has no attack clip either, so it takes Pip-A's cycle (strike, above) and his face path: its
+        // driver finds the expression decals and blinks them by state (FaceDriver.faceKind 'decal').
+        next = { actor: new Actor(asset.root, asset), face: createCommanderFace(asset.root, FACE_SEED) };
+        previews.set(kind, next);
       }
-      const next = kind === 'pip' && pip ? pip : { actor: bulwark, face: null };
       root.remove(commander.root);
       root.add(next.actor.root);
       commander = next.actor;

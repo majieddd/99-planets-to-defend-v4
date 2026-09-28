@@ -6,8 +6,8 @@ import { PRESETS, type BulwarkMode, type CommanderKind, type PresetName } from '
 
 const TITLE = 'Painted-Anime-Inkline 4.0';
 
-/** The commander dropdown's choices, by the name the panel shows. */
-export const COMMANDER_OPTIONS: Readonly<Record<string, CommanderKind>> = { Bulwark: 'bulwark', 'Pip-A (preview)': 'pip' };
+/** The commander dropdown's choices, by the name the panel shows. The anime head is a tech-validation preview (main.ts). */
+export const COMMANDER_OPTIONS: Readonly<Record<string, CommanderKind>> = { Bulwark: 'bulwark', 'Pip-A (preview)': 'pip', 'Anime head (test)': 'anime' };
 
 export interface LabState {
   tier: TierName;

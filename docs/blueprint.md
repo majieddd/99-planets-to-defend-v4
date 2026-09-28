@@ -299,6 +299,10 @@ normals, and the loader fills normals in only where a mesh has none (tests/unit/
 synthetic head through the build and GLTFLoader). The hull still pushes along the averaged ink normals, so
 it stays closed, and on a synthetic head with proxy normals it keeps at least 0.84 of its width across the
 silhouette in every view, the least in profile down the brow and chin (tests/unit/render/hull-normals.test.ts).
+The M1 study's anime head test, `public/assets-preview/commander_anime_test.glb` (the atlas head on Pip-A's body, through
+the build's optimize step), is a tech-validation preview outside the manifest and `npm run assets:check`, shown only by the
+Style Lab's `?commander=anime`, because it breaks the commanders budget (61 triangles over, no attack clip); it must come
+in through a recipe and the manifest before it can ship.
 
 | Class | Planned count | Recipe | First milestone |
 |---|---|---|---|

@@ -112,8 +112,9 @@ function parsePreset(value: string | null): PresetName {
 }
 
 /**
- * The commander `?commander=` names, `pip` for Pip-A and `bulwark` (or nothing) for the locked Bulwark. Any other name is
- * named in the console and the banner, and the lab shows Bulwark, as the Asset World falls back on a bad address.
+ * The commander `?commander=` names, `pip` for Pip-A, `anime` for the anime head test and `bulwark` (or nothing) for the
+ * locked Bulwark. Any other name is named in the console and the banner, and the lab shows Bulwark, as the Asset World
+ * falls back on a bad address.
  */
 function parseCommander(value: string | null): { kind: CommanderKind; problem: string | null } {
   if (!value) return { kind: 'bulwark', problem: null };
@@ -125,6 +126,21 @@ function parseCommander(value: string | null): { kind: CommanderKind; problem: s
 async function loadPip(manifest: Manifest | null, ctx: MaterialContext): Promise<LoadedAsset | null> {
   const url = manifest ? assetUrl(BASE, manifest, 'commander_pip') : null;
   return url ? loadNamedAsset('commander_pip', url, ctx, FAMILY_STANDARD_BLEND.commanders) : null;
+}
+
+/**
+ * The anime head test: the study's expression-atlas head on Pip-A's body, a tech-validation preview that is deliberately
+ * outside public/assets/manifest.json and so outside npm run assets:check. It breaks two lines of the commanders budget
+ * (24,061 triangles, 61 over, and no attack clip), and no budget is raised or excepted for it; it came through the build's
+ * own optimize step (tools/assets/optimize.mjs) so the pipeline's handling of its atlas, alpha and normals is the real
+ * one. Before it can ship it must come in through a recipe in blender/recipes and the manifest like every other model
+ * (docs/blueprint.md, Kit, Expression atlases). Loaded by this direct URL, and only when ?commander=anime or the panel
+ * asks for it, so no other page or default frame fetches it.
+ */
+const ANIME_URL = `${BASE}assets-preview/commander_anime_test.glb`;
+
+async function loadAnime(ctx: MaterialContext): Promise<LoadedAsset> {
+  return loadNamedAsset('commander_anime_test', ANIME_URL, ctx, FAMILY_STANDARD_BLEND.commanders);
 }
 
 function readPixels(canvas: HTMLCanvasElement, width: number, height: number): Uint8ClampedArray {
@@ -234,9 +250,11 @@ async function start(): Promise<void> {
   const style = buildStyleScene(patch, loaded ?? placeholderAssets(ctx), ctx, tier.scatterScale);
   scene.add(style.root);
 
-  // Pip-A loads only when the address asks for him or the panel switches to him, so the default lab loads and draws
-  // exactly what it drew before he existed. Without the built assets there is no Pip-A to show, and the lab says so.
+  // Pip-A and the anime head load only when the address asks for them or the panel switches to them, so the default lab
+  // loads and draws exactly what it drew before they existed. Without the built assets there is no Pip-A to show, and
+  // the lab says so; the anime head needs only its own file, and a failed load stops the lab naming it.
   let pipAsset: LoadedAsset | null = null;
+  let animeAsset: LoadedAsset | null = null;
   const note = (text: string): void => {
     console.warn(`Style Lab: ${text}`);
     banner.hidden = false;
@@ -245,14 +263,15 @@ async function start(): Promise<void> {
   if (commanderParam.problem) note(`${commanderParam.problem.charAt(0).toUpperCase()}${commanderParam.problem.slice(1)}.`);
   async function showCommander(kind: CommanderKind): Promise<CommanderKind> {
     if (kind === 'pip' && !pipAsset) pipAsset = loaded ? await loadPip(manifest, ctx) : null;
+    if (kind === 'anime' && !animeAsset) animeAsset = await loadAnime(ctx);
     if (kind === 'pip' && !pipAsset) {
       note('Pip-A is not in the built assets (npm run assets); showing Bulwark.');
       style.setCommander('bulwark');
-    } else style.setCommander(kind, pipAsset ?? undefined);
+    } else style.setCommander(kind, (kind === 'anime' ? animeAsset : pipAsset) ?? undefined);
     state.commander = style.commander();
     return state.commander;
   }
-  if (state.commander === 'pip') await showCommander('pip');
+  if (state.commander !== 'bulwark') await showCommander(state.commander);
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -434,7 +453,8 @@ async function start(): Promise<void> {
       for (const controller of gui.controllersRecursive()) controller.updateDisplay();
       return shown;
     },
-    // A face pose held on the shown commander for an evidence frame, or null to hand it back to his blink.
+    // A face pose held on the shown commander for an evidence frame, or null to hand it back to his blink. A decal face's
+    // pose may also name its eye and mouth cells (FacePose), which the anime head's evidence frames hold.
     setFace: (pose: FacePose | null) => style.setFace(pose),
   };
   loopStarted = true;

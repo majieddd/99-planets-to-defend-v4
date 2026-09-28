@@ -1,5 +1,5 @@
 import { Quaternion, Vector3, type Object3D } from 'three';
-import { EXPRESSION_MORPHS, FaceDriver, JAW_BONE_NAME, seededFaceRandom, type Expression } from './faceDriver';
+import { EXPRESSION_MORPHS, FaceDriver, JAW_BONE_NAME, seededFaceRandom, type Expression, type EyeState, type MouthState } from './faceDriver';
 
 /**
  * A commander's face in the labs, set up from its loaded rig: the jaw's opening axis read from the rig, a seeded face
@@ -68,12 +68,22 @@ export function faceDemoWeights(seconds: number): Record<Expression, number> {
   return weights;
 }
 
-/** A face pose a lab or a test handle holds for a frame: lids and expressions from 0 to 1, any left out at 0. */
-export type FacePose = Partial<Record<Expression | 'blink' | 'jaw', number>>;
+/**
+ * A face pose a lab or a test handle holds for a frame: lids and expressions from 0 to 1, any left out at 0, and for a
+ * decal face its eye and mouth cells, any left out at open eyes and a neutral mouth.
+ */
+export type FacePose = Partial<Record<Expression | 'blink' | 'jaw', number>> & { eyes?: EyeState; mouth?: MouthState };
 
-/** Holds a pose on a driver, or with null hands the lids back to the auto-blink and rests the expressions and jaw. */
+/**
+ * Holds a pose on a driver, or with null hands the lids back to the auto-blink and rests the expressions and jaw. A decal
+ * face also holds the pose's eye and mouth cells, or with null goes back to open eyes, which blink, and a neutral mouth.
+ * A morph face skips the cells: setEyes on a rig without eye decals warns, and Pip-A's frames would gain a console line.
+ */
 export function holdFacePose(driver: FaceDriver, pose: FacePose | null): void {
   driver.setBlinkHold(pose ? (pose.blink ?? 0) : null);
   for (const name of EXPRESSION_MORPHS) driver.setExpression(name, pose?.[name] ?? 0);
   driver.setJaw(pose?.jaw ?? 0);
+  if (driver.decals.length === 0) return;
+  driver.setEyes(pose?.eyes ?? 'open');
+  driver.setMouth(pose?.mouth ?? 'neutral');
 }
