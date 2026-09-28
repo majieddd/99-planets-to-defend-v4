@@ -76,8 +76,10 @@ export function placeholderAssets(ctx: MaterialContext) {
   }
   const heart = new Group();
   const plinth = part('heart_plinth', new CylinderGeometry(1.05, 1.2, 0.4, 8), '#9c8a74');
-  // Every stage's crystal starts 0.4 m up, the plinth's top in M0c's Worldheart (PLINTH_TOP), so the 0.4 m plinth
-  // stands on the origin; centred on it, the plinth would be half buried with the crystal hanging 0.2 m above it.
+  // Every stage's crystal starts 0.4 m up, on the stand-in plinth's top, so the 0.4 m plinth stands on the origin;
+  // centred on it, the plinth would be half buried with the crystal hanging 0.2 m above it. These heights are the
+  // stand-in's own: M0c's Worldheart tops its plinth at 0.42 m (PLINTH_TOP in blender/recipes/heart.py) and floats each
+  // core's lower point 0.2 m plus 0.08 m per level above it.
   plinth.position.y = 0.2;
   heart.add(plinth);
   // The crystal glows amber-gold at full chroma (#ffaf1a, near-zero blue) over the same gold at 0.55 in linear light,

@@ -235,8 +235,8 @@ describe('placeholderAssets', () => {
       ['heart', assets.heart.root],
       ...[1, 2, 3].map((level): [string, Object3D] => [`bolt_mk${level}`, assets.bolt.root.getObjectByName(`bolt_mk${level}`) as Object3D]),
     ];
-    // Precise, from the vertices: by default each part adds its local bounding box after its transform, which is exact
-    // only while no part is rotated within its root.
+    // The box is measured from the vertices: by default each part adds its local box after its transform, which reaches
+    // lower than the part once the part is tilted within its root.
     for (const [name, root] of placed) expect(new Box3().setFromObject(root, true).min.y, name).toBeCloseTo(0, 6);
     for (const level of [1, 2, 3]) {
       // M0c's tree: the mark is an empty at the asset origin, which is its ground contact point, with the base, the
@@ -257,6 +257,22 @@ describe('placeholderAssets', () => {
     for (let level = 0; level <= 10; level++) {
       expect(box(assets.heart.root, `heart_stage_${String(level).padStart(2, '0')}`).min.y).toBeCloseTo(0.4, 6);
     }
+  });
+
+  it("keeps the sphere's own normals on the nest's dome, so it lights as one dome and not as flat facets", () => {
+    // The sphere's own normals point straight out from its centre, the root, so the dome lights as one broad dome.
+    // Unindexed with its normals recomputed, it lit as 40 flat facets, and no other check here tells the two apart.
+    // Measured against the unit vector out to each vertex, the facets' normals were up to 0.36 off and the sphere's are
+    // 4.3e-8 off, float32's rounding.
+    const { geometry } = placeholderAssets(ctx).nest.root.getObjectByName('nest') as Mesh;
+    const position = geometry.getAttribute('position');
+    const normal = geometry.getAttribute('normal');
+    let worst = 0;
+    for (let i = 0; i < position.count; i++) {
+      const radial = new Vector3().fromBufferAttribute(position, i).normalize();
+      worst = Math.max(worst, new Vector3().fromBufferAttribute(normal, i).distanceTo(radial));
+    }
+    expect(worst).toBeLessThan(1e-6);
   });
 
   it('gives only the energy an emissive key, each one enough to glow at the default threshold', () => {
@@ -453,7 +469,9 @@ describe('buildStyleScene', () => {
       // second order: place() yaws the mark level and then tilts it by the angle t between its up and the pole's,
       // which turns the facing's bearing by pi / 2 - 2 atan(sqrt(cos t)) at most, about t squared over 4. That is
       // 0.058 to 0.066 degrees at these marks' 3.65 to 3.88 degree tilts. Measured 0.002 degrees at most, because each
-      // mark leans within a degree of its facing, but the bound holds whichever way the ground leans.
+      // mark leans within a degree of its facing, but the bound holds whichever way the ground leans. The 1e-12 on the
+      // bound absorbs rounding where the bound comes out as 0: below about 1e-8 rad, cos t rounds to 1, so a correct
+      // mark on level ground would otherwise fail on atan2 rounding alone (measured 2.4e-16 rad at these bearings).
       const up = new Vector3(0, 1, 0).applyQuaternion(worldQuaternion(mark));
       expect(up.distanceTo(ground.up.clone().lerp(ground.normal, 0.5).normalize())).toBeLessThan(1e-9);
       const tilt = up.angleTo(new Vector3(0, 1, 0));
@@ -462,7 +480,7 @@ describe('buildStyleScene', () => {
       expect(error).toBeLessThanOrEqual(Math.PI / 2 - 2 * Math.atan(Math.sqrt(Math.cos(tilt))) + 1e-12);
       // The base's bottom centre is on the ground point, not half the base below it, and the pivots stand where the
       // old site groups held them: the yaw ring's centre 0.1 m over the base's top, and the pitch pivot 0.35 m over
-      // the yaw ring's centre, which is 0.45 m over the base's top.
+      // the yaw ring's centre, so 0.45 m over the base's top.
       const baseHeight = 0.35 + 0.12 * index;
       const over = (height: number) => ground.position.clone().addScaledVector(up, height);
       const base = mark.getObjectByName(`bolt_mk${level}_base`) as Object3D;

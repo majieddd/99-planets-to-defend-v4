@@ -71,9 +71,9 @@ ROCK_SINK = 0.05
 # The bush's four clumps sit 0.05 to 0.10 m deeper than their radii (each centre lies lower than its radius), so the
 # foliage meets the ground as a wide mound instead of resting on the point of a ball. The leaf displacement (0.1 m)
 # moves the deepest point, on the underside of the clump at x -0.4, on to 0.1194 m under the origin (measured on the
-# shipped kit), which the sink gives to the millimetre. It was 0.12, a bound rather than the depth, which the check now
-# refuses, and then 0.114, the 0.1138 m depth of the coarser clumps, which the finer ones (FOLIAGE_SUBDIVISIONS) miss by
-# 5.4 mm, past the check's 5 mm.
+# shipped kit), which the sink gives to the millimetre. It was 0.12, a bound rather than the depth, which the check
+# refused 6.2 mm off the coarser clumps' 0.1138 m depth, and then 0.114, that depth, which the finer clumps
+# (FOLIAGE_SUBDIVISIONS) miss by 5.4 mm, past the check's 5 mm.
 BUSH_SINK = 0.119
 
 

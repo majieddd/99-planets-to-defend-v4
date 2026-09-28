@@ -147,8 +147,9 @@ def ellipsoid_normals(ob, center, radii=(1.0, 1.0, 1.0)):
     share a position, so these normals move the ink too. Measured with that averaging on both the shipped Verdant
     kit and the same geometry exported flat, which writes one normal per polygon, they move it by 9.8 degrees on
     average (24.9 at most) on the crown's clumps, 8.5 (18.5) on the bush's and 22.5 (53.8) on the conifer tiers,
-    nine tenths of that at the tiers' tips. Averaging per triangle instead, as a measurement that reads only the GLB
-    does, overweights any polygon that is not planar, such as a tier's end cap, and reads 40.6 on the tiers."""
+    nine tenths of it at the tiers' tips (40.8 on average there, 4.2 at the rims). Averaging per triangle instead,
+    as a measurement that reads only the GLB does, overweights any polygon that is not planar, such as a tier's end
+    cap or its side quads, and reads 40.6 on the tiers."""
     mesh = ob.data
     c = Vector(center)
     normals = []
