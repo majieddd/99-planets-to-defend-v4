@@ -1017,9 +1017,11 @@ every vertex of its mesh a morph fetch in the painted and hull shaders and nothi
 required clip may be pending for one named model, with its reason, in the family's `pending` table;
 `npm run assets:check` prints it on that model's line, fails a blank reason, and fails the reason once
 the clip ships, once the family stops requiring it, or once the model leaves the manifest. Pip-A's
-attack is the one pending clip (phase B). Pip-A measures 21,799 triangles, 24 bones (the CharForge
-rig's 64 less its 40 finger bones, the jaw among them), two 1,024 px textures and the five face morphs,
-inside every `commanders` line.
+attack is the one pending clip (phase B). Pip-A, the v5 study export, measures 24,000 triangles, on
+the line, 24 bones (the CharForge rig's 64 less its 40 finger bones, the jaw among them), three 1,024 px
+textures (the body's albedo and emissive, and the head's own albedo on a second body material) and the
+five face morphs, inside every `commanders` line; the texture line caps each texture's size, not their
+count, so the head texture needs no allowance.
 
 | Family | Triangles | Bones | Texture (px) | Ink | Rationale |
 |---|---|---|---|---|---|
@@ -1637,3 +1639,11 @@ and 0.56 on his right cheek at the nose, which light with the cel bands; the pai
 seam and baked light and shade of its own; and with the key behind his head the face turns olive-teal
 (mean hue 60 against 22 to 27 lit). Next: the owner's verdict on Pip-A in the labs, then phase B (his
 attack clip and a face export that fixes these), alongside M1 and M2.
+2026-09-28, later. Pip-A is now the v5 study export, through the same optimize, inspect and manifest
+steps (3.58 MB to 671 KB, the other 8 entries re-derived byte for byte): 24,000 triangles, on the
+`commanders` line, and a second body material for a 1,024 px head texture, three textures in all,
+which the texture line allows since it caps each texture's size. GLTFLoader loads the two-material
+body as a Group of the body and the head, and each is painted as skin, inked and driven by the face
+morphs. In the locked look, in the same close-up of his face, the ink specks on his neck under the jaw
+and on his right cheek are gone, and his run stride is unchanged (2.70 m in 0.70 s); the seam down the
+face's centre and the dark notch at the bridge of the nose remain as they were in v4.

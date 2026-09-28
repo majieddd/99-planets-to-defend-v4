@@ -23,9 +23,10 @@
       "strike": null
     }
   ],
-  "tris": 21799,
+  "tris": 24000,
   "notes": {
-    "preview": "Pip-A, the M1 commander preview: the owner's CharForge Pip reworked in Blender 5.2.1 by the M1 study's scripts, which are not yet a recipe in blender/recipes, so npm run assets keeps this committed file and does not rebuild it",
+    "preview": "Pip-A, the M1 commander preview, study export v5: the owner's CharForge Pip reworked in Blender 5.2.1 by the M1 study's scripts, which are not yet a recipe in blender/recipes, so npm run assets keeps this committed file and does not rebuild it",
+    "head": "v5 gives the body a second material for a 1024 px head texture and zeroes the neck's _INK around the jaw, where the hull ink drew specks",
     "clips": "idle and run only; the attack clip is phase B"
   },
   "placeables": []

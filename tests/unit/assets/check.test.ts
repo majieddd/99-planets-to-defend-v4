@@ -85,13 +85,17 @@ describe('morph targets and pending clips', () => {
     },
     xeno: budgets.xeno,
   };
+  // Pip-A as the v5 study export ships: 24,000 triangles, on the commanders line, and three 1024 px textures (body
+  // albedo and emissive, and the head's own albedo on its second material).
+  const TEXTURE_1024 = { width: 1024, height: 1024, mime: 'image/webp' };
   function pip(overrides: Record<string, unknown> = {}) {
     return husk({
       name: 'commander_pip',
       family: 'commanders',
       file: 'commanders/commander_pip.glb',
-      tris: 21799,
+      tris: 24000,
       bones: 24,
+      textures: [TEXTURE_1024, TEXTURE_1024, TEXTURE_1024],
       morphs: FACE,
       animations: [
         { name: 'idle', duration: 1.6, loop: true, strike: null, exportedDuration: 1.6 },
@@ -110,6 +114,13 @@ describe('morph targets and pending clips', () => {
     // A family that names no morphs takes none, and an entry that records none passes whatever its family allows.
     expect(evaluateAsset(husk({ morphs: ['blink_L'] }), commanders, timings)).toEqual(["morph targets blink_L not in the xeno budget's list (none)"]);
     expect(evaluateAsset(husk(), commanders, timings)).toEqual([]);
+  });
+
+  it('passes Pip-A on the triangle line and fails him one over; the texture line caps each texture\'s size, not their count', () => {
+    expect(evaluateAsset(pip(), commanders, timings)).toEqual([]);
+    expect(evaluateAsset(pip({ tris: 24001 }), commanders, timings)).toEqual(['tris 24001 > 24000']);
+    // The v5 head texture is a third 1024 px texture, which the line allows; a larger one fails however few there are.
+    expect(evaluateAsset(pip({ textures: [{ width: 2048, height: 1024 }] }), commanders, timings)).toEqual(['texture 2048x1024 > 1024']);
   });
 
   it('lets one named model lack a required clip while its reason stands, and reports the clip as pending', () => {

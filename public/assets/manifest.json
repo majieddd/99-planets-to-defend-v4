@@ -142,9 +142,14 @@
         "brows_up",
         "pucker"
       ],
-      "tris": 21799,
+      "tris": 24000,
       "bones": 24,
       "textures": [
+        {
+          "width": 1024,
+          "height": 1024,
+          "mime": "image/webp"
+        },
         {
           "width": 1024,
           "height": 1024,
@@ -170,7 +175,7 @@
           "sink": 0
         }
       ],
-      "bytes": 613340
+      "bytes": 687488
     },
     {
       "name": "verdant_kit",

@@ -14,10 +14,17 @@ import { VERDANT } from '../../../src/render/themes';
 import { assetIO } from '../../../tools/assets/optimize.mjs';
 
 // The shipped Pip-A, as three r186's own GLTFLoader delivers it, so the names the renderer and the face driver read are
-// the loader's and not assumed. Node has no image decoder, so the file's two textures are dropped before parsing; the
+// the loader's and not assumed. Node has no image decoder, so the file's three textures are dropped before parsing; the
 // geometry, the skin, the morphs and the clips pass through the loader exactly as the page loads them.
 const FILE = fileURLToPath(new URL('../../../public/assets/commanders/commander_pip.glb', import.meta.url));
 const FACE = ['blink_L', 'blink_R', 'smile', 'brows_up', 'pucker'];
+// Since the v5 study export the body's glTF mesh has two primitives, the body on the shared paint material and the head
+// on a second material with its own 1024 px texture. GLTFLoader loads such a node as a Group named after the node, with
+// one skinned mesh per primitive named after the mesh and made unique, so the node's own name is taken and the two
+// primitives arrive as commander_body_1 (body) and commander_body_2 (head). Every check that read commander_body as one
+// mesh now reads both, because a check on the body alone would pass with the head, where the eyes are, left unpainted,
+// uninked or undriven.
+const BODY_PARTS = ['commander_body_1', 'commander_body_2'];
 
 let scene: Group;
 let clips: string[];
@@ -34,29 +41,47 @@ beforeAll(async () => {
 });
 
 const mesh = (name: string) => scene.getObjectByName(name) as Mesh;
+const bodyParts = () => BODY_PARTS.map(mesh);
 
 describe('the shipped Pip-A through GLTFLoader', () => {
-  it('delivers _INK and _SKIN lower-cased as _ink and _skin, the skin weight on the body alone', () => {
-    const body = mesh('commander_body').geometry;
-    const armour = mesh('commander_armour').geometry;
-    expect(Object.keys(body.attributes).filter((name) => name.startsWith('_')).sort()).toEqual(['_ink', '_skin']);
-    expect(Object.keys(armour.attributes).filter((name) => name.startsWith('_'))).toEqual(['_ink']);
-    // Soft at the borders: the weight spans 0 to 1 on the body.
-    const skin = body.getAttribute('_skin');
-    let low = Infinity;
-    let high = -Infinity;
-    for (let i = 0; i < skin.count; i++) {
-      low = Math.min(low, skin.getX(i));
-      high = Math.max(high, skin.getX(i));
-    }
-    expect([low, high]).toEqual([expect.closeTo(0, 3), expect.closeTo(1, 3)]);
+  it('loads the two-material body as a Group of the body and the head, each a skinned mesh on its own material', () => {
+    const body = scene.getObjectByName('commander_body')!;
+    expect([body.type, body.children.map((child) => child.name)]).toEqual(['Group', BODY_PARTS]);
+    expect(bodyParts().map((part) => (part as Mesh & { isSkinnedMesh?: boolean }).isSkinnedMesh)).toEqual([true, true]);
+    // The head's own material is the one that carries the 1024 px head texture in the file.
+    const materials = bodyParts().map((part) => (part.material as { name: string }).name);
+    expect(materials[0]).not.toMatch(/head/);
+    expect(materials[1]).toMatch(/head/);
   });
 
-  it('carries the five face morphs on the body, positions only, the jaw bone by its exact name, and the idle and run clips', () => {
-    const body = mesh('commander_body');
-    expect(Object.keys(body.morphTargetDictionary ?? {})).toEqual(FACE);
-    expect(body.geometry.morphAttributes['position']).toHaveLength(5);
-    expect(body.geometry.morphAttributes['normal']).toBeUndefined();
+  it('delivers _INK and _SKIN lower-cased as _ink and _skin, the skin weight on the body alone', () => {
+    const armour = mesh('commander_armour').geometry;
+    for (const part of bodyParts()) {
+      expect(Object.keys(part.geometry.attributes).filter((name) => name.startsWith('_')).sort()).toEqual(['_ink', '_skin']);
+    }
+    expect(Object.keys(armour.attributes).filter((name) => name.startsWith('_'))).toEqual(['_ink']);
+    const range = (part: Mesh) => {
+      const skin = part.geometry.getAttribute('_skin');
+      let low = Infinity;
+      let high = -Infinity;
+      for (let i = 0; i < skin.count; i++) {
+        low = Math.min(low, skin.getX(i));
+        high = Math.max(high, skin.getX(i));
+      }
+      return [low, high];
+    };
+    // Soft at the borders: the weight spans 0 to 1 on the body, where skin meets suit, and the head is skin throughout.
+    const [bodyPart, head] = bodyParts();
+    expect(range(bodyPart!)).toEqual([expect.closeTo(0, 3), expect.closeTo(1, 3)]);
+    expect(range(head!)).toEqual([expect.closeTo(1, 3), expect.closeTo(1, 3)]);
+  });
+
+  it('carries the five face morphs on the body and the head, positions only, the jaw bone by its exact name, and the idle and run clips', () => {
+    for (const part of bodyParts()) {
+      expect(Object.keys(part.morphTargetDictionary ?? {})).toEqual(FACE);
+      expect(part.geometry.morphAttributes['position']).toHaveLength(5);
+      expect(part.geometry.morphAttributes['normal']).toBeUndefined();
+    }
     expect(mesh('commander_armour').morphTargetDictionary).toBeUndefined();
     // No prefix to resolve: the CharForge rig's jaw is 'jaw', while its other bones carry mixamorig: (sanitized to
     // mixamorigHead by the loader).
@@ -66,15 +91,19 @@ describe('the shipped Pip-A through GLTFLoader', () => {
     expect(clips).toEqual(['idle', 'run']);
   });
 
-  it('paints the body as skin out of the edge pass and keeps the armour in it, both inked', () => {
+  it('paints the body and the head as skin out of the edge pass and keeps the armour in it, all inked', () => {
     const ctx = { paint: createPaintUniforms(VERDANT, DEFAULT_DIALS, new Texture()), hullMaterial: createHullMaterial(createInkUniforms(DEFAULT_DIALS)), hullLayer: LAYERS.hull };
     paintAndInk(scene, ctx, 0.35);
-    const body = mesh('commander_body');
     const armour = mesh('commander_armour');
-    expect(body.layers.mask).toBe(1 << LAYERS.noEdge);
+    for (const part of bodyParts()) {
+      expect(part.layers.mask).toBe(1 << LAYERS.noEdge);
+      expect(part.geometry.getAttribute('skinMask')).toBe(part.geometry.getAttribute('_skin'));
+      expect(part.children.map((child) => child.name)).toEqual([`${part.name}_hull`]);
+    }
+    // Two source materials, two painted ones: the head keeps its own texture rather than sharing the body's.
+    const [bodyPart, head] = bodyParts();
+    expect(head!.material).not.toBe(bodyPart!.material);
     expect(armour.layers.mask).toBe(1 << LAYERS.world);
-    expect(body.geometry.getAttribute('skinMask')).toBe(body.geometry.getAttribute('_skin'));
-    expect(body.children.map((child) => child.name)).toEqual(['commander_body_hull']);
     expect(armour.children.map((child) => child.name)).toEqual(['commander_armour_hull']);
   });
 
@@ -90,7 +119,8 @@ describe('the shipped Pip-A through GLTFLoader', () => {
     };
     const rest = chin();
     const face = createCommanderFace(scene, 1)!;
-    expect(face.meshes.map((m) => m.name)).toContain('commander_body');
+    // The driver sets the morphs on the head, where the eyes and mouth are, as well as on the body.
+    expect(face.meshes.map((m) => m.name)).toEqual(expect.arrayContaining(BODY_PARTS));
     face.setJaw(1);
     const open = chin();
     face.setJaw(0);
