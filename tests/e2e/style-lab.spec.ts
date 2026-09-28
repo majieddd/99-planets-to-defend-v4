@@ -132,8 +132,8 @@ test.describe('the style lab test handle', () => {
 
     const original = await page.evaluate(() => (window.__P99__!['dials'] as () => Record<string, unknown>)());
     await step('before');
-    // The locked sun is at 15 degrees, so the move goes to the Verdant theme's own 35: from 15 down to 8 the frame changed
-    // by only 2.2 under SwiftShader, against 2 for the check below.
+    // The locked sun is at 15 degrees, so the move goes to the Verdant theme's own 35: from 15 up to 35 the frame
+    // changed by 3.25 under SwiftShader, and from 15 down to 8 by only 2.2, against a floor of 2 for the check below.
     const moved = (await step('sun', { sunElevation: 35 })) as SetDialsResult;
 
     // With the sun still moved, one bad value of each kind next to one good move: out of range, not a colour, not a
@@ -193,8 +193,8 @@ test.describe('the style lab test handle', () => {
 
     // Unfrozen, the scene moves (the Husk walks, Bulwark cycles), which shows the freeze held it. The grain is off at the
     // defaults, so the difference is the scene's motion alone: 0.26 to 0.29 in five runs under SwiftShader at renderer
-    // v1's dials and 0.29 and 0.30 in two at the locked ones, where the grain's re-seeding at the old default of 0.04 had
-    // made it about 2.8 and would have hidden a scene that never moved.
+    // v1's dials and 0.29 and 0.30 in two at the locked ones. The grain's re-seeding at its old default of 0.04 had made
+    // the difference about 2.8, which would have hidden a scene that never moved.
     await page.evaluate(() => (window.__P99__!['freeze'] as (on: boolean) => void)(false));
     await page.waitForTimeout(600);
     await step('running');

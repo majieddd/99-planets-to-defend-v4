@@ -74,7 +74,8 @@ export function createPaintUniforms(theme: Theme, dials: RenderDials, brush: Tex
     uAmbientGround: { value: new Color(theme.ambient.ground) },
     uAmbientStrength: { value: dials.ambientStrength },
     uUp: { value: new Vector3(0, 1, 0) },
-    // The rim is sunlight at a grazing angle, so it takes the sun colour dial, which defaults to the theme's sun.
+    // The rim is sunlight at a grazing angle, so it takes the sun colour dial, whose locked default is the golden-hour
+    // key, not the theme's sun.
     uRimColor: { value: new Color(dials.sunColor) },
     uRimStrength: { value: dials.rimStrength },
     uRimPower: { value: dials.rimPower },
@@ -410,8 +411,8 @@ void main() {
     // rate is read along both screen axes and the larger kept: at a grazing view one axis stretches over metres. The cap
     // fades out by twice the noise, because the noise can flip light into shadow only where |ndl| is under it, so it
     // reaches only the terminator while 2 * terminatorNoise stays under 1 / (bands - 1), the ndl of the next band edge:
-    // at any noise with 2 bands, and up to 0.25 with 3. Past that it caps the mid-to-lit edge too, which is where the
-    // default's three-band meadow under its 35 degree key lies, and capped there it lost its broken strokes.
+    // at any noise with 2 bands, and up to 0.25 with 3. Past that it caps the mid-to-lit edge too, which is where
+    // renderer v1's three-band meadow under its 35 degree key lay, and capped there it lost its broken strokes.
     // The terrain never discards (it has no alpha-tested map), so every pixel of a quad reaches these derivatives; if it
     // ever gains an alpha-tested map, derivatives taken after a non-uniform discard become undefined.
     float ndlRate = max(
@@ -481,14 +482,15 @@ void main() {
 
   // A coloured lift added where the key does not reach, fading out as the smooth key lights the surface, whatever the
   // albedo; it adds light rather than setting a floor, so a shadow keeps the depth order of its albedos. The smooth key
-  // is under 1 on lit ground too, so the lift reaches it as well: 0.43 of the lift on level ground under the default
-  // 35 degree key, and 0.74 under a 15 degree key (where the smooth key is 0.26), which is how it greys a golden hour's
-  // lit meadow. Preset B3 leaves it at 0 and raises its shadow depth instead, from B2's 0.5 to 0.62: the shadow band's
-  // direct light is the shadow tint times the depth, so that lights the shadows about a quarter more in the saturated
-  // tint rather than greying them. The grade's contrast pivots at mid grey, and preset B's 1.35 crushed every shadow
-  // toward navy-black. It lives here rather than in the grade because the grade cannot tell ink from a dark it should
-  // lift once fog has touched the ink: keyed on the ink's luminance, a grade lift raised the hull ink beside Bulwark
-  // from 5 to 27 luma at the hero camera. The ink is never drawn with this material, so the lift never reaches it.
+  // is under 1 on lit ground too, so the lift reaches it as well: 0.43 of the lift on level ground under renderer v1's
+  // 35 degree key, and 0.74 under the locked 15 degree key (where the smooth key is 0.26), which is how it greys
+  // a golden hour's lit meadow. Preset B3 leaves it at 0 and raises its shadow depth instead, from B2's 0.5 to
+  // 0.62: the shadow band's direct light is the shadow tint times the depth, so that lights the shadows about a
+  // quarter more in the saturated tint rather than greying them. The grade's contrast pivots at mid grey, and
+  // preset B's 1.35 crushed every shadow toward navy-black. It lives here rather than in the grade because the
+  // grade cannot tell ink from a dark it should lift once fog has touched the ink: keyed on the ink's luminance,
+  // a grade lift raised the hull ink beside Bulwark from 5 to 27 luma at the hero camera. The ink is never drawn
+  // with this material, so the lift never reaches it.
   color += uShadowLiftColor * uShadowLift * (1.0 - lambert) * spare;
 
   // The rim separates characters and props from the ground; on terrain, at grazing angles, it lifts the whole field.

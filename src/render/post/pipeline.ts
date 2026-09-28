@@ -43,8 +43,9 @@ export const BLOOM_SMOOTHING = 0.25;
  * pixel the bloom feeds tests half warm at the four cameras on the high and low tiers, and the seams add at most 1.0 luma
  * of heart halo (1.9 on the low tier, both at the strategic camera). The Husk's magenta seams, which the generator does
  * not sample, put 1 of 32 fed pixels half warm at the strategic camera on the high tier, adding up to 7.2 luma and moving
- * 28 pixels of the frame by more than 2. Known failure: a sunColor of #ff8844 at intensity 8 with that rim warms 99.6 percent of the seam texels to at
- * least half warm. Deciding warmth in painted.ts from the emitter's own colour, not the lit pixel, would end all of these.
+ * 28 pixels of the frame by more than 2. Known failure: a sunColor of #ff8844 at intensity 8 with that rim warms 99.6
+ * percent of the seam texels to at least half warm. Deciding warmth in painted.ts from the emitter's own colour, not the
+ * lit pixel, would end all of these.
  */
 export const WARM_BLUE_FULL = 0.2;
 /** See WARM_BLUE_FULL. */
@@ -63,9 +64,10 @@ export const WARM_BLUE_NONE = 0.35;
  * the hero camera keeps 99 and 96 percent of the default ink's on the low and high tiers; a mid-grey ink (#808080,
  * 0.216) keeps 28 and 11 percent. And because the width is added rather than scaled, the ramp narrows as the ink
  * lightens: between the sRGB greys at its two edges it spans about 14.8 levels of 255 at the default ink, 9.6 at
- * #102030 and 2.2 at #808080. At #ffffff the gate opens at 1.24, over the full-sun white renderer v1's key is
- * calibrated to (about 1.0, painted.ts), so almost no paint got a halo; under the locked key sunlit white reaches about
- * 1.25 before exposure, about at it.
+ * #102030 and 2.2 at #808080. At #ffffff the gate spans 1.236 to 1.245, over the full-sun white renderer v1's key is
+ * calibrated to (about 1.0, painted.ts), so almost no paint got a halo. The locked key clears the gate: before exposure
+ * the direct light alone puts sunlit white at 1.255, over the gate's top, and the ambient takes it to about 1.34, so with
+ * a white ink sunlit white paint takes the full halo.
  *
  * INK_GATE_HEADROOM is 0.006 over the default ink's 0.0048552, to the seven digits that make the default ink's edges the
  * fixed 0.006 and 0.015 they replace, and frames in the default ink measured unchanged bit for bit (on all three tiers:

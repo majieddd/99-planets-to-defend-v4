@@ -88,8 +88,12 @@ describe('decodeDials through acceptDial', () => {
 
   it('keeps every good key of a link when some are bad, and a base value where a key is refused', () => {
     const base = { ...DEFAULT_DIALS, sunElevation: 8, shadowTint: '#205060' };
-    const link = toLink(JSON.stringify({ sunElevation: 200, shadowTint: 'teal', bandSoftness: '0.1', notADial: 1, exposure: 0.5, heartHalo: 11 }));
-    expect(decodeDials(link, base)).toEqual({ ...base, exposure: 0.5, heartHalo: 11 });
+    // Each good value differs from the base's, so a dropped key fails the comparison. The heart halo here was 11 until
+    // 11 became the locked default, after which a decoder that dropped it would still have passed.
+    expect(base.exposure).not.toBe(0.5);
+    expect(base.heartHalo).not.toBe(9.5);
+    const link = toLink(JSON.stringify({ sunElevation: 200, shadowTint: 'teal', bandSoftness: '0.1', notADial: 1, exposure: 0.5, heartHalo: 9.5 }));
+    expect(decodeDials(link, base)).toEqual({ ...base, exposure: 0.5, heartHalo: 9.5 });
   });
 
   it("ignores a link's inherited names and prototype keys", () => {

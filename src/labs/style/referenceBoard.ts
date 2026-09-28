@@ -65,8 +65,8 @@ export function mountReferenceBoard(host: HTMLElement, theme: Theme): void {
   );
   const swatches = el('div', undefined, 'swatches');
   const colours: [string, string][] = [
-    ['sun', theme.sun.color],
-    ['shadow', theme.shadowTint],
+    ['theme sun (dial overrides)', theme.sun.color],
+    ['theme shadow (dial overrides)', theme.shadowTint],
     ['zenith', theme.sky.zenith],
     ['horizon', theme.sky.horizon],
     ['meadow', theme.ground.meadow],

@@ -45,7 +45,8 @@ export interface RenderDials {
   vignette: number;
 }
 
-// Painted-Anime-Inkline 4.0: approved by the owner at the M0 style gate on 2026-09-28, from the golden-hour preset B3's live link with three adjustments (edgeStrength 0.33, edgeFadeFar 65, litSaturation 1.09).
+// Painted-Anime-Inkline 4.0: approved by the owner at the M0 style gate on 2026-09-28, from the golden-hour preset B3's
+// live link with three adjustments (edgeStrength 0.33, edgeFadeFar 65, litSaturation 1.09).
 export const DEFAULT_DIALS: RenderDials = {
   bands: 2,
   bandSoftness: 0.03,
@@ -126,8 +127,9 @@ export const NUMERIC_RANGES: Record<NumericKey, [number, number, number]> = {
   paintStrength: [0, 1, 0.01],
   saturation: [0.5, 2, 0.01],
   shadowDepth: [0.05, 0.8, 0.01],
-  // At the default exposure and contrast, 0.15 of full sun lifts a black surface in shadow to about 0.1 in linear light
-  // before tone mapping, a mid-dark; more would flatten the shadows into haze.
+  // At renderer v1's exposure of 0.77 and contrast of 1.05, 0.15 of full sun lifts a black surface in shadow to about
+  // 0.1 in linear light before tone mapping, a mid-dark; more would flatten the shadows into haze. At the locked 0.44
+  // and 1.35 the same lift reaches about 0.05: 0.066 after the exposure, and less after the steeper contrast.
   shadowLift: [0, 0.15, 0.001],
   rimStrength: [0, 1.5, 0.01],
   rimPower: [1, 8, 0.1],
