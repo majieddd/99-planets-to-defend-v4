@@ -14,6 +14,7 @@ import {
   SOIL_EDGE_GAIN,
   SOIL_EDGE_SOFTNESS,
   TERMINATOR_BAND_TILES,
+  BAND_EDGE_RADIUS,
 } from '../../../src/render/materials/painted';
 import { VERDANT } from '../../../src/render/themes';
 
@@ -231,7 +232,7 @@ describe('the look dials in the painted shader', () => {
     expect(colour.g / colour.r).toBeCloseTo(source.g / source.r, 6);
     expect(colour.b / colour.r).toBeCloseTo(source.b / source.r, 6);
     expect(shadowLiftColor({ ...VERDANT, grade: { ...VERDANT.grade, shadows: '#000000' } }).getHex()).toBe(0xffffff);
-    const line = 'color += uShadowLiftColor * uShadowLift * (1.0 - lit) * spare;';
+    const line = 'color += uShadowLiftColor * uShadowLift * (1.0 - lambert) * spare;';
     for (const material of [prop, terrain, kit]) expect(material.fragmentShader).toContain(line);
     // After the key, ambient and fill light the colour, and before the lit saturation restrains it.
     expect(at('vec3 color = albedo * (direct + ambient);')).toBeLessThan(at(line));
@@ -260,13 +261,13 @@ describe('the look dials in the painted shader', () => {
     expect(unnamed.defines['PAINT_ACTOR']).toBe('');
   });
 
-  it('adds the actor fill from the camera side, in the hemisphere colour, only where the key does not light', () => {
+  it('adds the actor fill from the camera side, in the hemisphere colour, fading out as the smooth key lights', () => {
     expect(f).toContain('vec3 hemisphere = mix(uAmbientGround, uAmbientSky, dot(worldN, uUp) * 0.5 + 0.5);');
     expect(f).toContain('vec3 ambient = hemisphere * uAmbientStrength;');
     expect(f).toContain('#ifdef PAINT_ACTOR\n');
     // Weighted by the authored blend against the character's: Bulwark takes it all, a 0.1 structure 0.29 of it.
     expect(f).toContain('float actorWeight = clamp(uStandardBlend / AUTHORED_CHARACTER_BLEND, 0.0, 1.0);');
-    expect(f).toContain('color += albedo * hemisphere * uActorFill * actorWeight * clamp(dot(N, V), 0.0, 1.0) * (1.0 - lit) * spare;');
+    expect(f).toContain('color += albedo * hemisphere * uActorFill * actorWeight * clamp(dot(N, V), 0.0, 1.0) * (1.0 - lambert) * spare;');
     expect(prop.defines['AUTHORED_CHARACTER_BLEND']).toMatch(/^\d+\.\d+$/);
     expect(Number(prop.defines['AUTHORED_CHARACTER_BLEND'])).toBe(AUTHORED_CHARACTER_BLEND);
     expect(AUTHORED_CHARACTER_BLEND).toBe(0.35);
@@ -290,7 +291,7 @@ describe('the look dials in the painted shader', () => {
     expect(f).toContain('float spare = 1.0 - clamp(emissiveKey, 0.0, 1.0);');
     // The key is known before any of the three reads it, and each of the three reads it.
     expect(at('float spare = 1.0 - clamp(emissiveKey, 0.0, 1.0);')).toBeLessThan(at('vec3 color = albedo * (direct + ambient);'));
-    for (const use of ['clamp(dot(N, V), 0.0, 1.0) * (1.0 - lit) * spare;', 'uShadowLift * (1.0 - lit) * spare;', 'mix(1.0, uLitSaturation, spare)']) {
+    for (const use of ['clamp(dot(N, V), 0.0, 1.0) * (1.0 - lambert) * spare;', 'uShadowLift * (1.0 - lambert) * spare;', 'mix(1.0, uLitSaturation, spare)']) {
       expect(f, use).toContain(use);
     }
     // The bloom still reads the key it always did, and the emission is still added last.
@@ -314,5 +315,57 @@ describe('the look dials in the painted shader', () => {
     // The cap lives in the terrain branch alone; a prop's terminator breaks as the noise dial says.
     const capStart = t.lastIndexOf('#ifdef PAINT_TERRAIN', t.indexOf('float ndlRate'));
     expect(t.slice(capStart, t.indexOf('float t = ndl'))).toContain('#endif');
+  });
+
+  it('weights the fill and the lift by the smooth key, which does not step at the terminator, never by the banded one', () => {
+    // (1 - lit) stepped down where the key stepped up, so a strong fill flattened and then inverted the terminator.
+    for (const material of [prop, terrain, kit]) {
+      const g = material.fragmentShader;
+      expect(g).not.toMatch(/uActorFill[^;]*\(1\.0 - lit\)/);
+      expect(g).not.toMatch(/uShadowLift[^;]*\(1\.0 - lit\)/);
+      // Both read lambert, which is declared, unbanded, before either.
+      expect(g.indexOf('float lambert = max(ndl, 0.0) * shadow;')).toBeGreaterThan(-1);
+      expect(g.indexOf('float lambert = max(ndl, 0.0) * shadow;')).toBeLessThan(g.indexOf('color += uShadowLiftColor * uShadowLift * (1.0 - lambert) * spare;'));
+    }
+    expect(at('float lambert = max(ndl, 0.0) * shadow;')).toBeLessThan(at('color += albedo * hemisphere * uActorFill'));
+  });
+
+  it("caps the terrain's band softness by the rate ndl changes, with a pixel's change of x as its floor and the dial as its ceiling", () => {
+    expect(terrain.defines['BAND_EDGE_RADIUS']).toMatch(/^\d+\.\d+$/);
+    expect(Number(terrain.defines['BAND_EDGE_RADIUS'])).toBe(BAND_EDGE_RADIUS);
+    expect(prop.defines['BAND_EDGE_RADIUS']).toBeUndefined();
+    const t = terrain.fragmentShader;
+    const cap = 'softness = min(uBandSoftness, max(uBandSoftness * min(1.0, ndlRate * BAND_EDGE_RADIUS), 0.5 * fwidth(x)));';
+    expect(t).toContain('float softness = uBandSoftness;');
+    expect(t).toContain(cap);
+    // A zero width would hand smoothstep equal edges, which GLSL leaves undefined.
+    expect(t).toContain('softness = max(softness, 1e-4);');
+    expect(t).toContain('float stepped = (floor(x) + smoothstep(0.5 - softness, 0.5 + softness, fract(x))) / (uBands - 1.0);');
+    // The cap reads x after the cast shadow has lowered it, and the terrain's ndl rate from the noise cap above.
+    expect(t.indexOf('float x = clamp(t * (uBands - 1.0) + 0.5, 0.0, uBands - 1.0);')).toBeLessThan(t.indexOf(cap));
+    expect(t.indexOf('float ndlRate')).toBeLessThan(t.indexOf(cap));
+    expect(t.indexOf(cap)).toBeLessThan(t.indexOf('float stepped'));
+    // The cap lives in a terrain branch; a prop's band edges keep the dial's softness as it is.
+    const branch = t.lastIndexOf('#ifdef PAINT_TERRAIN', t.indexOf(cap));
+    expect(t.slice(branch, t.indexOf(cap))).not.toContain('#endif');
+    expect(t.slice(t.indexOf(cap), t.indexOf('float stepped'))).toContain('#endif');
+  });
+
+  it("keeps a relief terminator at the dial and brings the planet's curve down to the ground a 25 m curve would take", () => {
+    // The shader's softness line, in JavaScript, before the pixel floor: rate is ndl per metre.
+    const softness = (dial: number, rate: number): number => Math.min(dial, dial * Math.min(1, rate * BAND_EDGE_RADIUS));
+    expect(BAND_EDGE_RADIUS).toBe(25);
+    // Relief at the patch's broad scale (a 25 m radius) and tighter keeps the dial exactly.
+    for (const rate of [1 / 25, 1 / 10, 1 / 3]) expect(softness(0.03, rate)).toBe(0.03);
+    // On the 160 m planet's curve preset B2's 0.03 acts like 0.0047, the reviewer's crisp 0.005 frame.
+    expect(softness(0.03, 1 / 160)).toBeCloseTo(0.0047, 4);
+    // The ramp then spans the same ground at any band count: 0.03 of ndl to each side is 0.75 m on gentle ground.
+    for (const bands of [2, 3, 5]) {
+      const dial = 0.03 * (bands - 1);
+      const metres = softness(dial, 1 / 160) / (bands - 1) / (1 / 160);
+      expect(metres).toBeCloseTo(0.75, 6);
+    }
+    // The dial still widens it: at its top, 0.25 with 2 bands, the planet-curve ramp is 6.25 m to each side.
+    expect(softness(0.25, 1 / 160) / (1 / 160)).toBeCloseTo(6.25, 6);
   });
 });

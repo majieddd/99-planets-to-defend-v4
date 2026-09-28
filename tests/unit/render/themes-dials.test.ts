@@ -71,8 +71,15 @@ describe('dials', () => {
     const decoded = decodeDials(encodeDials(changed));
     expect(decoded).toEqual(changed);
     // Out of range, or not a colour: each is dropped as a link's bad value is, and the default stands.
-    const hostile = toLink(JSON.stringify({ heartHalo: 9, fogHeightFalloff: 0.6, sunElevation: 1, sunColor: 'orange', sunIntensity: 0.1, soilBreakup: 1.5 }));
+    const hostile = toLink(JSON.stringify({ heartHalo: 12.5, fogHeightFalloff: 0.6, sunElevation: 1, sunColor: 'orange', sunIntensity: 0.1, soilBreakup: 1.5 }));
     expect(decodeDials(hostile)).toEqual(DEFAULT_DIALS);
+  });
+
+  it('reaches a heart halo of 12, past preset B2 at the old top of 8, and still opens every link made under 8', () => {
+    expect(NUMERIC_RANGES.heartHalo[0]).toBe(0);
+    expect(NUMERIC_RANGES.heartHalo[1]).toBe(12);
+    for (const heartHalo of [0, 4, 8, 9.5, 12]) expect(decodeDials(toLink(JSON.stringify({ heartHalo })))).toEqual({ ...DEFAULT_DIALS, heartHalo });
+    expect(decodeDials(toLink(JSON.stringify({ heartHalo: 12.05 })))).toEqual(DEFAULT_DIALS);
   });
 
   it('round-trips the prop brush, lit saturation, actor fill and shadow lift through a link', () => {

@@ -52,8 +52,9 @@ export const DEFAULT_DIALS: RenderDials = {
   saturation: 1.3,
   shadowDepth: 0.35,
   shadowTint: '#2f8f8c',
-  // A floor under every shadow, in the theme's shadow grade colour, as a fraction of full sun on white: the darkest note
-  // is a coloured dark, never black. At 0 the shadows are where the shadow depth and the grade's contrast leave them.
+  // Light added under every shadow, in the theme's shadow grade colour, as a fraction of full sun on white, so the darkest
+  // note is a coloured dark, never black. It adds rather than floors, so darker albedo stays darker in shadow. At 0 the
+  // shadows are where the shadow depth and the grade's contrast leave them.
   shadowLift: 0,
   rimStrength: 0.35,
   rimPower: 3,
@@ -69,8 +70,8 @@ export const DEFAULT_DIALS: RenderDials = {
   // The saturation of lit colour, after the key has tinted it and before any emitter adds its light. At 1 it changes
   // nothing; lower, it restrains the chroma a warm key adds to the meadow while the energy keeps its full colour.
   litSaturation: 1,
-  // A fill from the camera's side on the unlit side of actors (materials with a standard blend above 0), so a backlit
-  // character keeps its form instead of reading as a black cut-out. At 0 it adds nothing.
+  // A fill from the camera's side on actors (materials with a standard blend above 0), fading out as the key lights the
+  // surface, so a backlit character keeps its form instead of reading as a black cut-out. At 0 it adds nothing.
   actorFill: 0,
   inkWidthPx: 2.2,
   inkColor: '#0e0f14',
@@ -151,7 +152,8 @@ export const NUMERIC_RANGES: Record<NumericKey, [number, number, number]> = {
   exposure: [0.2, 3, 0.01],
   contrast: [0.7, 1.5, 0.01],
   bloomIntensity: [0, 3, 0.01],
-  heartHalo: [0, 8, 0.05],
+  // Preset B2 sat at the old top of 8, so the range reaches 12; every link made under 8 still opens the same look.
+  heartHalo: [0, 12, 0.05],
   bloomThreshold: [0.2, 3, 0.01],
   grain: [0, 0.2, 0.005],
   vignette: [0, 1, 0.01],

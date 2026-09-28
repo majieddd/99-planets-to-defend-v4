@@ -159,6 +159,20 @@ export const SOIL_EDGE_SOFTNESS = 0.06;
  */
 export const TERMINATOR_BAND_TILES = 1;
 
+/**
+ * The gentlest curve, as a radius in metres, over which the terrain's band edges keep the bandSoftness dial's full ramp.
+ * The dial is a width in ndl, so its ground width follows how slowly ndl changes: on the planet's own curve, about 1/160
+ * per metre, preset B2's 0.03 spread each edge over nearly 10 m of ground, and the strategic camera's limb showed soft
+ * airbrushed blobs, a 55 px luma ramp where a cast-shadow edge in the same frame took 10 px. On ground curving more
+ * gently than this radius the softness is scaled down by the ground's rate of change of ndl times it, so an edge's ramp
+ * spans at most the ground it would on a curve of this radius (0.75 m to each side at a 0.03 ndl half-width), and the dial
+ * still widens or narrows it. 25 m is about the radius of the patch's broad relief (a 50 m wavelength, 2.5 m high), so
+ * a terminator on relief keeps the ramp it had; on the planet's curve B2's softness acts like 0.005, the value that turned
+ * the reviewer's frames crisp and brush-broken. Under B2 the band terminator's ramp by the limb (90th percentile, along
+ * the luma gradient) fell from 31 to 15 px at a 15 degree key and from 35 to 19 px at 8.
+ */
+export const BAND_EDGE_RADIUS = 25;
+
 /** The standard blend a painted material gets when its creator names none: a prop's. */
 export const DEFAULT_STANDARD_BLEND = 0.1;
 
@@ -384,10 +398,13 @@ void main() {
   #ifdef PAINT_TERRAIN
     // On the ground the noise is capped by how fast ndl changes per metre, so the broken band stays at most
     // TERMINATOR_BAND_TILES brush tiles to each side of the terminator (see the constant for the crosshatch it ends). The
-    // rate is read along both screen axes and the larger kept: at a grazing view one axis stretches over metres. Only
-    // the terminator is capped: the noise can flip light into shadow only where |ndl| is under it, so the cap fades out
-    // by twice the noise and the brush keeps breaking the edges between the lit bands (the default's three-band meadow
-    // under its 35 degree key lies on the mid-to-lit edge, and capped there it lost its broken strokes).
+    // rate is read along both screen axes and the larger kept: at a grazing view one axis stretches over metres. The cap
+    // fades out by twice the noise, because the noise can flip light into shadow only where |ndl| is under it, so it
+    // reaches only the terminator while 2 * terminatorNoise stays under 1 / (bands - 1), the ndl of the next band edge:
+    // at any noise with 2 bands, and up to 0.25 with 3. Past that it caps the mid-to-lit edge too, which is where the
+    // default's three-band meadow under its 35 degree key lies, and capped there it lost its broken strokes.
+    // The terrain never discards (it has no alpha-tested map), so every pixel of a quad reaches these derivatives; if it
+    // ever gains an alpha-tested map, derivatives taken after a non-uniform discard become undefined.
     float ndlRate = max(
       abs(dFdx(ndl)) / max(length(dFdx(vBrushPos)), 1e-5),
       abs(dFdy(ndl)) / max(length(dFdy(vBrushPos)), 1e-5)
@@ -402,7 +419,17 @@ void main() {
   // Exactly uBands light levels with the first step on the terminator, so the whole form-shadow side takes the
   // shadow tint. The bands dial starts at 2, so uBands - 1.0 is never 0.
   float x = clamp(t * (uBands - 1.0) + 0.5, 0.0, uBands - 1.0);
-  float stepped = (floor(x) + smoothstep(0.5 - uBandSoftness, 0.5 + uBandSoftness, fract(x))) / (uBands - 1.0);
+  float softness = uBandSoftness;
+  #ifdef PAINT_TERRAIN
+    // On ground gentler than BAND_EDGE_RADIUS the softness shrinks with the ground's rate of change of ndl, so an edge
+    // across the planet's curve is as crisp as one across relief (see the constant for the airbrushed limb it ends). It
+    // never drops under half of x's change across a pixel, so every edge still anti-aliases over about a pixel, and
+    // never rises over the dial: across a cast shadow's edge x jumps, and there the dial's own softness stands as before.
+    // The last floor keeps smoothstep's edges apart where x does not change at all.
+    softness = min(uBandSoftness, max(uBandSoftness * min(1.0, ndlRate * BAND_EDGE_RADIUS), 0.5 * fwidth(x)));
+    softness = max(softness, 1e-4);
+  #endif
+  float stepped = (floor(x) + smoothstep(0.5 - softness, 0.5 + softness, fract(x))) / (uBands - 1.0);
   float lambert = max(ndl, 0.0) * shadow;
   // The standardBlend dial rescales the authored blend; the clamp stops mix extrapolating past standard lighting.
   float lit = clamp(mix(stepped, lambert, clamp(uStandardBlend * uStandardBlendScale, 0.0, 1.0)), 0.0, 1.0);
@@ -413,25 +440,37 @@ void main() {
   vec3 ambient = hemisphere * uAmbientStrength;
   vec3 color = albedo * (direct + ambient);
 
+  // The fill and the lift below give way to the key by the smooth key, (1 - lambert), not by the banded (1 - lit). lit
+  // jumps at the terminator and lambert does not, so a term weighted by (1 - lit) stepped down exactly where the key
+  // stepped up: with a standard blend the lit side just past the terminator kept only part of the fill, and the
+  // terminator's step shrank as the fill grew. Camera-facing white under the default key, 0.05 of ndl to each side, it
+  // measured 0.217 linear luminance at a fill of 0, 0.059 at 1.2, 0.006 at 1.6 and -0.046 at 2, and the lift inverted
+  // it on dark albedo (a lift of 0.06 on an albedo of 0.04, 0.1 on 0.1). The smooth weight is continuous across the
+  // terminator and the same everywhere on the shadow side, form or cast, so the step is the key's (0.178 at a fill of 2).
+  // A cast shadow's edge still drops the smooth key, so where the fill outshines the key a shadow on a lit face reads
+  // brighter than the light beside it: above a fill of 1.18 under the default key, never within the range under B3's.
   #ifdef PAINT_ACTOR
     // Seen against the light, an actor's whole visible side is in the shadow band, and preset B's hero camera showed
     // Bulwark's back at a median luma of 14 against 72 to 81 of ground (every blow must read, Pillar 4). This fill comes
     // from the camera's side, so it reaches whatever the camera sees whatever the key does; it takes the sky and
-    // ground-bounce colour of the ambient hemisphere, only where the key does not light (1 - lit), so the lit side and
-    // the hard terminator stay the key's; and it falls off with dot(N, V), so the shadow side keeps its roundness. It
-    // follows the authored standard blend, full on characters (Bulwark's 0.35) and 0.29 of it on the towers, heart and
-    // nest at 0.1: at full strength the sky light greyed the heart's stone around its warm crystal (saturation 0.40
-    // without the fill, 0.30 with it and 0.36 weighted, at the hero camera), and the towers read at 0.59 of their ground
-    // with no fill at all.
+    // ground-bounce colour of the ambient hemisphere, fading out as the key lights the surface, so the lit side and the
+    // hard terminator stay the key's; and it falls off with dot(N, V), so the shadow side keeps its roundness. It follows
+    // the authored standard blend, full on characters (Bulwark's 0.35) and 0.29 of it on the towers, heart and nest at
+    // 0.1: at full strength the sky light greyed the heart's stone around its warm crystal (saturation 0.40 without the
+    // fill, 0.30 with it and 0.36 weighted, at the hero camera), and the towers read at 0.59 of their ground with no fill.
     float actorWeight = clamp(uStandardBlend / AUTHORED_CHARACTER_BLEND, 0.0, 1.0);
-    color += albedo * hemisphere * uActorFill * actorWeight * clamp(dot(N, V), 0.0, 1.0) * (1.0 - lit) * spare;
+    color += albedo * hemisphere * uActorFill * actorWeight * clamp(dot(N, V), 0.0, 1.0) * (1.0 - lambert) * spare;
   #endif
 
-  // A coloured floor under the shadow band, whatever the albedo: the grade's contrast pivots at mid grey, and preset B's
-  // 1.35 crushed every shadow toward navy-black. It lives here rather than in the grade because the grade cannot tell ink
-  // from a dark it should lift once fog has touched the ink: keyed on the ink's luminance, a grade lift raised the hull
-  // ink beside Bulwark from 5 to 27 luma at the hero camera. The ink is never drawn with this material, so it stays black.
-  color += uShadowLiftColor * uShadowLift * (1.0 - lit) * spare;
+  // A coloured lift added where the key does not reach, fading out as the smooth key lights the surface, whatever the
+  // albedo; it adds light rather than setting a floor, so a shadow keeps the depth order of its albedos. Under a low key
+  // the smooth key is small on lit ground too (0.26 on level ground at 15 degrees), so there the lift also greys the lit
+  // meadow; preset B3 leaves it at 0 and deepens its shadow depth instead. The grade's contrast pivots at mid grey, and
+  // preset B's 1.35 crushed every shadow toward navy-black. It lives here rather than in the grade because the grade
+  // cannot tell ink from a dark it should lift once fog has touched the ink: keyed on the ink's luminance, a grade lift
+  // raised the hull ink beside Bulwark from 5 to 27 luma at the hero camera. The ink is never drawn with this material,
+  // so it stays black.
+  color += uShadowLiftColor * uShadowLift * (1.0 - lambert) * spare;
 
   // The rim separates characters and props from the ground; on terrain, at grazing angles, it lifts the whole field.
   #ifndef PAINT_TERRAIN
@@ -468,6 +507,7 @@ export function createPaintedMaterial(shared: PaintUniforms, options: PaintedOpt
   if (options.terrain) {
     defines['PAINT_TERRAIN'] = '';
     defines['TERMINATOR_BAND_TILES'] = glslFloat(TERMINATOR_BAND_TILES);
+    defines['BAND_EDGE_RADIUS'] = glslFloat(BAND_EDGE_RADIUS);
   }
   const standardBlend = options.standardBlend ?? DEFAULT_STANDARD_BLEND;
   // Actors are the materials authored with some standard lighting: Bulwark, the Husk, the towers, the heart and the nest
@@ -500,6 +540,8 @@ export function createPaintedMaterial(shared: PaintUniforms, options: PaintedOpt
       uEmissiveMap: { value: options.emissiveMap ?? null },
       uEmissiveColor: { value: options.emissiveColor ?? new Color(0, 0, 0) },
       uEmissiveIntensity: { value: options.emissiveIntensity ?? 1 },
+      // PAINT_ACTOR above was decided from this blend when the material was created, so changing one material's blend
+      // later (a blend of 0 made positive, or the reverse) must rebuild the material, or the fill stays as it was.
       uStandardBlend: { value: standardBlend },
       uAlphaTest: { value: options.alphaTest ?? 0 },
       uSoilColor: { value: options.soilColor ?? new Color(0, 0, 0) },
