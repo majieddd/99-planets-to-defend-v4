@@ -99,7 +99,12 @@ export const DEFAULT_DIALS: RenderDials = {
   bloomIntensity: 0.8,
   heartHalo: 4,
   bloomThreshold: 1.0,
-  grain: 0.04,
+  // Off at the owner's direction at the M0 style gate. The grain is hashed per screen pixel, so it read as noise laid
+  // over the whole picture, not as paint: running, it re-seeds 24 times a second, a shimmer over every pixel; frozen or
+  // under reduced motion, it holds one pattern pinned to the glass while the camera moves the world beneath it. The
+  // paint's texture lives on the surfaces instead (the brush atlas and the broken terminator), which move with the
+  // world. The dial keeps its range, so the owner can still turn the grain back on.
+  grain: 0,
   vignette: 0.35,
 };
 

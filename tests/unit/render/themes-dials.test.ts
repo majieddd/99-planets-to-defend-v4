@@ -120,4 +120,13 @@ describe('dials', () => {
     // The heart halo is the one capability that shows at the defaults, and it is stronger than the energy's glow.
     expect(DEFAULT_DIALS.heartHalo).toBeGreaterThan(DEFAULT_DIALS.bloomIntensity);
   });
+
+  it('starts the film grain off, as the owner directed at the style gate, and keeps its dial', () => {
+    expect(DEFAULT_DIALS.grain).toBe(0);
+    expect(NUMERIC_RANGES.grain).toEqual([0, 0.2, 0.005]);
+    // A link that names a grain still turns it on, so the owner can bring it back from the panel or a pasted link.
+    const grainy = { ...DEFAULT_DIALS, grain: 0.06 };
+    expect(decodeDials(toLink('{"grain":0.06}'))).toEqual(grainy);
+    expect(decodeDials(encodeDials(grainy))).toEqual(grainy);
+  });
 });

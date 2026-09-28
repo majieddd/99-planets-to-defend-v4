@@ -187,7 +187,9 @@ test.describe('the style lab test handle', () => {
       expect(differences[`${key} back`], `${key}: ${line}`).toBe(0);
     }
 
-    // Unfrozen, the scene moves (the Husk walks, Bulwark cycles, the grain turns over), which shows the freeze held it.
+    // Unfrozen, the scene moves (the Husk walks, Bulwark cycles), which shows the freeze held it. The grain is off at the
+    // defaults, so the difference is the scene's motion alone: 0.26 to 0.29 in five runs under SwiftShader, where the
+    // grain's re-seeding at the old default of 0.04 had made it about 2.8 and would have hidden a scene that never moved.
     await page.evaluate(() => (window.__P99__!['freeze'] as (on: boolean) => void)(false));
     await page.waitForTimeout(600);
     await step('running');
