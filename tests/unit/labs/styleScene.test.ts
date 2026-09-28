@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import {
   AnimationClip,
+  Box3,
   Color,
   InstancedMesh,
   Line3,
@@ -214,7 +215,7 @@ describe('placeholderAssets', () => {
     expect([inked, bare]).toEqual([34, 1]);
   });
 
-  it('stands the turret bases and the heart plinth on the ground, with the parts above seated on them', () => {
+  it('roots each stand-in placed one by one at its ground contact point, the turret marks as empties, with the parts above seated on their bases', () => {
     const assets = placeholderAssets(ctx);
     const box = (root: Object3D, name: string) => {
       root.updateMatrixWorld(true);
@@ -223,8 +224,31 @@ describe('placeholderAssets', () => {
       return mesh.geometry.boundingBox!.clone().applyMatrix4(mesh.matrixWorld);
     };
     // Geometry positions are float32, so these hold to about 1e-8 m.
+    // The assets the scene places one by one (Bulwark, the Husk, the nest, the heart and the three turret marks) each
+    // keep M0c's ground rule with no sink: the lowest point on the root, neither over the ground nor under it. The
+    // Husk's ball once floated 0.2 m, and the nest's ball reached 1.4 m underground. The check leaves out the kit,
+    // which the scene scatters, and M0c's rule itself allows a declared sink, such as the real nest's 0.123 m.
+    const placed: [string, Object3D][] = [
+      ['bulwark', assets.bulwark.root],
+      ['husk', assets.husk.root],
+      ['nest', assets.nest.root],
+      ['heart', assets.heart.root],
+      ...[1, 2, 3].map((level): [string, Object3D] => [`bolt_mk${level}`, assets.bolt.root.getObjectByName(`bolt_mk${level}`) as Object3D]),
+    ];
+    // The box is measured from the vertices: by default each part adds its local box after its transform, which reaches
+    // lower than the part once the part is tilted within its root.
+    for (const [name, root] of placed) expect(new Box3().setFromObject(root, true).min.y, name).toBeCloseTo(0, 6);
     for (const level of [1, 2, 3]) {
-      const base = box(assets.bolt.root, `bolt_mk${level}`);
+      // M0c's tree: the mark is an empty at the asset origin, which is its ground contact point, with the base, the
+      // yaw ring and the pitch head hung under it in that order. The scene aims each head in its parent's frame. An
+      // empty is a node with no mesh, so the check is on that property, not on a class: the GLB's bolt_mkN loads as a
+      // plain Object3D and the stand-in's is a Group.
+      const mark = assets.bolt.root.getObjectByName(`bolt_mk${level}`) as Object3D;
+      expect((mark as Mesh).isMesh).toBeUndefined();
+      expect([...mark.position.toArray(), ...mark.quaternion.toArray()]).toEqual([0, 0, 0, 0, 0, 0, 1]);
+      const parents = ['_base', '_yaw', '_pitch'].map((suffix) => assets.bolt.root.getObjectByName(`bolt_mk${level}${suffix}`)?.parent?.name);
+      expect(parents).toEqual(['', '_base', '_yaw'].map((suffix) => `bolt_mk${level}${suffix}`));
+      const base = box(assets.bolt.root, `bolt_mk${level}_base`);
       expect(base.min.y).toBeCloseTo(0, 6);
       expect(box(assets.bolt.root, `bolt_mk${level}_yaw`).min.y).toBeCloseTo(base.max.y, 6);
     }
@@ -233,6 +257,22 @@ describe('placeholderAssets', () => {
     for (let level = 0; level <= 10; level++) {
       expect(box(assets.heart.root, `heart_stage_${String(level).padStart(2, '0')}`).min.y).toBeCloseTo(0.4, 6);
     }
+  });
+
+  it("keeps the sphere's own normals on the nest's dome, so it lights as one dome and not as flat facets", () => {
+    // The sphere's own normals point straight out from its centre, the root, so the dome lights as one broad dome.
+    // Unindexed with its normals recomputed, it lit as 40 flat facets, and no other check here tells the two apart.
+    // Measured against the unit vector out to each vertex, the facets' normals were up to 0.36 off and the sphere's are
+    // 4.3e-8 off, float32's rounding.
+    const { geometry } = placeholderAssets(ctx).nest.root.getObjectByName('nest') as Mesh;
+    const position = geometry.getAttribute('position');
+    const normal = geometry.getAttribute('normal');
+    let worst = 0;
+    for (let i = 0; i < position.count; i++) {
+      const radial = new Vector3().fromBufferAttribute(position, i).normalize();
+      worst = Math.max(worst, new Vector3().fromBufferAttribute(normal, i).distanceTo(radial));
+    }
+    expect(worst).toBeLessThan(1e-6);
   });
 
   it('gives only the energy an emissive key, each one enough to glow at the default threshold', () => {
@@ -414,19 +454,39 @@ describe('buildStyleScene', () => {
     expect(visible()).toEqual(Array.from({ length: 11 }, (_, level) => level === 7));
   });
 
-  it('stands each turret on a site on the ground, keeping the mark at its authored height inside it', () => {
+  it('places each turret mark on the ring at its ground contact point, its base on the ground and its pivots above', () => {
     const { style } = build();
     TURRET_ANGLES_DEG.forEach((degrees, index) => {
       const level = index + 1;
       const angle = (degrees * Math.PI) / 180;
-      const site = style.root.getObjectByName(`bolt_mk${level}_site`) as Object3D;
       const mark = style.root.getObjectByName(`bolt_mk${level}`) as Object3D;
-      expect(mark.parent).toBe(site);
-      const ground = patch.surfaceAt(Math.cos(angle) * TURRET_RING_RADIUS, Math.sin(angle) * TURRET_RING_RADIUS).position;
-      expect(site.position.distanceTo(ground)).toBeLessThan(1e-9);
-      // The base's bottom centre is on the ground under the site, not half the base below it.
+      // Nothing stands between the mark and the scene: place() alone sets it on the ground, as it does every asset.
+      expect(mark.parent).toBe(style.root);
+      const ground = patch.surfaceAt(Math.cos(angle) * TURRET_RING_RADIUS, Math.sin(angle) * TURRET_RING_RADIUS);
+      expect(worldPosition(mark).distanceTo(ground.position)).toBeLessThan(1e-9);
+      // Its up lies half way from the planet's up to the ground's normal, and it faces out from the heart. The heading
+      // is read across the ground, where a turn away from the ring's bearing moves it one for one and the tilt only at
+      // second order: place() yaws the mark level and then tilts it by the angle t between its up and the pole's,
+      // which turns the facing's bearing by pi / 2 - 2 atan(sqrt(cos t)) at most, about t squared over 4. That is
+      // 0.058 to 0.066 degrees at these marks' 3.65 to 3.88 degree tilts. Measured 0.002 degrees at most, because each
+      // mark leans within a degree of its facing, but the bound holds whichever way the ground leans. The 1e-12 on the
+      // bound absorbs rounding where the bound comes out as 0: below about 1e-8 rad, cos t rounds to 1, so a correct
+      // mark on level ground would otherwise fail on atan2 rounding alone (measured 2.4e-16 rad at these bearings).
+      const up = new Vector3(0, 1, 0).applyQuaternion(worldQuaternion(mark));
+      expect(up.distanceTo(ground.up.clone().lerp(ground.normal, 0.5).normalize())).toBeLessThan(1e-9);
+      const tilt = up.angleTo(new Vector3(0, 1, 0));
+      const bearing = Math.atan2(facing(mark).z, facing(mark).x) - angle;
+      const error = Math.abs(Math.atan2(Math.sin(bearing), Math.cos(bearing)));
+      expect(error).toBeLessThanOrEqual(Math.PI / 2 - 2 * Math.atan(Math.sqrt(Math.cos(tilt))) + 1e-12);
+      // The base's bottom centre is on the ground point, not half the base below it, and the pivots stand where the
+      // old site groups held them: the yaw ring's centre 0.1 m over the base's top, and the pitch pivot 0.35 m over
+      // the yaw ring's centre, so 0.45 m over the base's top.
       const baseHeight = 0.35 + 0.12 * index;
-      expect(mark.localToWorld(new Vector3(0, -baseHeight / 2, 0)).distanceTo(site.position)).toBeLessThan(1e-9);
+      const over = (height: number) => ground.position.clone().addScaledVector(up, height);
+      const base = mark.getObjectByName(`bolt_mk${level}_base`) as Object3D;
+      expect(base.localToWorld(new Vector3(0, -baseHeight / 2, 0)).distanceTo(ground.position)).toBeLessThan(1e-9);
+      expect(worldPosition(mark.getObjectByName(`bolt_mk${level}_yaw`) as Object3D).distanceTo(over(baseHeight + 0.1))).toBeLessThan(1e-9);
+      expect(worldPosition(mark.getObjectByName(`bolt_mk${level}_pitch`) as Object3D).distanceTo(over(baseHeight + 0.45))).toBeLessThan(1e-9);
     });
   });
 
@@ -507,7 +567,7 @@ describe('buildStyleScene', () => {
 
   it("stops the Husk for its attack clip's length when it has one", () => {
     const assets = placeholderAssets(ctx);
-    const hold = (duration: number) => new NumberKeyframeTrack('husk.position[y]', [0, duration], [0.8, 0.8]);
+    const hold = (duration: number) => new NumberKeyframeTrack('husk.position[y]', [0, duration], [0.6, 0.6]);
     const clips = [new AnimationClip('walk', 1, [hold(1)]), new AnimationClip('attack', 2.2, [hold(2.2)])];
     const { style } = build({ ...assets, husk: { root: assets.husk.root, animations: clips } });
     const pauses = huskPauses(style, assets.husk.root, 18);

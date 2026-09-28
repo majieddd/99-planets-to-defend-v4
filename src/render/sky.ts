@@ -63,6 +63,8 @@ void main() {
 export interface PaintedSky {
   mesh: Mesh;
   follow(camera: Camera): void;
+  /** The sun's elevation and colour are dials: the disc, its glow and the clouds' lit side follow them live. */
+  setSun(direction: Vector3, color: string): void;
 }
 
 /** With `planet`, the sphere the camera stands on, the painted horizon sits on its limb; without it, on the horizontal. */
@@ -71,6 +73,7 @@ export function createPaintedSky(theme: Theme, brush: Texture, sunDirection: Vec
   const dipCos = { value: 1 };
   const dipSin = { value: 0 };
   const limb = planet && { center: planet.center.clone(), radius: planet.radius };
+  const sun = { direction: sunDirection.clone().normalize(), color: new Color(theme.sun.color) };
   const material = new ShaderMaterial({
     name: 'PaintedSky',
     side: BackSide,
@@ -81,8 +84,8 @@ export function createPaintedSky(theme: Theme, brush: Texture, sunDirection: Vec
       uGround: { value: new Color(theme.sky.ground) },
       uCloudLit: { value: new Color(theme.sky.cloudLit) },
       uCloudShadow: { value: new Color(theme.sky.cloudShadow) },
-      uSunDirection: { value: sunDirection.clone().normalize() },
-      uSunColor: { value: new Color(theme.sun.color) },
+      uSunDirection: { value: sun.direction },
+      uSunColor: { value: sun.color },
       uUp: { value: up },
       uDipCos: dipCos,
       uDipSin: dipSin,
@@ -108,6 +111,10 @@ export function createPaintedSky(theme: Theme, brush: Texture, sunDirection: Vec
       // The limb's dip below the horizontal is acos(radius / distance); the shader turns heights down by it.
       dipCos.value = MathUtils.clamp(limb.radius / distance, 0, 1);
       dipSin.value = Math.sqrt(1 - dipCos.value * dipCos.value);
+    },
+    setSun(direction, color) {
+      sun.direction.copy(direction).normalize();
+      sun.color.set(color);
     },
   };
 }

@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { assetUrl, fetchManifest, type Manifest } from '../../render/assets/manifest';
 import { loadAsset, type LoadedAsset, type MaterialContext } from '../../render/assets/loadAsset';
 import { DEFAULT_DIALS, type RenderDials } from '../../render/defaults';
-import { decodeDials, encodeDials } from '../../render/dialsCodec';
+import { acceptDial, decodeDials, encodeDials, type SetDialsResult } from '../../render/dialsCodec';
 import { applyInkDials, createHullMaterial, createInkUniforms } from '../../render/ink/hull';
 import { LAYERS } from '../../render/layers';
 import { applyPaintDials, createPaintUniforms } from '../../render/materials/painted';
@@ -17,10 +17,49 @@ import { auditPixels, mutationProof } from './audit';
 import { createDialsPanel, type LabState } from './dials';
 import { placeholderAssets } from './placeholders';
 import { mountReferenceBoard } from './referenceBoard';
-import { applyPreset, buildStyleScene, PRESETS, type PresetName, type StyleAssets } from './scene';
+import { applyPreset, buildStyleScene, PRESETS, SCATTER_PLAN, type PresetName, type StyleAssets } from './scene';
 
 const BASE = import.meta.env.BASE_URL;
 const theme = VERDANT;
+/**
+ * Metres from the scene centre to the sun. At every elevation the scatter's casters lie 41.3 to 139.2 m deep in the
+ * light's view (tests/unit/labs/shadow-reach.test.ts), past the shadow camera's 1 m near plane, and the patch's farthest
+ * ground, its corner at (80, 80) on the tangent plane, 96.9 m from the scene centre, lies at most 178.7 m deep (under a
+ * key near 19.5 degrees), inside the 220 m far plane.
+ */
+const SUN_DISTANCE = 90;
+const SHADOW_NEAR = 1;
+const SHADOW_FAR = 220;
+/**
+ * An upper bound, in metres, on how far the scatter plan puts a piece's root from the scene centre: its largest ring's
+ * radius. The rings are drawn on the plane tangent at the pole, whose coordinates patch.surfaceAt takes, so the radius is
+ * a coordinate there and not a distance over the ground: surfaceAt(48, 0) lands about 46 m out.
+ */
+const SCATTER_REACH = Math.max(...SCATTER_PLAN.map(([, , , maxRadius]) => maxRadius));
+/**
+ * How far past the scatter reach a caster can extend in the light's view, in metres: a tree at the edge of its ring
+ * stands on the planet's curve, leaning out with it, and at the largest scatter size its crown reaches past its root.
+ * tests/unit/labs/shadow-reach.test.ts holds the box to it: every casting piece of the shipped kit at the outer edge of
+ * its ring, at any yaw, every degree of azimuth and the largest scatter size (SCATTER_SIZE_MAX in scene.ts), reaches at
+ * most 49.35 m in the light's view at any elevation the dial allows (a conifer), inside the 50 m this gives, and the
+ * placeholder kit 49.31 m. The browser measurement the margin was chosen on sampled 72 azimuths and 8 yaws, for 49.24 m.
+ */
+const SHADOW_CROWN_MARGIN = 2;
+/**
+ * Half the side of the sun's square shadow box, in metres, derived from the scatter plan rather than from the layout
+ * today's seed happens to draw, so a reseed or a wider ring cannot put a caster outside it. Near a noon sun the box lies
+ * on the ground plane; under a low sun one axis still runs across the ground, so the plan's reach sets the box at every
+ * elevation. The old 45 m cut the outermost conifer's shadow at 85 degrees, and a box fitted to today's layout (48 m)
+ * held only the trees that seed placed. At 50 m the high tier's 2048 map has 4.9 cm texels.
+ */
+const SHADOW_HALF_WIDTH = SCATTER_REACH + SHADOW_CROWN_MARGIN;
+/**
+ * A small constant bias and a 3 cm push along the normal keep lit ground free of self-shadowing at the tiers' map sizes.
+ * The strategic camera's crosshatch under preset B's low key was not acne: bias 0 or -0.002, normal bias 0 to 0.3 and PCF
+ * radius 0 to 3 each moved its fleck count by under 3 percent (see TERMINATOR_BAND_TILES in materials/painted.ts).
+ */
+const SHADOW_BIAS = -0.0004;
+const SHADOW_NORMAL_BIAS = 0.03;
 
 // start() fills these in, so a failure at any point can stop the loop and word the banner for when it happened.
 let activeRenderer: WebGLRenderer | null = null;
@@ -167,16 +206,28 @@ async function start(): Promise<void> {
   camera.layers.enable(LAYERS.sky);
   camera.layers.enable(LAYERS.noEdge); // grass and flowers: drawn, and cast shadows (r186 tests this camera's layers)
 
-  const sunDir = new Vector3(...sunDirection(theme));
-  const sun = new DirectionalLight(theme.sun.color, theme.sun.intensity);
-  sun.position.copy(sunDir).multiplyScalar(90);
+  // The sun's elevation, colour and intensity are dials that default to the theme's light; the theme keeps the azimuth.
+  // The light rides a sphere of SUN_DISTANCE around the scene centre, where its target stays, and syncSun moves it. The
+  // shadow camera's box, SHADOW_HALF_WIDTH to each side and SHADOW_NEAR to SHADOW_FAR deep, holds every shadow caster at
+  // every elevation the dial allows. The old 45 m box did not: at 85 degrees it cut the outermost conifer's shadow.
+  const sunDirectionAt = (elevationDeg: number): Vector3 => new Vector3(...sunDirection({ ...theme, sun: { ...theme.sun, elevationDeg } }));
+  const sunDir = sunDirectionAt(dials.sunElevation);
+  const sun = new DirectionalLight(dials.sunColor, dials.sunIntensity);
+  sun.position.copy(sunDir).multiplyScalar(SUN_DISTANCE);
   sun.castShadow = true;
   sun.shadow.mapSize.set(tier.shadowMapSize, tier.shadowMapSize);
-  Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 220 });
+  Object.assign(sun.shadow.camera, {
+    left: -SHADOW_HALF_WIDTH,
+    right: SHADOW_HALF_WIDTH,
+    top: SHADOW_HALF_WIDTH,
+    bottom: -SHADOW_HALF_WIDTH,
+    near: SHADOW_NEAR,
+    far: SHADOW_FAR,
+  });
   sun.shadow.camera.updateProjectionMatrix();
   sun.shadow.camera.layers.enable(LAYERS.noEdge); // flowers keep casting if a later three tests the shadow camera
-  sun.shadow.bias = -0.0004;
-  sun.shadow.normalBias = 0.03;
+  sun.shadow.bias = SHADOW_BIAS;
+  sun.shadow.normalBias = SHADOW_NORMAL_BIAS;
   // r186's PCF spreads five taps over shadow.radius texels and rotates them per pixel with screen-anchored noise. The
   // painted bands turned that faint dither into shadow, mid and lit speckle that crawled whenever the camera moved
   // (radius 3 measured 6.3 band changes per column across a straight shadow edge, against 2 for a clean edge). At 0
@@ -190,8 +241,9 @@ async function start(): Promise<void> {
   // having loaded, not on the manifest listing it, so a listed atlas that fails to load cannot bring the slab back.
   const skyBrush = brushAtlas ?? flat(0);
   // Anchored to the planet, the painted horizon sits on its limb; without the planet it is flat and floats well above
-  // the limb seen from the patch.
-  const sky = createPaintedSky(theme, skyBrush, sunDir, { center: new Vector3(0, -STYLE_PLANET_RADIUS, 0), radius: STYLE_PLANET_RADIUS });
+  // the limb seen from the patch. The fog measures its height fog's altitude from the same sphere.
+  const planet = { center: new Vector3(0, -STYLE_PLANET_RADIUS, 0), radius: STYLE_PLANET_RADIUS };
+  const sky = createPaintedSky(theme, skyBrush, sunDir, planet);
   scene.add(sky.mesh);
   const patch = createStylePatch(theme, paint, tier.terrainSegments);
   scene.add(patch.mesh, patch.lowPlanet);
@@ -213,8 +265,21 @@ async function start(): Promise<void> {
   controls.maxDistance = 400;
   applyPreset(style, state.preset, camera, controls.target);
 
-  let pipeline: Pipeline = createPipeline({ renderer, scene, camera, tier, dials, theme, inkNoise, sunDirection: sunDir, reducedMotion });
+  let pipeline: Pipeline = createPipeline({ renderer, scene, camera, tier, dials, theme, inkNoise, sunDirection: sunDir, reducedMotion, planet });
   const drawing = new Vector2();
+
+  // Everything that reads the sun: the light (and so every painted material and the shadows), the sky's disc, glow and
+  // cloud light, and the fog's sunward warming. Run once here too, because the sky starts from the theme's sun colour
+  // and a dials link can open the lab with another.
+  function syncSun(): void {
+    sunDir.copy(sunDirectionAt(dials.sunElevation));
+    sun.position.copy(sunDir).multiplyScalar(SUN_DISTANCE);
+    sun.color.set(dials.sunColor);
+    sun.intensity = dials.sunIntensity;
+    sky.setSun(sunDir, dials.sunColor);
+    pipeline.setSunDirection(sunDir);
+  }
+  syncSun();
 
   function resize(): void {
     camera.aspect = stage.clientWidth / stage.clientHeight;
@@ -232,6 +297,7 @@ async function start(): Promise<void> {
     applyInkDials(inkUniforms, dials);
     syncHulls();
     pipeline.applyDials(dials, theme);
+    syncSun();
   }
 
   function setTier(name: TierName): void {
@@ -240,7 +306,7 @@ async function start(): Promise<void> {
       // Built before anything changes and before the old pipeline is disposed. Disposed first, a throw in
       // createPipeline left pipeline pointing at the disposed composer, which draws nothing, so the canvas froze
       // without a word.
-      const nextPipeline = createPipeline({ renderer, scene, camera, tier: next, dials, theme, inkNoise, sunDirection: sunDir, reducedMotion });
+      const nextPipeline = createPipeline({ renderer, scene, camera, tier: next, dials, theme, inkNoise, sunDirection: sunDir, reducedMotion, planet });
       tier = next;
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.pixelRatioMax));
       sun.shadow.mapSize.set(tier.shadowMapSize, tier.shadowMapSize);
@@ -268,7 +334,7 @@ async function start(): Promise<void> {
     return { report, mutation };
   }
 
-  createDialsPanel(dials, state, {
+  const gui = createDialsPanel(dials, state, {
     onDials: applyDials,
     onTier: setTier,
     onPreset: (preset) => applyPreset(style, preset, camera, controls.target),
@@ -306,6 +372,30 @@ async function start(): Promise<void> {
   });
   mountReferenceBoard(document.getElementById('board') as HTMLElement, theme);
 
+  /**
+   * Moves dials as the panel does, for browser tests and measured frames. Each change passes acceptDial, the check a link's
+   * decode makes, so one a link would drop (an unknown name, a string for a number, a value outside its range, a colour
+   * that is not six-digit hex) is refused here too and named in `rejected`, while the accepted ones still move and a
+   * refused dial keeps whatever value it had. It used to drop them in silence, so a misspelt key left its dial at the
+   * default while the capture looked like it had changed; and it used to check through a link, whose encoding threw on a
+   * string outside Latin-1 and so applied nothing and returned nothing.
+   */
+  function setDials(changes: Record<string, unknown>): SetDialsResult {
+    const target = dials as unknown as Record<string, unknown>;
+    const rejected: string[] = [];
+    for (const [key, value] of Object.entries(changes ?? {})) {
+      if (acceptDial(key, value)) target[key] = value;
+      else rejected.push(key);
+    }
+    applyDials();
+    for (const controller of gui.controllersRecursive()) controller.updateDisplay();
+    return { dials: { ...dials }, rejected };
+  }
+
+  // Frozen, the scene, Bulwark's cycle and the film grain hold still while frames keep rendering, so two captures that
+  // differ in one dial differ only by what that dial does (the halo and fog measurements subtract such pairs). Opened
+  // with ?freeze=1 the scene never leaves the pose it is built in, so frames from separate page loads line up too.
+  let frozen = params.get('freeze') === '1';
   const fpsBox = document.getElementById('fps') as HTMLElement;
   let last = performance.now();
   let frames = 0;
@@ -318,6 +408,11 @@ async function start(): Promise<void> {
     audit: runAudit,
     preset: (name: PresetName) => applyPreset(style, name, camera, controls.target),
     frameMs: () => frameMs,
+    dials: () => ({ ...dials }),
+    setDials,
+    freeze: (on: boolean) => {
+      frozen = on;
+    },
   };
   loopStarted = true;
   renderer.setAnimationLoop(() => {
@@ -327,7 +422,7 @@ async function start(): Promise<void> {
       last = now;
       // Only the simulation step is clamped, so a stall does not jump the scene. The reading averaged that clamped
       // step, which capped it at 50 ms, so a slow GPU or a CI runner under-reported its frame interval.
-      const dt = Math.min(interval / 1000, 1 / 20);
+      const dt = frozen ? 0 : Math.min(interval / 1000, 1 / 20);
       frameMs = frameMs * 0.95 + interval * 0.05;
       style.update(dt);
       controls.update();

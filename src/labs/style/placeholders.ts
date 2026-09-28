@@ -9,6 +9,7 @@ import {
   IcosahedronGeometry,
   Mesh,
   MeshStandardMaterial,
+  SphereGeometry,
   type BufferGeometry,
 } from 'three';
 import { paintAndInk, type LoadedAsset, type MaterialContext } from '../../render/assets/loadAsset';
@@ -32,8 +33,10 @@ function asset(root: Group, ctx: MaterialContext, blend: number): LoadedAsset {
 
 /**
  * Stand-ins that carry the node names the style scene looks up, so the lab runs before M0c's assets exist and
- * switches to them without code changes. Where the scene drives or places a node, the stand-in also puts its pivot
- * where M0c's recipe does.
+ * switches to them without code changes. Where the scene drives or places a node, the stand-in keeps M0c's node tree,
+ * the same names under the same parents, so the scene places and aims both the same way. The heights are the
+ * stand-in's own: mark I's yaw and pitch pivots stand 0.45 and 0.80 m up here, and 0.37 and 0.62 m on M0c's Bolt
+ * Sentinel.
  */
 export function placeholderAssets(ctx: MaterialContext) {
   const bulwark = new Group();
@@ -42,14 +45,22 @@ export function placeholderAssets(ctx: MaterialContext) {
   bulwark.add(bulwarkBody);
   const husk = new Group();
   const huskBody = part('husk', new IcosahedronGeometry(0.6, 1), '#3a2c52', '#000000');
-  huskBody.position.y = 0.8;
+  // The ball rests on the ground, its lowest point on the root, as M0c's ground rule stands the Husk: at its ground
+  // contact point, with no sink. Centred 0.8 m up, it floated 0.2 m over the grass, its shadow apart from it in the
+  // strategic frame. The turrets still aim 0.8 m up the Husk, which is inside the ball.
+  huskBody.position.y = 0.6;
   husk.add(huskBody);
   const bolt = new Group();
   for (const level of [1, 2, 3]) {
     const baseHeight = 0.35 + 0.12 * (level - 1);
-    const base = part(`bolt_mk${level}`, new CylinderGeometry(0.7, 0.78, baseHeight, 8), '#3d4757');
-    // M0c's Bolt Sentinel (blender/recipes/bolt_sentinel.py) puts the base node half the base's height above the
-    // asset origin, so the base stands on the ground rather than half buried, and seats the yaw ring on its top.
+    // M0c's Bolt Sentinel (blender/recipes/bolt_sentinel.py) roots each mark at its ground contact point: bolt_mkN is an
+    // empty at the asset origin, and the plinth under it, bolt_mkN_base, has its node half the base's height up, so the
+    // scene places the mark on the ground as it does any other asset and the base stands there. The yaw ring sits on
+    // the base's top. The stand-in keeps the asset's tree (mark, base, yaw, pitch), so the scene places and aims both
+    // the same way.
+    const mark = new Group();
+    mark.name = `bolt_mk${level}`;
+    const base = part(`bolt_mk${level}_base`, new CylinderGeometry(0.7, 0.78, baseHeight, 8), '#3d4757');
     base.position.y = baseHeight / 2;
     const yaw = part(`bolt_mk${level}_yaw`, new CylinderGeometry(0.5, 0.5, 0.2, 12), '#566276');
     yaw.position.y = baseHeight / 2 + 0.1;
@@ -60,12 +71,15 @@ export function placeholderAssets(ctx: MaterialContext) {
     pitch.add(rail);
     yaw.add(pitch);
     base.add(yaw);
-    bolt.add(base);
+    mark.add(base);
+    bolt.add(mark);
   }
   const heart = new Group();
   const plinth = part('heart_plinth', new CylinderGeometry(1.05, 1.2, 0.4, 8), '#9c8a74');
-  // Every stage's crystal starts 0.4 m up, the plinth's top in M0c's Worldheart (PLINTH_TOP), so the 0.4 m plinth
-  // stands on the origin; centred on it, the plinth would be half buried with the crystal hanging 0.2 m above it.
+  // Every stage's crystal starts 0.4 m up, on the stand-in plinth's top, so the 0.4 m plinth stands on the origin;
+  // centred on it, the plinth would be half buried with the crystal hanging 0.2 m above it. These heights are the
+  // stand-in's own: M0c's Worldheart tops its plinth at 0.42 m (PLINTH_TOP in blender/recipes/heart.py) and floats each
+  // core's lower point 0.2 m plus 0.08 m per level above it.
   plinth.position.y = 0.2;
   heart.add(plinth);
   // The crystal glows amber-gold at full chroma (#ffaf1a, near-zero blue) over the same gold at 0.55 in linear light,
@@ -78,7 +92,13 @@ export function placeholderAssets(ctx: MaterialContext) {
     heart.add(stage);
   }
   const nest = new Group();
-  nest.add(part('nest', new IcosahedronGeometry(1.4, 1), '#241a38', '#ff3fa6'));
+  // The mound is a dome standing on the ground. It was a whole ball centred on the root, which looked the same above
+  // the grass but put its lowest point 1.4 m underground, where M0c's nest beds its spikes about 0.12 m deep. The
+  // sphere's own normals light it as one broad dome, as the ball did (IcosahedronGeometry at detail 1 takes the
+  // sphere's normals) and as M0c's mound does under a faceted silhouette. Unindexed with its normals recomputed, the
+  // dome lit as 40 flat facets instead.
+  const dome = new SphereGeometry(1.4, 10, 4, 0, Math.PI * 2, 0, Math.PI / 2);
+  nest.add(part('nest', dome, '#241a38', '#ff3fa6'));
   const kit = new Group();
   const pieces: [string, BufferGeometry, string, number][] = [
     ['rock_a', new IcosahedronGeometry(0.8, 0), '#8a8378', 1.1],

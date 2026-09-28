@@ -101,7 +101,7 @@
         "tree_conifer"
       ],
       "animations": [],
-      "tris": 2165,
+      "tris": 4717,
       "bones": 0,
       "textures": [
         {
@@ -140,8 +140,8 @@
         },
         {
           "node": "bush",
-          "minY": -0.1138,
-          "sink": 0.114
+          "minY": -0.1194,
+          "sink": 0.119
         },
         {
           "node": "grass_tuft",
@@ -154,7 +154,7 @@
           "sink": 0
         }
       ],
-      "bytes": 179628
+      "bytes": 205240
     },
     {
       "name": "worldheart",

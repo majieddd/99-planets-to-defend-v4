@@ -15,7 +15,7 @@
     "flowers"
   ],
   "animations": [],
-  "tris": 2165,
+  "tris": 4717,
   "notes": {},
   "placeables": [
     {
@@ -40,7 +40,7 @@
     },
     {
       "node": "bush",
-      "sink": 0.114
+      "sink": 0.119
     },
     {
       "node": "grass_tuft",

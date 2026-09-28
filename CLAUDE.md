@@ -8,15 +8,15 @@ restate its pillars and name the first end-to-end playable (Build order, item 1)
     npm run dev          # Vite dev server on http://127.0.0.1:5173
     npm run check        # both TypeScript projects, ESLint, em dash scan, blueprint gate
     npm test             # Vitest unit tests
-    npm run e2e          # Playwright smoke tests (builds, then serves on 4173)
+    npm run e2e          # Playwright smoke tests (builds, then serves on 4173 and 4174)
 
 Live site: https://majieddd.github.io/99-planets-to-defend-v4/ (deployed from main).
 
 The `VAR=value command` prefixes below are Git Bash syntax.
 
-If port 4173 is busy (another checkout or project), run `P99_PREVIEW_PORT=4174 npm run e2e`. The
-suite never reuses a server it did not start, so a busy port fails loudly instead of testing someone
-else's files.
+If 4173 or 4174 is busy (another checkout or project), pick a free pair:
+`P99_PREVIEW_PORT=4176 npm run e2e` uses 4176 and 4177. The suite never reuses a server it did not
+start, so a busy port fails loudly instead of testing someone else's files.
 
 `npm run check` runs the owner's private blueprint gate from its default path. If the checker is
 elsewhere, set `BLUEPRINT_CHECKER` to it; on a machine without it, prefix that one command with

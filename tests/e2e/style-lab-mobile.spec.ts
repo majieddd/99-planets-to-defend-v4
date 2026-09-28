@@ -83,9 +83,6 @@ for (const viewport of [
       await expect(boardToggle).toHaveText('Board');
       await expect(boardToggle).toHaveAccessibleName('Board');
       await expect(boardToggle).toHaveAttribute('aria-expanded', 'false');
-      // The placeholder banner shows until the asset build lands, after which it starts hidden; only a banner shown at
-      // load can prove that it comes back when a panel closes.
-      const bannerAtLoad = await banner.isVisible();
       // The blueprint's touch target for menus is 48 px.
       const targetHeight = async (toggle: typeof boardToggle) => (await toggle.boundingBox())?.height ?? 0;
       expect(await targetHeight(dialsToggle)).toBeGreaterThanOrEqual(48);
@@ -127,6 +124,16 @@ for (const viewport of [
         expect(onCentre, `${o.selector} covers the centre of the canvas; ${line}`).toBe(false);
       }
 
+      // With the real assets the placeholder banner starts hidden, so the checks that an open panel hides it passed
+      // without testing anything, and the checks that it shows again once the panel closes, which ran only for a banner
+      // shown at load, were skipped. It is shown here, after the closed layout was measured as the lab left it, so the
+      // banner rules are tested whether or not the assets built.
+      await banner.evaluate((node: HTMLElement) => {
+        node.hidden = false;
+        if (!node.textContent) node.textContent = 'Placeholders: M0c assets are not built yet (npm run assets).';
+      });
+      await expect(banner).toBeVisible();
+
       // Dials: lil-gui removes lil-closed in the same frame it starts the open animation and adds lil-transition, which
       // it drops when the animation ends, so waiting on both gives a frame of the settled panel.
       await dialsToggle.tap();
@@ -153,7 +160,7 @@ for (const viewport of [
       await dialsToggle.tap();
       await expect(gui).toHaveClass(/\blil-closed\b/);
       await expect(gui).not.toHaveClass(/\blil-transition\b/);
-      if (bannerAtLoad) await expect(banner).toBeVisible();
+      await expect(banner).toBeVisible();
 
       // Board.
       await boardToggle.tap();
@@ -172,7 +179,7 @@ for (const viewport of [
       await boardToggle.tap();
       await expect(boardBody).toBeHidden();
       await expect(boardToggle).toHaveAttribute('aria-expanded', 'false');
-      if (bannerAtLoad) await expect(banner).toBeVisible();
+      await expect(banner).toBeVisible();
 
       expect(errors).toEqual([]);
     });

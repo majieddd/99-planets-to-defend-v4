@@ -2,7 +2,7 @@ import { Color, DoubleSide, type AnimationClip, type Group, type Material, type 
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { attachHull } from '../ink/hull';
-import { createPaintedMaterial, type PaintUniforms } from '../materials/painted';
+import { createPaintedMaterial, DEFAULT_STANDARD_BLEND, type PaintUniforms } from '../materials/painted';
 
 export interface MaterialContext {
   paint: PaintUniforms;
@@ -69,7 +69,8 @@ export function paintAndInk(root: Object3D, ctx: MaterialContext, standardBlend:
 
 const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 
-export async function loadAsset(url: string, ctx: MaterialContext, standardBlend = 0.1): Promise<LoadedAsset> {
+// A caller that names no blend loads a prop, the same blend createPaintedMaterial gives a material created without one.
+export async function loadAsset(url: string, ctx: MaterialContext, standardBlend = DEFAULT_STANDARD_BLEND): Promise<LoadedAsset> {
   const gltf = await loader.loadAsync(url);
   paintAndInk(gltf.scene, ctx, standardBlend);
   return { root: gltf.scene, animations: gltf.animations };

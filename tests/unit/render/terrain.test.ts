@@ -52,6 +52,29 @@ describe('createStylePatch', () => {
     expect(patch.mesh.geometry.getAttribute('position').count).toBe(33 * 33);
   });
 
+  it('hands the soil ring to the painted shader as a weight, only in the ring and up to full soil', () => {
+    // 128 segments (the low tier's) put vertices 1.25 m apart, so some fall where the ring is fully soil.
+    const fine = createStylePatch(VERDANT, createPaintUniforms(VERDANT, DEFAULT_DIALS, new Texture()), 128);
+    const weights = fine.mesh.geometry.getAttribute('soilWeight');
+    const positions = fine.mesh.geometry.getAttribute('position');
+    expect(weights.count).toBe(positions.count);
+    let peak = 0;
+    let outside = 0;
+    for (let k = 0; k < weights.count; k++) {
+      const ring = Math.hypot(positions.getX(k), positions.getZ(k));
+      if (ring < 2.6 || ring > 5.6) outside = Math.max(outside, weights.getX(k));
+      peak = Math.max(peak, weights.getX(k));
+    }
+    expect(outside).toBe(0);
+    expect(peak).toBeGreaterThan(0.95);
+    expect(peak).toBeLessThanOrEqual(1);
+    const material = fine.mesh.material as ShaderMaterial;
+    expect(material.defines['PAINT_SOIL']).toBe('');
+    expect((material.uniforms['uSoilColor']!.value as Color).getHexString()).toBe(VERDANT.ground.soil.slice(1));
+    // The low planet has no soilWeight, so it must not declare one.
+    expect((fine.lowPlanet.material as ShaderMaterial).defines['PAINT_SOIL']).toBeUndefined();
+  });
+
   it('raises hills and sinks hollows between the clearing and the rim', () => {
     // A patch with no relief at all passed every other test here. On this 2 m grid over the ring from 14 to 50 m
     // (tangent-plane radius) the terrain lifts from -0.88 m to +1.45 m.

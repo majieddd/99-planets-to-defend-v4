@@ -1,11 +1,13 @@
 """Verdant Highlands kit: three rocks, a broad-crowned tree, a conifer, a bush, a grass tuft and a flower
-clump. Volumes are simplified (broad faceted planes, big foliage clumps) so the painted bake carries the
-detail, the way Sifu's environments do. Each piece exports at its own origin for instancing.
+clump. Volumes are simplified (broad faceted planes on rocks, big rounded foliage clumps) so the painted bake
+carries the detail, the way Sifu's environments do. Each piece exports at its own origin for instancing.
 
 Normals carry the light, not the facets: foliage clumps, conifer tiers and flower heads get custom normals out of
 a proxy ellipsoid (geo.ellipsoid_normals), rocks smooth across small facets but keep their big plane breaks, and
-wood is smooth. The silhouettes stay faceted, but the runtime hull ink is pushed along the exported normals averaged
-per position, so the proxy normals move it too (geo.ellipsoid_normals gives the measured shift).
+wood is smooth. Normals cannot round an outline, though: the silhouette follows the geometry, so the crown and bush
+clumps are fine enough to read round at distance (FOLIAGE_SUBDIVISIONS) while rocks and conifer tiers keep their
+facets. The runtime hull ink is pushed along the exported normals averaged per position, so the proxy normals move it
+too (geo.ellipsoid_normals gives the measured shift).
 
 Light caps (moss on rocks, the light crown of every foliage mass) are painted, not assigned per face: each capped
 region blends to its cap colour by a smooth per-vertex factor (geo.cap_factor: the proxy normal's z on foliage, a
@@ -26,6 +28,32 @@ ROCK_SMOOTH_DEG = 38.0   # breaks sharper than this stay as planes; smaller face
 WOOD_SMOOTH_DEG = 80.0   # trunk and stem sides smooth, end caps stay sharp
 GRASS_SMOOTH_DEG = 60.0
 BRUSH_SCALE = 0.25       # one 512 texel brush tile spans 4 m: a handful of strokes across a rock face or clump
+# Crown and bush clumps. At icosphere subdivision 2 (80 faces a clump) both read as low-poly polygons at distance in
+# the style gate frames, and the hull ink traced every corner of their outline: the proxy normals round the light,
+# never the outline, so the outline needs the finer mesh (320 faces). The outline figures here and below are read off
+# each piece's 768 px preview render: its outline is traced (the crown's only above image row 425, which leaves out the
+# trunk), resampled every 3 px and measured as the turn across 12 px chords, where a straight run turns under 2
+# degrees, a corner is a convex turn and a kink is a sample turning concave by over 6 degrees. With the three values
+# below, the share of the outline in straight runs and its 95th percentile corner went from 24% and 50 degrees to 14%
+# and 22 on the crown, and from 38% and 37 to 25% and 19 on the bush.
+FOLIAGE_SUBDIVISIONS = 3
+# Neighbouring faces meet at 18 to 22 degrees at subdivision 2 and at 8 to 10.5 at 3 (before displacement), so the
+# facet angle halves with the level: 10 degrees sits on the finer clump's own neighbour angle, and with one octave it
+# merged 680 more of the kit's triangles back into the flat panels the finer mesh removes (4,037 against 4,717). That
+# pair, 10 degrees and one octave (variant F of the style gate trials), is the fallback if M2's scatter presses the
+# on-screen triangle budgets. Its outlines measured about as calm as the shipped ones except at the crown's underside:
+# with the cut lowered to image row 440 to take that in, 18.0% of the crown's outline ran straight against 15.7%.
+FOLIAGE_FACET_DEG = 5.0
+# The displacement keeps its strength, frequency and seeds but only its first noise octave. Dropping the finer octaves
+# also takes about a quarter off the clumps' relief, the rms of each vertex's radial offset from its clump's sphere
+# (at this subdivision and facet angle, 0.065 to 0.050 m on the crown and 0.035 to 0.025 on the bush). At subdivision
+# 2 the vertices sat about as far apart as the second octave's features or wider, so the finer octaves only jittered
+# the facet corners; at 3 they are close enough to draw those octaves as a crinkled outline, which is detail rather
+# than a calmer silhouette (concave kinks per 1,000 px of outline: crown 57 before, 82 with three octaves, 42 with one;
+# bush 24, 38 and 21). The crinkle also broke the clumps into small UV islands that packed poorly, which cut the painted
+# texel density of every piece in the kit (they share one atlas) by 19 to 20% at this facet angle, 16% at 10 degrees
+# and 22 to 23% with no facet pass; with one octave it drops by 2 to 3%.
+FOLIAGE_OCTAVES = 1
 # Rocks and clumps keep the old per-face cut points (0.6, 0.35). breakup 0.5 lets whole strokes cross the edge in
 # both directions, which reads as paint (0.3 reads as a wobbly line); softness 0.03 keeps each stroke's edge crisp
 # rather than airbrushed.
@@ -42,9 +70,11 @@ ROCK_CAP_SMOOTHING = 3   # neighbour-averaging rounds, so the moss drapes over p
 ROCK_SINK = 0.05
 # The bush's four clumps sit 0.05 to 0.10 m deeper than their radii (each centre lies lower than its radius), so the
 # foliage meets the ground as a wide mound instead of resting on the point of a ball. The leaf displacement (0.1 m)
-# moves the deepest point, under the clump at x -0.4, on to 0.1138 m under the origin (measured on the shipped kit),
-# which the sink gives to the millimetre. It was 0.12, a bound rather than the depth, which the check now refuses.
-BUSH_SINK = 0.114
+# moves the deepest point, on the underside of the clump at x -0.4, on to 0.1194 m under the origin (measured on the
+# shipped kit), which the sink gives to the millimetre. It was 0.12, a bound rather than the depth, which the check
+# refused 6.2 mm off the coarser clumps' 0.1138 m depth, and then 0.114, that depth, which the finer clumps
+# (FOLIAGE_SUBDIVISIONS) miss by 5.4 mm, past the check's 5 mm.
+BUSH_SINK = 0.119
 
 
 def _regions():
@@ -93,10 +123,10 @@ def tree_broad(name, r):
     clumps = [(0, 0, 3.0, 1.1), (0.8, 0.2, 2.6, 0.8), (-0.7, -0.3, 2.7, 0.85), (0.2, -0.8, 2.5, 0.75),
               (-0.2, 0.8, 2.9, 0.8), (0.5, 0.5, 3.4, 0.7), (-0.5, 0.2, 3.5, 0.65)]
     for i, (x, y, z, radius) in enumerate(clumps):
-        clump = geo.ico(f'{name}_clump{i}', radius, subdivisions=2, location=(x, y, z), material=r['leaf'])
+        clump = geo.ico(f'{name}_clump{i}', radius, subdivisions=FOLIAGE_SUBDIVISIONS, location=(x, y, z), material=r['leaf'])
         scene.apply_transforms(clump)
-        geo.displace(clump, 0.18, frequency=1.6, seed=10 + i)
-        geo.facet(clump, 10.0)
+        geo.displace(clump, 0.18, frequency=1.6, seed=10 + i, octaves=FOLIAGE_OCTAVES)
+        geo.facet(clump, FOLIAGE_FACET_DEG)
         geo.ellipsoid_normals(clump, (x, y, z))
         geo.cap_factor(clump)
         ink.set_ink(clump, 1.25)
@@ -129,10 +159,10 @@ def tree_conifer(name, r):
 def bush(name, r):
     parts = []
     for i, (x, y, z, radius) in enumerate(((0, 0, 0.45, 0.55), (0.45, 0.1, 0.35, 0.4), (-0.4, 0.15, 0.35, 0.42), (0.05, -0.4, 0.3, 0.38))):
-        clump = geo.ico(f'{name}_clump{i}', radius, subdivisions=2, location=(x, y, z), material=r['leaf'])
+        clump = geo.ico(f'{name}_clump{i}', radius, subdivisions=FOLIAGE_SUBDIVISIONS, location=(x, y, z), material=r['leaf'])
         scene.apply_transforms(clump)
-        geo.displace(clump, 0.1, frequency=2.0, seed=30 + i)
-        geo.facet(clump, 10.0)
+        geo.displace(clump, 0.1, frequency=2.0, seed=30 + i, octaves=FOLIAGE_OCTAVES)
+        geo.facet(clump, FOLIAGE_FACET_DEG)
         geo.ellipsoid_normals(clump, (x, y, z))
         geo.cap_factor(clump)
         ink.set_ink(clump, 1.1)

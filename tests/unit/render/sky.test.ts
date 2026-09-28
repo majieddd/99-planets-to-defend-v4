@@ -1,4 +1,4 @@
-import { Group, PerspectiveCamera, Texture, Vector3, type ShaderMaterial } from 'three';
+import { Color, Group, PerspectiveCamera, Texture, Vector3, type ShaderMaterial } from 'three';
 import { describe, expect, it } from 'vitest';
 import { createPaintedSky } from '../../../src/render/sky';
 import { sunDirection, VERDANT } from '../../../src/render/themes';
@@ -68,6 +68,20 @@ describe('createPaintedSky', () => {
     const { fragmentShader } = createPaintedSky(VERDANT, new Texture(), sun).mesh.material as ShaderMaterial;
     expect(fragmentShader).toContain('float h = s * uDipCos + sqrt(max(1.0 - s * s, 0.0)) * uDipSin;');
     expect(fragmentShader).toContain('mix(uHorizon, uGround, pow(-h, 0.35) * uGroundMix)');
+  });
+
+  it('follows the sun dials: direction and colour at creation and when they move', () => {
+    const sky = createPaintedSky(VERDANT, new Texture(), new Vector3(0, 2, 0));
+    const u = uniformsOf(sky.mesh);
+    expect((u['uSunDirection']!.value as Vector3).toArray()).toEqual([0, 1, 0]);
+    expect((u['uSunColor']!.value as Color).getHexString()).toBe(new Color(VERDANT.sun.color).getHexString());
+    sky.setSun(new Vector3(3, 0, 4), '#ff9a55');
+    expect((u['uSunDirection']!.value as Vector3).distanceTo(new Vector3(0.6, 0, 0.8))).toBeLessThan(1e-12);
+    expect((u['uSunColor']!.value as Color).getHexString()).toBe(new Color('#ff9a55').getHexString());
+    // The disc, its glow and the clouds' lit side are the lines that read them.
+    const { fragmentShader } = sky.mesh.material as ShaderMaterial;
+    expect(fragmentShader).toContain('float sunSide = dot(d, uSunDirection) * 0.5 + 0.5;');
+    expect(fragmentShader).toContain('color += uSunColor * (pow(sunward, 900.0) * 8.0 + pow(sunward, 14.0) * 0.3) * (1.0 - cloud * 0.8);');
   });
 
   it('writes an emissive key of 0, so the bloom never reads the sky, sun disc included, as energy', () => {
