@@ -303,9 +303,9 @@ async function start(): Promise<void> {
     document.body.classList.toggle('pad-shown', !pad.hidden);
   }
   coarse.addEventListener('change', syncPlayUi);
-  /** Puts Pip-A out to play or brings him in, and is false when the page has no Pip-A to play. */
   // The turntable as the viewer had it before he came out: play turns it off, and leaving play used to leave it off.
   let turntableBeforePlay = state.turntable;
+  /** Puts Pip-A out to play or brings him in, and is false when the page has no Pip-A to play. */
   function setPlay(on: boolean): boolean {
     if (on && !pipPlay.available) {
       state.play = false;

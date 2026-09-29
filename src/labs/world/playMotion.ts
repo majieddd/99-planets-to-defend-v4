@@ -107,11 +107,10 @@ export interface Vec3 {
  * The camera's forward laid on his ground: his up crossed with the camera's right, as a unit vector, or null when the
  * two are parallel or either is zero. OrbitControls orbits about world y and keeps the camera's right level, so this
  * is square to the right: W never drifts to the side of the screen, and runs up it at every pitch, straight down
- * included. The view ray
- * projected onto his ground, which this replaces, drifted off that line as the camera rose, because his up leans out
- * from world y by atan(r / R), 8.2 degrees at the play area's edge: there it ran 22.8 degrees off at a 20 degree polar
- * angle, and straight overhead, with his up leaning toward the foot of the screen, it reversed and walked him toward
- * the camera.
+ * included. The view ray projected onto his ground, which this replaces, drifted off that line as the camera rose,
+ * because his up leans out from world y by atan(r / R), 8.2 degrees at the play area's edge: there it ran 22.8 degrees
+ * off at a 20 degree polar angle, and straight overhead, with his up leaning toward the foot of the screen, it reversed
+ * and walked him toward the camera.
  */
 export function groundForward(up: Vec3, right: Vec3): Vec3 | null {
   const x = up.y * right.z - up.z * right.y;
