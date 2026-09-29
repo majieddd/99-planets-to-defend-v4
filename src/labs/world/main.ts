@@ -304,6 +304,8 @@ async function start(): Promise<void> {
   }
   coarse.addEventListener('change', syncPlayUi);
   /** Puts Pip-A out to play or brings him in, and is false when the page has no Pip-A to play. */
+  // The turntable as the viewer had it before he came out: play turns it off, and leaving play used to leave it off.
+  let turntableBeforePlay = state.turntable;
   function setPlay(on: boolean): boolean {
     if (on && !pipPlay.available) {
       state.play = false;
@@ -314,11 +316,14 @@ async function start(): Promise<void> {
     if (on !== pipPlay.active) {
       if (on) {
         transition = null;
+        turntableBeforePlay = state.turntable;
         state.turntable = false;
         // Each face on the page blinks on its own seed, and his follows the world's (FACE_SEED).
         pipPlay.enter(camera, controls, world.members, FACE_SEED + world.faces().length, frozen);
       } else {
         pipPlay.exit(controls);
+        // The panel's refresh below shows the restored value.
+        state.turntable = turntableBeforePlay;
         state.view = OVERVIEW;
         state.member = '';
       }
@@ -341,6 +346,9 @@ async function start(): Promise<void> {
   function setHeartLevel(level: number): void {
     world.setHeartLevel(level);
     state.heartLevel = world.heartLevel();
+    // He walks round the reaches read when he came out, so a heart grown while he played let him walk into its new
+    // crystal, and one shrunk kept him off ground it had given up.
+    if (pipPlay.active) pipPlay.refreshObstacles(world.members);
     if (!liveHeart) return;
     labels.setText(liveHeart.member.name, liveHeartText(state.heartLevel));
     labels.setAnchor(liveHeart.member.name, memberLabelAnchor(liveHeart));

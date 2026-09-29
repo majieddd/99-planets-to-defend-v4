@@ -382,6 +382,10 @@ test.describe('the Asset World', () => {
           return { play, surface, target: (p99['camera'] as () => CameraReading)().target, search: location.search };
         });
       const start = await read();
+      // Checked before the key is held, so a play mode that never started fails here on its reading and the console,
+      // rather than on the minute's wait for a step below.
+      const startLine = `asset world play [${test.info().project.name}]: start ${JSON.stringify(start.play)}; address ${start.search}; console errors ${JSON.stringify(log.errors)}`;
+      expect(start.play.on, startLine).toBe(true);
       // Held until he has covered half a metre, since SwiftShader's frames are slow and each moves him at most 1/20 s.
       await page.keyboard.down('KeyW');
       await page.waitForFunction(
@@ -402,7 +406,6 @@ test.describe('the Asset World', () => {
         `(run weight ${held.play.runWeight.toFixed(2)}, run rate ${held.play.runTimeScale.toFixed(2)}), ${(offGround * 1000).toFixed(2)} mm off the ground, ` +
         `camera target followed ${followed.toFixed(2)} m; run loop ${held.play.stride ? `${held.play.stride.loopMetres.toFixed(3)} m in ${held.play.stride.loopSeconds.toFixed(3)} s` : 'unread'}; address ${held.search}`;
       console.log(line);
-      expect(start.play.on, line).toBe(true);
       expect(start.search, line).toContain('play=pip');
       expect(moved, line).toBeGreaterThan(0.5);
       expect(held.play.speed, line).toBeGreaterThan(0);

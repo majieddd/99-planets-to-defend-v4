@@ -31,6 +31,10 @@ export function createPlayInput(pad: HTMLElement, knob: HTMLElement): PlayInput 
     target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLInputElement && target.type !== 'checkbox');
 
   window.addEventListener('keydown', (event) => {
+    // On macOS a letter released while Cmd is held sends no keyup, so a W held into a Cmd shortcut ran on by itself.
+    if (event.key === 'Meta') held.clear();
+    // A shortcut is the browser's, not a step: taken as one, Ctrl+S walked him back and never reached the browser.
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (!active || !HANDLED.has(event.code) || typing(event.target)) return;
     held.add(event.code);
     // The arrows would otherwise scroll the panel or the page under him.

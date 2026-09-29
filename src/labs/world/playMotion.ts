@@ -96,6 +96,32 @@ export function moveDirection(input: MoveInput, forwardX: number, forwardZ: numb
   return { x: x / along, z: z / along, amount };
 }
 
+/** A direction in world space, shaped as three's Vector3 is, so the page passes its own vectors without a copy. */
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * The camera's forward laid on his ground: his up crossed with the camera's right, as a unit vector, or null when the
+ * two are parallel or either is zero. OrbitControls orbits about world y and keeps the camera's right level, so this
+ * is square to the right: W never drifts to the side of the screen, and runs up it at every pitch, straight down
+ * included. The view ray
+ * projected onto his ground, which this replaces, drifted off that line as the camera rose, because his up leans out
+ * from world y by atan(r / R), 8.2 degrees at the play area's edge: there it ran 22.8 degrees off at a 20 degree polar
+ * angle, and straight overhead, with his up leaning toward the foot of the screen, it reversed and walked him toward
+ * the camera.
+ */
+export function groundForward(up: Vec3, right: Vec3): Vec3 | null {
+  const x = up.y * right.z - up.z * right.y;
+  const y = up.z * right.x - up.x * right.z;
+  const z = up.x * right.y - up.y * right.x;
+  const length = Math.hypot(x, y, z);
+  if (length < 1e-9) return null;
+  return { x: x / length, y: y / length, z: z / length };
+}
+
 /** Turns a yaw toward another by at most maxStep radians, the short way round. */
 export function turnToward(yaw: number, desired: number, maxStep: number): number {
   const delta = wrapAngle(desired - yaw);

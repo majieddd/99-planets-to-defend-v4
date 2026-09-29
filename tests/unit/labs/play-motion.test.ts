@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   clampToArea,
   groundDistance,
+  groundForward,
   groundToTangent,
   moveDirection,
   PLAY_AREA_RADIUS,
@@ -22,6 +23,7 @@ import {
   type FootSample,
   type MotionState,
   type Obstacle,
+  type Vec3,
 } from '../../../src/labs/world/playMotion';
 import { MEMBERS, toTangent } from '../../../src/labs/world/registry';
 import { DEFAULT_DIALS } from '../../../src/render/defaults';
@@ -180,5 +182,104 @@ describe('the play prototype movement', () => {
     expect(up.forward).toBeCloseTo((0.5 - PLAY_STICK_DEAD_ZONE) / (1 - PLAY_STICK_DEAD_ZONE), 12);
     expect(up.sprint).toBe(false);
     expect(stickInput(200, 0, 60)).toEqual({ right: 1, forward: -0, sprint: true });
+  });
+});
+
+describe('camera-relative steering on the curve', () => {
+  const DEG = Math.PI / 180;
+  const dot = (a: Vec3, b: Vec3): number => a.x * b.x + a.y * b.y + a.z * b.z;
+  const cross = (a: Vec3, b: Vec3): Vec3 => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
+  const unit = (a: Vec3): Vec3 => {
+    const length = Math.hypot(a.x, a.y, a.z);
+    return { x: a.x / length, y: a.y / length, z: a.z / length };
+  };
+  /** His up at a tangent point: straight out from the planet's centre, which lies R under the pole. */
+  const upAt = (x: number, z: number): Vec3 => unit({ x, y: R, z });
+  /** The play area's edge in each of 12 bearings, where his up leans furthest from world y: atan(23 / 160), 8.2 degrees. */
+  const edge = Array.from({ length: 12 }, (_, i) => upAt(PLAY_AREA_RADIUS * Math.sin(i * 30 * DEG), PLAY_AREA_RADIUS * Math.cos(i * 30 * DEG)));
+  /** An OrbitControls camera about world y at a polar angle (0 straight overhead) and an azimuth: its view ray, its level right and the screen's up. */
+  function cameraAt(polarDeg: number, azimuthDeg = 0): { view: Vec3; right: Vec3; screenUp: Vec3 } {
+    const p = polarDeg * DEG;
+    const t = azimuthDeg * DEG;
+    const view = { x: -Math.sin(p) * Math.sin(t), y: -Math.cos(p), z: -Math.sin(p) * Math.cos(t) };
+    const right = { x: Math.cos(t), y: 0, z: -Math.sin(t) };
+    return { view, right, screenUp: cross(right, view) };
+  }
+  /** The steering this replaced: the view ray projected onto his ground. */
+  const viewRayOnGround = (up: Vec3, view: Vec3): Vec3 => {
+    const k = dot(view, up);
+    return unit({ x: view.x - k * up.x, y: view.y - k * up.y, z: view.z - k * up.z });
+  };
+  /** How far a ground direction runs off "up the screen", in degrees, positive to the right. */
+  const offScreenUp = (f: Vec3, camera: ReturnType<typeof cameraAt>): number => Math.atan2(dot(f, camera.right), dot(f, camera.screenUp)) / DEG;
+
+  it('matches the view ray on the ground at the play camera pitch, within 3 degrees at the area edge', () => {
+    // The follow camera opens 16 degrees above his horizon (PLAY_CAMERA_PITCH_DEG), a polar angle of 74 degrees; the two
+    // agree exactly for a lean along the view, part by atan(sin 8.2 / tan 74), 2.34 degrees, for a lean straight across
+    // it, and by 2.58 degrees at the widest of these bearings, a lean across and a third toward the camera.
+    let widest = 0;
+    for (let azimuth = 0; azimuth < 360; azimuth += 45) {
+      const camera = cameraAt(74, azimuth);
+      for (const up of edge) {
+        const ahead = groundForward(up, camera.right)!;
+        expect(Math.hypot(ahead.x, ahead.y, ahead.z)).toBeCloseTo(1, 12);
+        expect(dot(ahead, up)).toBeCloseTo(0, 12);
+        widest = Math.max(widest, Math.acos(Math.min(1, dot(ahead, viewRayOnGround(up, camera.view)))) / DEG);
+      }
+    }
+    expect(widest).toBeCloseTo(2.58, 2);
+    expect(widest).toBeLessThan(3);
+  });
+
+  it('keeps W up the screen with the camera high or straight overhead at the area edge, where the view ray turned it', () => {
+    // Straight overhead, his up leaning toward the foot of the screen (the pole lies up the screen from him): the view ray
+    // on his ground points down the screen, toward the camera, and a lean to the side turns it a quarter turn.
+    const overhead = cameraAt(0);
+    const towardFoot = upAt(0, PLAY_AREA_RADIUS);
+    expect(Math.abs(offScreenUp(viewRayOnGround(towardFoot, overhead.view), overhead))).toBeCloseTo(180, 9);
+    expect(offScreenUp(viewRayOnGround(upAt(PLAY_AREA_RADIUS, 0), overhead.view), overhead)).toBeCloseTo(90, 9);
+    const ahead = groundForward(towardFoot, overhead.right)!;
+    expect(dot(ahead, overhead.screenUp)).toBeGreaterThan(0.98);
+    expect(Math.abs(offScreenUp(ahead, overhead))).toBeLessThan(1e-9);
+
+    // At a 20 degree polar angle with his up leaning across the view, the view ray ran atan(tan 8.2 / sin 20), 22.80
+    // degrees, off up the screen, where the new forward runs 0 off it.
+    const high = cameraAt(20);
+    const acrossHigh = upAt(PLAY_AREA_RADIUS, 0);
+    expect(offScreenUp(viewRayOnGround(acrossHigh, high.view), high)).toBeCloseTo(22.8, 2);
+    expect(Math.abs(offScreenUp(groundForward(acrossHigh, high.right)!, high))).toBeLessThan(1e-9);
+
+    // Every edge bearing and azimuth, from overhead to the orbit's lowest (PLAY_CAMERA_MAX_POLAR_DEG): no sideways drift
+    // at all, and always along the camera's level forward, which is up the screen overhead. At the lowest orbit with his
+    // up leaning away the camera sits 2 degrees under his horizon, where up the screen means little, so that is the test.
+    for (let polar = 0; polar <= 84; polar += 6) {
+      for (let azimuth = 0; azimuth < 360; azimuth += 30) {
+        const camera = cameraAt(polar, azimuth);
+        const levelForward = cross({ x: 0, y: 1, z: 0 }, camera.right);
+        for (const up of edge) {
+          const f = groundForward(up, camera.right)!;
+          expect(Math.abs(dot(f, camera.right))).toBeLessThan(1e-12);
+          expect(dot(f, levelForward)).toBeGreaterThan(0.98);
+        }
+      }
+    }
+  });
+
+  it('never returns NaN, and gives null for degenerate input', () => {
+    expect(groundForward({ x: 0, y: 1, z: 0 }, { x: 0, y: 1, z: 0 })).toBeNull();
+    expect(groundForward({ x: 0, y: 1, z: 0 }, { x: 0, y: -2, z: 0 })).toBeNull();
+    expect(groundForward({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })).toBeNull();
+    expect(groundForward({ x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 0 })).toBeNull();
+    expect(groundForward({ x: 0, y: 1, z: 0 }, { x: 1e-12, y: 0, z: 0 })).toBeNull();
+    // Unnormalised input still gives a unit vector, and a near-parallel pair a finite one.
+    for (const [up, right] of [
+      [{ x: 0, y: 5, z: 0 }, { x: 3, y: 0, z: 0 }],
+      [{ x: 0, y: 1, z: 0 }, { x: 1e-6, y: 1, z: 0 }],
+      [upAt(-17, 9), { x: 0.6, y: 0, z: -0.8 }],
+    ] as [Vec3, Vec3][]) {
+      const f = groundForward(up, right)!;
+      expect([f.x, f.y, f.z].every(Number.isFinite)).toBe(true);
+      expect(Math.hypot(f.x, f.y, f.z)).toBeCloseTo(1, 12);
+    }
   });
 });

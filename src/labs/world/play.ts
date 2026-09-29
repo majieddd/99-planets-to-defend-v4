@@ -8,6 +8,7 @@ import { createCommanderFace } from '../shared/commanderFace';
 import type { FaceDriver } from '../shared/faceDriver';
 import type { PlacedMember } from './layout';
 import {
+  groundForward,
   moveDirection,
   PLAY_BODY_RADIUS,
   PLAY_MIN_MEMBER_REACH,
@@ -63,6 +64,8 @@ export interface PipPlay {
   /** One frame: moves him by the input, poses him, and carries the camera with him; dt is 0 while the lab is frozen. */
   update(dt: number, input: MoveInput, camera: PerspectiveCamera, controls: OrbitControls): void;
   setFrozen(on: boolean): void;
+  /** Re-reads every member's reach, for a member whose drawn size changed while he plays: the slider heart. */
+  refreshObstacles(members: readonly PlacedMember[]): void;
   reading(): PlayReading;
 }
 
@@ -130,9 +133,11 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
   const follow = new Vector3();
   let saved: { minDistance: number; maxDistance: number; maxPolarAngle: number; enablePan: boolean } | null = null;
   const surfaceUp = new Vector3();
+  const right = new Vector3();
   const forward = new Vector3();
   const turn = new Quaternion();
   const desired = new Vector3();
+  const shift = new Vector3();
 
   /** Every placed member's root on the tangent plane, with its drawn reach from the root widened by his body's. */
   function obstaclesOf(members: readonly PlacedMember[]): Obstacle[] {
@@ -222,10 +227,14 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
     },
     update(dt, input, camera, controls) {
       if (!root || !mixer || !idle || !run) return;
-      // The camera's facing, laid on the ground at his feet and read in the frame place() turns him in, so W runs away
-      // from the camera wherever he stands on the curve.
+      // The camera's facing, laid on the ground at his feet from the camera's level right (groundForward, which says why
+      // the view ray is not used) and read in the frame place() turns him in, so W runs up the screen wherever he stands
+      // on the curve and however high the camera is.
       surfaceUp.copy(ground.surfaceAt(motion.x, motion.z).up);
-      forward.subVectors(controls.target, camera.position).projectOnPlane(surfaceUp);
+      right.set(1, 0, 0).applyQuaternion(camera.quaternion);
+      const ahead = groundForward(surfaceUp, right);
+      if (ahead) forward.set(ahead.x, ahead.y, ahead.z);
+      else forward.set(0, 0, 0);
       turn.setFromUnitVectors(UP, surfaceUp).invert();
       forward.applyQuaternion(turn);
       motion = stepMotion(motion, moveDirection(input, forward.x, forward.z), input.sprint, dt, obstacles, planetRadius);
@@ -244,12 +253,15 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       // still zooms about him.
       chest(desired);
       follow.lerp(desired, 1 - Math.exp(-PLAY_FOLLOW_RATE * dt));
-      const shift = follow.clone().sub(controls.target);
+      shift.subVectors(follow, controls.target);
       controls.target.add(shift);
       camera.position.add(shift);
     },
     setFrozen(on) {
       face?.setFrozen(on);
+    },
+    refreshObstacles(members) {
+      if (root) obstacles = obstaclesOf(members);
     },
     reading() {
       const at = root ? root.getWorldPosition(new Vector3()).toArray() : null;
