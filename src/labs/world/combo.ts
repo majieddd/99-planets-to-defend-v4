@@ -262,9 +262,11 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
 }
 
 /**
- * How the hit playing slows and turns him. A light hit keeps `moveScale` of his pace from its start to the end of its
- * active frames: through the wind-up his drive eases down to it at the stop rate, and through the active frames it is
- * held there (`cap`), so the blow lands at a steady, reduced pace while his legs keep running. His turn rate falls to
+ * How the hit playing slows and turns him. A light hit keeps `moveScale` of his pace from its start to its cancel point:
+ * through the wind-up his drive eases down to it at the stop rate, and through the active frames it is held there
+ * (`cap`), so the blow lands at a steady, reduced pace while his legs keep running. Freed at the end of the active
+ * frames instead, he surged from 1.28 m/s to 1.6 m/s in the 20 ms before the cancel point and slowed again in the next
+ * hit's wind-up, a bump in every chain; held to the cancel point, a chain runs at one even pace. His turn rate falls to
  * `windupTurn` of its cap in the wind-up, so he can still aim the blow, and his facing is locked from the active frames
  * to the cancel point, so the cut goes where it was aimed (Pillar 4); past the cancel point he turns and runs freely to
  * line up the next hit. The finisher plants him: no pace and no turn for its whole length, on the frame it begins, since
@@ -278,7 +280,7 @@ export function swingMotion(state: ComboState, feel: CombatFeel, hits: readonly 
   if (contract.planted) return { moveScale: 0, turnScale: 0, cap: true };
   if (hit.time < contract.activeFrom) return { moveScale: feel.moveScale, turnScale: feel.windupTurn, cap: false };
   if (hit.time < contract.activeTo) return { moveScale: feel.moveScale, turnScale: 0, cap: true };
-  if (contract.cancel !== null && hit.time < contract.cancel) return { moveScale: 1, turnScale: 0, cap: false };
+  if (contract.cancel !== null && hit.time < contract.cancel) return { moveScale: feel.moveScale, turnScale: 0, cap: false };
   return FREE_MOTION;
 }
 

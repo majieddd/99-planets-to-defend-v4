@@ -20,7 +20,7 @@ export interface CombatFeel {
   buffer: number;
   /** Seconds after a hit ends, with no press, before the chain starts again from its first hit. */
   reset: number;
-  /** The share of his pace he keeps from a light hit's start to the end of its active frames. */
+  /** The share of his pace he keeps from a light hit's start to its cancel point. */
   moveScale: number;
   /** The share of his turn rate he keeps during a light hit's wind-up. */
   windupTurn: number;
@@ -56,7 +56,7 @@ export const COMBAT_FEEL_RANGES: { readonly [K in keyof CombatFeel]: FeelRange }
   fadeOut: { min: 0.05, max: 0.4, step: 0.01, label: 'last hit fade out (s)' },
   buffer: { min: 0, max: 0.3, step: 0.01, label: 'press buffer before cancel (s)' },
   reset: { min: 0, max: 1, step: 0.05, label: 'chain reset after a hit (s)' },
-  moveScale: { min: 0, max: 1, step: 0.05, label: 'pace kept through the active frames' },
+  moveScale: { min: 0, max: 1, step: 0.05, label: 'pace kept in a light hit' },
   windupTurn: { min: 0, max: 1, step: 0.05, label: 'turn rate kept in the wind-up' },
 };
 

@@ -310,12 +310,13 @@ describe('the combo weights', () => {
 });
 
 describe('how a hit holds him back', () => {
-  it('slows a light hit through its wind-up and active frames, locks his facing to the cancel point, and plants the finisher', () => {
+  it('slows a light hit from its start to its cancel point, locks his facing from its active frames, and plants the finisher', () => {
     const at = (step: ComboStep, time: number): ComboState => ({ ...COMBO_READY, hit: { step, time, struck: false, crossfaded: false, chainedAt: null } });
     expect(swingMotion(COMBO_READY, FEEL)).toBe(FREE_MOTION);
     expect(swingMotion(at(1, 0.05), FEEL)).toEqual({ moveScale: FEEL.moveScale, turnScale: FEEL.windupTurn, cap: false });
     expect(swingMotion(at(1, 0.2), FEEL)).toEqual({ moveScale: FEEL.moveScale, turnScale: 0, cap: true });
-    expect(swingMotion(at(2, 0.29), FEEL)).toEqual({ moveScale: 1, turnScale: 0, cap: false });
+    // Between the active frames and the cancel point the pace stays reduced, so a chain runs at one even pace.
+    expect(swingMotion(at(2, 0.29), FEEL)).toEqual({ moveScale: FEEL.moveScale, turnScale: 0, cap: false });
     expect(swingMotion(at(2, 0.31), FEEL)).toBe(FREE_MOTION);
     for (const time of [0.01, 0.38, 0.84]) expect(swingMotion(at(3, time), FEEL)).toEqual({ moveScale: 0, turnScale: 0, cap: true });
     expect([comboPhase(at(1, 0.1)), comboPhase(at(1, 0.2)), comboPhase(at(1, 0.4)), comboPhase(COMBO_READY)]).toEqual(['windup', 'active', 'recovery', 'ready']);
