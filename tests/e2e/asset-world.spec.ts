@@ -435,46 +435,68 @@ test.describe('the Asset World', () => {
       expect(held.play.stride, line).not.toBeNull();
 
       // The attack: F with W held. He swings once, stops for the swing and keeps his facing, the clip reaches its
-      // strike, and once it ends he runs on under the held key.
-      const playing = () => page.evaluate(() => (window.__P99__!['play'] as () => PlayReading)());
+      // strike, and once it ends he runs on under the held key. A recorder in the page reads play() on every frame, since
+      // reads from the test, each a round trip to a page busy under SwiftShader, once let the whole 0.83 s swing pass
+      // between two of them.
+      type Recorder = { attackSamples: PlayReading[]; attackStop: boolean };
       await page.keyboard.down('KeyW');
       await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().runWeight > 0.5, undefined, { timeout: 60_000 });
-      const before = await playing();
+      await page.evaluate(() => {
+        const recorder = window as unknown as Recorder;
+        // The first reading is taken here, before F is pressed, so it is the state the swing starts from.
+        recorder.attackSamples = [(window.__P99__!['play'] as () => PlayReading)()];
+        recorder.attackStop = false;
+        const tick = (): void => {
+          recorder.attackSamples.push((window.__P99__!['play'] as () => PlayReading)());
+          if (!recorder.attackStop) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
       await page.keyboard.press('KeyF');
-      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().attacking, undefined, { timeout: 60_000 });
-      const swingStart = await playing();
+      // Until the swing has come and gone and he runs again under the held key.
       await page.waitForFunction(
         () => {
-          const play = (window.__P99__!['play'] as () => PlayReading)();
-          return !play.attacking || (play.attackTime ?? 0) >= (play.strikeAt ?? Infinity);
+          const samples = (window as unknown as Recorder).attackSamples;
+          const first = samples.findIndex((sample) => sample.attacking);
+          return first >= 0 && samples.slice(first).some((sample) => !sample.attacking && sample.runWeight > 0.5);
         },
         undefined,
         { timeout: 60_000 },
       );
-      const atStrike = await playing();
-      await page.waitForFunction(() => !(window.__P99__!['play'] as () => PlayReading)().attacking, undefined, { timeout: 60_000 });
-      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().runWeight > 0.5, undefined, { timeout: 60_000 });
-      const after = await playing();
+      const samples = await page.evaluate(() => {
+        const recorder = window as unknown as Recorder;
+        recorder.attackStop = true;
+        return recorder.attackSamples;
+      });
       await page.keyboard.up('KeyW');
-      const turned = Math.abs(Math.atan2(Math.sin(atStrike.yaw - swingStart.yaw), Math.cos(atStrike.yaw - swingStart.yaw)));
+      const before = samples[0]!;
+      const first = samples.findIndex((sample) => sample.attacking);
+      const last = samples.length - 1 - [...samples].reverse().findIndex((sample) => sample.attacking);
+      const swing = samples.slice(first, last + 1);
+      const swingStart = swing[0]!;
+      const atStrike = swing.find((sample) => (sample.attackTime ?? 0) >= (sample.strikeAt ?? Infinity));
+      const struck = swing.filter((sample) => (sample.attackTime ?? 0) >= (sample.strikeAt ?? Infinity));
+      const after = samples.slice(last + 1).find((sample) => sample.runWeight > 0.5)!;
+      const swings = samples.filter((sample, index) => sample.attacking && !(samples[index - 1]?.attacking ?? false)).length;
+      const turnedDeg = Math.max(...swing.map((sample) => Math.abs(Math.atan2(Math.sin(sample.yaw - swingStart.yaw), Math.cos(sample.yaw - swingStart.yaw))))) * (180 / Math.PI);
       const attackLine =
-        `asset world play attack [${test.info().project.name}]: running at ${before.speed.toFixed(2)} m/s (run weight ${before.runWeight.toFixed(2)}), ` +
-        `F started the swing at clip time ${swingStart.attackTime?.toFixed(3)} s of ${swingStart.attackSeconds?.toFixed(3)} s; ` +
-        `at the strike reading clip time ${atStrike.attackTime?.toFixed(3)} s (strike ${atStrike.strikeAt} s), weight ${atStrike.attackWeight.toFixed(2)}, ` +
-        `speed ${atStrike.speed.toFixed(2)} m/s, turned ${((turned * 180) / Math.PI).toFixed(2)} degrees, strikes ${atStrike.strikes}; ` +
-        `after the swing attacking ${after.attacking}, weight ${after.attackWeight.toFixed(2)}, run weight ${after.runWeight.toFixed(2)} at ${after.speed.toFixed(2)} m/s, ` +
-        `strikes ${after.strikes}`;
+        `asset world play attack [${test.info().project.name}]: ${samples.length} frames read; running at ${before.speed.toFixed(2)} m/s (run weight ${before.runWeight.toFixed(2)}), ` +
+        `F started ${swings} swing over ${swing.length} frames, from clip time ${swingStart.attackTime?.toFixed(3)} s of ${swingStart.attackSeconds?.toFixed(3)} s; ` +
+        `first frame at or past the strike ${atStrike ? `clip time ${atStrike.attackTime?.toFixed(3)} s (strike ${atStrike.strikeAt} s), weight ${atStrike.attackWeight.toFixed(2)}, speed ${atStrike.speed.toFixed(2)} m/s, strikes ${atStrike.strikes}` : 'none'}; ` +
+        `largest speed from the strike on ${Math.max(...struck.map((sample) => sample.speed)).toFixed(2)} m/s, turned at most ${turnedDeg.toFixed(2)} degrees through the swing; ` +
+        `after the swing attacking ${after.attacking}, weight ${after.attackWeight.toFixed(2)}, run weight ${after.runWeight.toFixed(2)} at ${after.speed.toFixed(2)} m/s, strikes ${after.strikes}`;
       console.log(attackLine);
       expect(before.attacking, attackLine).toBe(false);
+      expect(swings, attackLine).toBe(1);
       expect(swingStart.attackSeconds, attackLine).toBeCloseTo(0.85, 1);
       expect(swingStart.strikeAt, attackLine).toBe(0.34);
-      // The strike reading is inside the swing, at or past the strike, at full weight, standing still and facing as he did.
-      expect(atStrike.attacking, attackLine).toBe(true);
-      expect(atStrike.attackTime!, attackLine).toBeGreaterThanOrEqual(0.34);
-      expect(atStrike.attackWeight, attackLine).toBe(1);
-      expect(atStrike.speed, attackLine).toBe(0);
-      expect(turned, attackLine).toBe(0);
-      expect(atStrike.strikes, attackLine).toBe(1);
+      // The clip reaches its strike at full weight, and from the strike to the swing's end he stands still, facing as he
+      // did when the swing began.
+      expect(atStrike, attackLine).toBeDefined();
+      expect(atStrike!.attackWeight, attackLine).toBe(1);
+      expect(atStrike!.strikes, attackLine).toBe(1);
+      for (const sample of struck) expect(sample.speed, attackLine).toBe(0);
+      expect(turnedDeg, attackLine).toBe(0);
       // One swing for one press, and the run back under the held key once it ended.
       expect(after.attacking, attackLine).toBe(false);
       expect(after.attackWeight, attackLine).toBe(0);
