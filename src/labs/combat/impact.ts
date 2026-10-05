@@ -6,7 +6,7 @@ import type { PipPlay, PlayClocks } from '../world/play';
 import { DUMMY_HIT_LOW, DUMMY_HIT_SHARE, DUMMY_HIT_TOP, type DummyHit, type TrainingDummies, type TrainingDummy } from './dummies';
 import { createHitNumbers, type HitNumbers } from './hitNumbers';
 import { SwingHits, sweepHit, sweepSteps, type HitBody } from './hitShape';
-import { HitStop } from './hitStop';
+import { HitStop, releaseHeld } from './hitStop';
 import { BoneLean, FLINCH_BONE, FLINCH_FINISHER_DEG, FLINCH_LIGHT_DEG, idleReaction, reactionLean, startReaction, stepReaction, type Reaction } from './reactions';
 import { createCameraShake } from './shake';
 import { createSparks } from './sparks';
@@ -17,7 +17,9 @@ import { createSparks } from './sparks';
  * Pip's combo and movement clocks and the struck dummy's held while the frame's clock runs on, PlayClocks), throws a
  * burst of sparks at the wound with a number rising from it, kicks the camera, and starts the dummy's flinch and
  * knockback through its hit hook. A swing that meets nothing (a whiff) gets none of it. Everything here runs on the
- * clocks the page hands it, so the lab's freeze holds it all, and builds nothing per frame.
+ * clocks the page hands it, so the lab's freeze holds it all. Its buffers are made once; a frame builds only the small
+ * pose objects it reads from a dummy that is reeling or being pushed (TrainingDummy.pose returns a copy), and a contact
+ * builds the event its listeners are handed.
  */
 
 /** One swing as the reading reports it: its hit of the combo, whether it connected, and with which dummies. */
@@ -75,7 +77,10 @@ export interface CombatImpact {
   heldStep(): number;
   /** After Pip's update: tests the blade, reacts to hits, and steps the sparks, the shake, the numbers and the flinch. */
   afterPlay(frame: ComboFrame | null, dt: number): void;
-  /** Lays the camera's shake on for the draw, and takes it off after. */
+  /**
+   * Before the draw: places the hit numbers by the camera as this frame draws it (its matrices brought up to date
+   * first), then lays the camera's shake on; afterRender takes it off.
+   */
   beforeRender(camera: PerspectiveCamera): void;
   afterRender(camera: PerspectiveCamera): void;
   /** Places the hit numbers for the canvas's size. */
@@ -91,6 +96,8 @@ export interface CombatImpact {
    */
   onSwingEnd(listener: (event: SwingEndEvent) => void): () => void;
   reset(): void;
+  /** Turns the shake off and holds the numbers in place under prefers-reduced-motion, as the page's query changes. */
+  setReducedMotion(on: boolean): void;
   reading(): ImpactReading;
 }
 
@@ -128,6 +135,10 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
     return bone ? new BoneLean(bone) : null;
   });
   const held: boolean[] = list.map(() => false);
+  // The dummies a hit struck in this frame's hits, which a stop that ran out in this frame's clocks does not release.
+  const struckNow: boolean[] = list.map(() => false);
+  // The frame time the numbers have not yet been placed for: afterPlay adds it, beforeRender spends it.
+  let numbersStep = 0;
   const out: PlayClocks = { combo: 0, motion: 0, frame: 0 };
   const stop = new HitStop(SWINGS_KEPT);
   const swings: SwingRecord[] = [];
@@ -185,6 +196,7 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
     const finisher = contractOf(step, pip.contracts).planted;
     stop.start(finisher ? feel.hitStopFinisher : feel.hitStopLight);
     held[index] = stop.active;
+    struckNow[index] = true;
     // The sparks fly off the body's surface toward the blade and along its sweep.
     dummy.root.getWorldPosition(rootAt);
     normal.subVectors(contact, rootAt).setY(0);
@@ -304,6 +316,9 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
     clocks: (dt) => stop.clocks(dt, out),
     heldStep: () => stop.heldStep,
     afterPlay(frame, dt) {
+      // Whether no stop holds after this frame's clocks, read before this frame's hits can begin another.
+      const stopEnded = !stop.active;
+      struckNow.fill(false);
       if (frame) detect(frame);
       // Each dummy's reaction on its own clock: the struck one's waits out the stop with Pip.
       for (let i = 0; i < list.length; i++) {
@@ -329,15 +344,21 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
           lean.apply(pose ? o.ground.surfaceAt(pose.x, pose.z).up : UP, reaction.dirX, reaction.dirZ, angle);
         }
       }
-      // A stop that ended in this frame's clocks lets its dummies go now, after they took its remainder; one begun in
-      // this frame's hits stands.
-      if (!stop.active) held.fill(false);
-      const frameStep = Math.max(0, dt);
+      // A stop that ended in this frame's clocks lets its dummies go now, after they took its remainder; a dummy struck
+      // in this frame's hits, whose stop begins now, stays held (releaseHeld).
+      releaseHeld(held, struckNow, stopEnded);
+      const frameStep = dt > 0 ? dt : 0;
       sparks.update(frameStep, o.camera.position);
       shake.update(frameStep);
-      numbers?.update(frameStep, o.camera, widthPx, heightPx);
+      numbersStep += frameStep;
     },
     beforeRender(camera) {
+      // The numbers go where this frame's camera draws them: placed in afterPlay, before the page moved the camera
+      // (the follow, the orbit's update), they were projected with the frame before's view and lagged a frame behind the
+      // wound. Before the shake, so the numbers ride the steady view and do not jitter with it.
+      camera.updateMatrixWorld();
+      numbers?.update(numbersStep, camera, widthPx, heightPx);
+      numbersStep = 0;
       shake.apply(camera);
     },
     afterRender(camera) {
@@ -355,9 +376,14 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
       swingEndListeners.add(listener);
       return () => swingEndListeners.delete(listener);
     },
+    setReducedMotion(on) {
+      shake.setReducedMotion(on);
+      numbers?.setReducedMotion(on);
+    },
     reset() {
       stop.reset();
       held.fill(false);
+      struckNow.fill(false);
       fresh.fill(false);
       pending.fill(false);
       for (const reaction of reactions) Object.assign(reaction, idleReaction());

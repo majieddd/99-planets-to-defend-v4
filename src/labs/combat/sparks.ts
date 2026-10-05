@@ -340,6 +340,13 @@ export function createSparks(parent: Object3D, brush: IUniform<Texture | null>):
   }
 
   function write(eye: Vector3): void {
+    // Nothing alive: the mesh hides and nothing is written or uploaded. It wrote every quad and uploaded three buffers
+    // on every idle frame; the next burst's write rewrites every quad, the dead ones folded to a point, so nothing
+    // stale can show.
+    if (!pool.sparks.some((spark) => spark.alive) && !pool.flashes.some((flash) => flash.alive)) {
+      mesh.visible = false;
+      return;
+    }
     let any = false;
     for (let q = 0; q < pool.sparks.length; q++) {
       const spark = pool.sparks[q]!;

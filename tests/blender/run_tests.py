@@ -536,9 +536,21 @@ def test_commander_pip_combo_sources_are_checked_before_anything_is_baked(tmp):
     try:
         pip.check_combo_sources(tmp, picks)
     except FileNotFoundError as error:
+        raise AssertionError(f'a file that is there but malformed was reported as missing: {error}')
+    except ValueError as error:
         assert "'joint_names'" in str(error) and 'attack_3.json is not JSON' in str(error), error
     else:
         raise AssertionError('a generation without joint_names was taken')
+    # A missing file beside a malformed one: one ValueError names both.
+    (folder / 'attack_3.json').unlink()
+    try:
+        pip.check_combo_sources(tmp, picks)
+    except FileNotFoundError as error:
+        raise AssertionError(f'a mix of missing and malformed files was reported as missing alone: {error}')
+    except ValueError as error:
+        assert "'joint_names'" in str(error) and 'attack_3.json is not in the repository' in str(error), error
+    else:
+        raise AssertionError('a missing generation was taken')
     for hit in ('attack_1', 'attack_3'):
         (folder / f'{hit}.json').write_text(json.dumps({'positions': [], 'joint_names': []}), encoding='utf-8')
     pip.check_combo_sources(tmp, picks)
@@ -583,6 +595,31 @@ def test_commander_pip_combo_timing_reads_each_cancel_from_timings_json(tmp):
         assert 'attack_1 has no cancel' in str(error), error
     else:
         raise AssertionError('a hit without its cancel was taken')
+
+
+def test_build_context_preview_dir_empties_only_a_folder_directly_under_the_previews_root(tmp):
+    from lib.ctx import BuildContext
+    ctx = BuildContext(root=tmp, out=tmp / 'out', previews=tmp / 'build' / 'previews', textures=tmp / 'textures')
+    ctx.ensure_dirs()
+    keep = tmp / 'build' / 'keep.txt'
+    keep.write_text('the build folder above the previews', encoding='utf-8')
+    stale = ctx.previews / 'husk' / 'old.png'
+    stale.parent.mkdir(parents=True)
+    stale.write_text('an older render', encoding='utf-8')
+    # A plain name is emptied the first time and kept after.
+    out = ctx.preview_dir('husk')
+    assert out == ctx.previews / 'husk' and out.is_dir() and not stale.exists(), list(out.iterdir())
+    (out / 'new.png').write_text('this build', encoding='utf-8')
+    assert (ctx.preview_dir('husk') / 'new.png').exists()
+    # Empty, blank, the parent, a nested path or an absolute one: refused before anything is removed.
+    for name in ('', '   ', '..', '.', 'a/b', '../keep', str(tmp / 'elsewhere')):
+        try:
+            ctx.preview_dir(name)
+        except ValueError as error:
+            assert 'preview_dir' in str(error), error
+        else:
+            raise AssertionError(f'preview_dir took {name!r}')
+    assert keep.exists() and (ctx.previews / 'husk' / 'new.png').exists()
 
 
 def test_charforge_leg_ik_moves_the_ankle_by_a_step_and_keeps_the_foot_level(tmp):

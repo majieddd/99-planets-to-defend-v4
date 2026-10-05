@@ -45,6 +45,8 @@ export interface CameraShake {
   /** Takes the offset off again, the camera's position restored exactly. */
   remove(camera: PerspectiveCamera): void;
   reset(): void;
+  /** Follows prefers-reduced-motion as it changes: on, the shake is off, and one under way stops. */
+  setReducedMotion(on: boolean): void;
   /** How far the camera is off its follow pose now, in metres, and whether the shake is on at all. */
   reading(): { offset: number; active: boolean; enabled: boolean };
 }
@@ -90,6 +92,10 @@ export function createCameraShake(reducedMotion: boolean): CameraShake {
     },
     reset() {
       time = Infinity;
+    },
+    setReducedMotion(on) {
+      reducedMotion = on;
+      if (on) time = Infinity;
     },
     reading() {
       shakeAt(time, duration, amplitude, wave);

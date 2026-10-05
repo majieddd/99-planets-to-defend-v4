@@ -84,8 +84,17 @@ class BuildContext:
         """The folder an asset's preview renders go in, emptied the first time the run asks for it, so the contact sheet
         (tools/assets/sheet.mjs, which tiles every PNG in it) shows this build's renders only. It used to keep whatever
         an earlier build left there: renders a recipe no longer makes, such as the combo's filmstrips from before they
-        moved to a folder of their own, went on feeding the sheet."""
+        moved to a folder of their own, went on feeding the sheet.
+
+        Because it empties the folder, the name must be one folder directly under the previews root: a name that is
+        empty, or resolves anywhere else ('..', 'a/b', an absolute path), stops the build before anything is removed.
+        Unchecked, an empty name emptied the previews root itself and '..' the build folder above it."""
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f'preview_dir needs a folder name, not {name!r}')
+        root = self.previews.resolve()
         path = self.previews / name
+        if path.resolve().parent != root:
+            raise ValueError(f'preview_dir name {name!r} resolves to {path.resolve()}, not a folder directly under the previews root {root}')
         if name not in self._fresh_previews:
             self._fresh_previews.add(name)
             shutil.rmtree(path, ignore_errors=True)

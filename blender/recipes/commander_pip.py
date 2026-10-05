@@ -336,13 +336,15 @@ def check_combo_sources(root, sources=None):
     that selects 'unimate' has its generation in the repository with the `positions` and `joint_names` it is read from,
     naming every fault at once. The file was looked for only when its hit came to be baked, so a missing finisher
     generation stopped the build after the two light hits had been baked and measured, and a file without either key
-    stopped it with a bare KeyError."""
+    stopped it with a bare KeyError. A FileNotFoundError means every fault is a missing file; a file that is there but
+    is not JSON or lacks a key is a ValueError, as is any mix of the two (it was a FileNotFoundError for all of them)."""
     import json
     sources = COMBO_SOURCE if sources is None else sources
     unknown = {k: v for k, v in sources.items() if v not in ('hand', 'unimate')}
     if unknown or set(sources) != set(COMBO):
         raise ValueError(f"COMBO_SOURCE must give each of {', '.join(COMBO)} 'hand' or 'unimate', not {sources}")
     faults = []
+    invalid = False
     for attack in COMBO:
         if sources[attack] != 'unimate':
             continue
@@ -355,12 +357,14 @@ def check_combo_sources(root, sources=None):
             data = json.loads(path.read_text(encoding='utf-8'))
         except ValueError as error:
             faults.append(f'{UNIMATE_DIR}/{attack}.json is not JSON ({error})')
+            invalid = True
             continue
         missing = [key for key in ('positions', 'joint_names') if not isinstance(data, dict) or key not in data]
         if missing:
             faults.append(f"{UNIMATE_DIR}/{attack}.json has no {' or '.join(repr(key) for key in missing)}, which the retarget reads")
+            invalid = True
     if faults:
-        raise FileNotFoundError('; '.join(faults))
+        raise (ValueError if invalid else FileNotFoundError)('; '.join(faults))
 
 
 def build_combo(ctx, arm, body, armour, blade):

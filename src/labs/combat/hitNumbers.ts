@@ -40,6 +40,8 @@ export interface HitNumbers {
   /** Ages and places every number for the frame (the frame's clock, so they rise through the hit-stop). */
   update(dt: number, camera: PerspectiveCamera, widthPx: number, heightPx: number): void;
   reset(): void;
+  /** Follows prefers-reduced-motion as it changes: on, the numbers fade in place rather than rising. */
+  setReducedMotion(on: boolean): void;
   /** Numbers showing now, and the last figure shown. */
   reading(): { live: number; last: number | null };
 }
@@ -113,6 +115,9 @@ export function createHitNumbers(container: HTMLElement, reducedMotion: boolean)
         slot.element.hidden = true;
       }
       last = null;
+    },
+    setReducedMotion(on) {
+      reducedMotion = on;
     },
     reading() {
       return { live: slots.filter((slot) => slot.alive).length, last };

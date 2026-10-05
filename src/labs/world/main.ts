@@ -110,7 +110,8 @@ async function start(): Promise<void> {
   // Named for what the dials are, not for whether the address has a link: both pages' buttons always write one, and a
   // link that moves no dial opens the locked look. Read afresh each time, because the test handle moves dials too.
   const lookKind = (): 'locked' | 'link' => ((Object.keys(DEFAULT_DIALS) as (keyof RenderDials)[]).every((key) => dials[key] === DEFAULT_DIALS[key]) ? 'locked' : 'link');
-  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Read where it is used, so a change of the setting while the page is open applies at once, where it was read once.
+  const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
   const state: WorldPanelState = {
     view: OVERVIEW,
     member: '',
@@ -249,7 +250,7 @@ async function start(): Promise<void> {
     const pose = frameView(current(), world.members, specs, { labels: state.labels, widthPx }, lens) ?? registryOverview(patch, lens);
     userMoved = false;
     labels.focus(state.member || null);
-    if (animate && !reducedMotion) transition = { from: { position: camera.position.clone(), target: controls.target.clone() }, to: pose, elapsed: 0 };
+    if (animate && !motionQuery.matches) transition = { from: { position: camera.position.clone(), target: controls.target.clone() }, to: pose, elapsed: 0 };
     else jumpTo(pose);
   }
   /** Keeps the address on the open view, so the bar always holds a link to it (the inspection-view law). */

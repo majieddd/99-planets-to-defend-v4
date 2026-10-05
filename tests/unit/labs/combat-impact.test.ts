@@ -1,8 +1,9 @@
-import { Vector3 } from 'three';
+import { AnimationClip, AnimationMixer, Bone, Object3D, Quaternion, QuaternionKeyframeTrack, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
-import { HitStop } from '../../../src/labs/combat/hitStop';
+import { HitStop, releaseHeld } from '../../../src/labs/combat/hitStop';
 import { HIT_SAMPLES_MAX, segmentToAxis, SwingHits, sweepHit, sweepSteps, swingPoint, type HitBody, type Vec3 } from '../../../src/labs/combat/hitShape';
 import {
+  BoneLean,
   FLINCH_FINISHER_DEG,
   FLINCH_LIGHT_DEG,
   FLINCH_RISE,
@@ -11,6 +12,7 @@ import {
   idleReaction,
   KNOCKBACK_SECONDS,
   knockbackShare,
+  leanBone,
   reactionLean,
   startReaction,
   stepReaction,
@@ -212,6 +214,43 @@ describe('the hit-stop clock (labs/combat/hitStop.ts)', () => {
     expect(started).toBe(2);
     expect(combo.hit!.chainedAt).toBe(HIT1.cancel);
   });
+
+  it('counts a NaN or negative step as no time, and keeps the longer stop when a second contact comes while one holds', () => {
+    const stop = new HitStop();
+    const out: PlayClocks = { combo: 0, motion: 0, frame: 0 };
+    stop.start(0.055);
+    // A NaN step: every clock 0 and the hold untouched, where Math.max(0, NaN) passed the NaN into all of them.
+    stop.clocks(Number.NaN, out);
+    expect(out).toEqual({ combo: 0, motion: 0, frame: 0 });
+    expect([stop.remaining, stop.heldStep, stop.measured]).toEqual([0.055, 0, 0]);
+    stop.clocks(-1, out);
+    expect([out.frame, stop.remaining]).toEqual([0, 0.055]);
+    // A second, shorter contact two frames in keeps what is left of the first; a longer one takes over without
+    // starting the stop's measure again, so the finished length is the whole time held.
+    stop.clocks(DT, out);
+    stop.clocks(DT, out);
+    stop.start(0.01);
+    expect(stop.remaining).toBeCloseTo(0.055 - 2 * DT, 12);
+    stop.start(0.09);
+    expect(stop.remaining).toBe(0.09);
+    while (stop.active) stop.clocks(DT, out);
+    expect(stop.lengths).toEqual([expect.closeTo(2 * DT + 0.09, 12)]);
+  });
+
+  it('releases the dummies a finished stop held but keeps one struck in the same frame, where it held them both into the new stop', () => {
+    // Dummy 0 was held by a stop that ran out in this frame's clocks; dummy 1 was struck in this frame's hits.
+    const held = [true, true, false];
+    releaseHeld(held, [false, true, false], true);
+    expect(held).toEqual([false, true, false]);
+    // A stop still holding releases nobody: a second contact while it holds keeps both dummies in it.
+    const both = [true, true, false];
+    releaseHeld(both, [false, true, false], false);
+    expect(both).toEqual([true, true, false]);
+    // No stop and no hit: all go.
+    const none = [true, false, true];
+    releaseHeld(none, [false, false, false], true);
+    expect(none).toEqual([false, false, false]);
+  });
 });
 
 describe("the dummies' reactions (labs/combat/reactions.ts)", () => {
@@ -252,6 +291,65 @@ describe("the dummies' reactions (labs/combat/reactions.ts)", () => {
     expect(reactionLean(reaction)).toBeCloseTo(leaning, 12);
     stepReaction(reaction, FLINCH_RISE);
     expect(reactionLean(reaction)).toBeCloseTo((FLINCH_LIGHT_DEG * Math.PI) / 180, 9);
+  });
+});
+
+describe("the flinch's lean over a real mixer (labs/combat/reactions.ts, BoneLean)", () => {
+  /** One bone under a still parent, driven by a clip that turns it from 10 to 40 degrees about z over a second. */
+  function rig() {
+    const root = new Object3D();
+    const hips = new Bone();
+    hips.name = 'hips';
+    const body = new Bone();
+    body.name = 'body';
+    root.add(hips);
+    hips.add(body);
+    const at = (deg: number) => new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), (deg * Math.PI) / 180);
+    const track = new QuaternionKeyframeTrack('body.quaternion', [0, 1], [...at(10).toArray(), ...at(40).toArray()]);
+    const mixer = new AnimationMixer(root);
+    mixer.clipAction(new AnimationClip('turn', 1, [track])).play();
+    mixer.update(0);
+    root.updateMatrixWorld(true);
+    return { root, body, mixer, at };
+  }
+  const UP_AXIS = new Vector3(0, 1, 0);
+  /** The clip's pose at a time with one lean laid on it, as leanBone lays it on a fresh copy. */
+  function leanedPose(pose: Quaternion, angle: number): Quaternion {
+    const parent = new Object3D();
+    const bone = new Object3D();
+    parent.add(bone);
+    bone.quaternion.copy(pose);
+    parent.updateMatrixWorld(true);
+    leanBone(bone, UP_AXIS, 1, 0, angle);
+    return bone.quaternion.clone();
+  }
+  // Component by component: the mixer's quaternions come from 32-bit track values and are not unit to 1e-12, so a
+  // product of two of them is no test of equality.
+  const close = (a: Quaternion, b: Quaternion) => a.toArray().every((value, i) => Math.abs(value - b.toArray()[i]!) < 1e-12);
+
+  it('lays one lean over the clip on a held clock however many frames, follows the clip when it moves, and leaves the clip pose at 0', () => {
+    const { body, mixer, at } = rig();
+    // The clip's own pose at 0, as the mixer wrote it (its track holds 32-bit floats, so it is not at(10) to the bit).
+    const start = body.quaternion.clone();
+    expect(start.toArray().every((value, i) => Math.abs(value - at(10).toArray()[i]!) < 1e-6)).toBe(true);
+    const lean = new BoneLean(body);
+    // Thirty frames on a held clock (a hit-stop): the mixer writes nothing after the first, and the lean is not
+    // compounded, where laying it on each frame over a bone the mixer no longer wrote reared the Husk past 70 degrees.
+    for (let frame = 0; frame < 30; frame++) {
+      mixer.update(0);
+      lean.apply(UP_AXIS, 1, 0, 0.2);
+    }
+    expect(close(body.quaternion, leanedPose(start, 0.2))).toBe(true);
+    // The clock moves half a second: the clip's pose there, with the lean on it.
+    mixer.update(0.5);
+    const clipPose = body.quaternion.clone();
+    expect(clipPose.toArray().every((value, i) => Math.abs(value - at(25).toArray()[i]!) < 1e-6)).toBe(true);
+    lean.apply(UP_AXIS, 1, 0, 0.2);
+    expect(close(body.quaternion, leanedPose(clipPose, 0.2))).toBe(true);
+    // The lean at 0 on a held clock: the clip's pose exactly, to the bit, the lean taken off.
+    mixer.update(0);
+    lean.apply(UP_AXIS, 1, 0, 0);
+    expect(body.quaternion.equals(clipPose)).toBe(true);
   });
 });
 

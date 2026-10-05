@@ -9,7 +9,7 @@ import { VERDANT } from '../../render/themes';
 import { FACE_SEED } from '../shared/commanderFace';
 import { createCombatSound, encodeWav, renderSound, type SoundKind } from '../shared/combatSound';
 import { fetchModelNotes, loadNamedAsset } from '../shared/labAssets';
-import { createPaintedStage, frameStep, pickTier, WORLD_FOV_DEG } from '../shared/paintedStage';
+import { createPaintedStage, frameStep, MAX_FRAME_STEP, pickTier, WORLD_FOV_DEG } from '../shared/paintedStage';
 import { feelAddressValue, feelFromAddress } from '../world/combatFeel';
 import { contractOf, type ComboFrame, type ComboStep } from '../world/combo';
 import { createPipPlay, PLAY_CAMERA_DISTANCE, PLAY_CAMERA_MAX_DISTANCE, type PlayClocks, type PlayStart } from '../world/play';
@@ -109,12 +109,16 @@ async function start(): Promise<void> {
   const dummies: TrainingDummies | null = husk ? createTrainingDummies(husk, patch, scene, ctx.hullMaterial, homes, ARENA_DUMMY_NAMES, pipAt) : null;
   if (husk && !dummies) showBanner('The combat arena needs the Husk\'s idle clip for its training dummies, which this build does not have.');
 
-  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Read live: the impact follows a change of the setting while the page is open, where it read the setting once.
+  const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+  const reducedMotion = motionQuery.matches;
   // The impact feel on the dummies: hit detection, the hit-stop, the sparks, the shake, the numbers and the reactions.
   const impact: CombatImpact | null =
     dummies && pipPlay.available
       ? createCombatImpact({ energy: painted.energy, camera, ground: patch, pip: pipPlay, dummies, feel, reducedMotion, brush: ctx.paint.uBrush, numbers: document.getElementById('hits') })
       : null;
+
+  motionQuery.addEventListener('change', () => impact?.setReducedMotion(motionQuery.matches));
 
   // The combat sounds (labs/shared/combatSound.ts): a whoosh as each swing begins, an impact on each contact, a whiff when
   // a swing's active frames end having met nothing. Silent until a real gesture on the page unlocks them.
@@ -311,8 +315,11 @@ async function start(): Promise<void> {
       const wasFrozen = frozen;
       frozen = false;
       pipPlay.setFrozen(false);
+      // Held to the frame step the loop itself allows, 0 to MAX_FRAME_STEP: a NaN, a negative or a long step reached the
+      // clocks as given, where the loop's own steps never can.
+      const step = seconds > 0 ? Math.min(seconds, MAX_FRAME_STEP) : 0;
       try {
-        tick(seconds, seconds * 1000);
+        tick(step, step * 1000);
       } finally {
         frozen = wasFrozen;
         pipPlay.setFrozen(wasFrozen);

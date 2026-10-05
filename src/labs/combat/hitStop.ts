@@ -31,9 +31,13 @@ export class HitStop {
     }
   }
 
-  /** This frame's clocks for a frame step of `dt`, written into `out`. */
+  /**
+   * This frame's clocks for a frame step of `dt`, written into `out`. A step that is not above 0 counts as 0: written as
+   * Math.max(0, dt), a NaN step came through as NaN (Math.max passes NaN on) and poisoned the remaining hold and every
+   * clock after it.
+   */
   clocks(dt: number, out: PlayClocks): PlayClocks {
-    const step = Math.max(0, dt);
+    const step = dt > 0 ? dt : 0;
     const hold = Math.min(step, this.remaining);
     this.remaining -= hold;
     this.heldStep = step - hold;
@@ -58,4 +62,16 @@ export class HitStop {
     this.measured = 0;
     this.heldStep = 0;
   }
+}
+
+/**
+ * Lets the dummies a finished stop held go at the end of a frame: when no stop held after this frame's clocks
+ * (`stopEnded`, read before the frame's hits), every dummy not struck in this frame's hits (`struck`) is released, and
+ * a dummy struck now, which began a new stop, stays held. The release used to wait for no stop to be active at the
+ * frame's end, so a stop that ran out in a frame's clocks while a hit on another dummy began a new one kept the first
+ * dummy held through a second stop it never took.
+ */
+export function releaseHeld(held: boolean[], struck: readonly boolean[], stopEnded: boolean): void {
+  if (!stopEnded) return;
+  for (let i = 0; i < held.length; i++) if (!struck[i]) held[i] = false;
 }

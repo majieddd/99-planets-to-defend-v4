@@ -498,10 +498,6 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
   /** Whether a hit plays on his whole body: a planted hit always, and every hit on a rig the mask could not split. */
   const planted = (step: ComboStep): boolean => !upperNames || contractOf(step, contracts).planted;
 
-  /**
-   * Stands him at the start, still and out of any hit, and frames him there: the orbit's centre on his chest and the
-   * camera on the start's bearing from him, at its distance and pitch. The next update weighs his clips from this.
-   */
   /** Forgets the lunge: a new hit plans its own. */
   function clearLunge(): void {
     resetLunge(lunge);
@@ -533,6 +529,10 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
     if (lunge.done !== before || lunge.sideDone !== beforeSide) motion = { ...motion, x: lungeAt.x, z: lungeAt.z, yaw: lungeAt.yaw };
   }
 
+  /**
+   * Stands him at the start, still and out of any hit, and frames him there: the orbit's centre on his chest and the
+   * camera on the start's bearing from him, at its distance and pitch. The next update weighs his clips from this.
+   */
   function toStart(camera: PerspectiveCamera, controls: OrbitControls): void {
     motion = { x: start.x, z: start.z, yaw: start.yaw, speed: 0, drive: 0 };
     combo = COMBO_READY;
