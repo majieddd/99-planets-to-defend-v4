@@ -1656,3 +1656,4 @@ off at every pitch (tests/unit/labs/play-motion.test.ts). A key held with Ctrl, 
 its shortcut, Cmd going down lets go of the held keys, the slider heart's reach is read again when it changes while he
 plays, and leaving play gives the turntable back as it was. It stays a lab prototype, not the M1 commander controller,
 and Next is unchanged.
+2026-10-04. The expression-decal renderer and the anime-head WIP are shelved on branch `m1-anime-shelved`.
