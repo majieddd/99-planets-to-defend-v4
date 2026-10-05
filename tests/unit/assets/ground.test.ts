@@ -202,15 +202,53 @@ describe('measureGround', () => {
     expect(() => measureGround(doc, 'husk.glb')).toThrow("on node 'body' is skinned with WEIGHTS_0;");
   });
 
-  it('refuses a primitive with morph targets, whose weights move the vertices it measures', () => {
+  it('allows a face morph on a skinned body, which moves nothing near its ground contact, quantized as the build ships it', async () => {
+    // The leg's body stands from y 0 to 1.6; brows_up lifts its four upper corners 2 cm, as a face morph moves only the
+    // head. Before morphs were allowed at all, any target threw here.
+    const doc = new Document();
+    const { rig, prim } = leg(doc);
+    const lift = new Float32Array(24);
+    for (const corner of [4, 5, 6, 7]) lift[corner * 3 + 1] = 0.02;
+    prim.addTarget(doc.createPrimitiveTarget('brows_up').setAttribute('POSITION', accessor(doc, 'VEC3', lift)));
+    sceneOf(doc).addChild(rig);
+    expect(measureGround(doc, 'pip.glb')).toEqual({ asset: 0, nodes: [{ name: 'rig', empty: true, minY: 0 }] });
+    // The quantizer scales the target's deltas with the positions and moves the dequantization into the inverse bind
+    // matrices, and the rule reads the displacement through them in metres.
+    await doc.transform(quantize());
+    expect(measureGround(doc, 'pip.glb')).toEqual({ asset: 0, nodes: [{ name: 'rig', empty: true, minY: 0 }] });
+  });
+
+  it('refuses a morph target that moves a foot vertex, even sideways, naming the target, the count and how far', async () => {
+    const doc = new Document();
+    const { rig, prim } = leg(doc);
+    // Corner 0 is a foot corner on the ground: kick slides it 3 cm along z, which keeps its height but moves the contact.
+    const kick = new Float32Array(24);
+    kick[0 * 3 + 2] = 0.03;
+    prim.addTarget(doc.createPrimitiveTarget('kick').setAttribute('POSITION', accessor(doc, 'VEC3', kick)));
+    sceneOf(doc).addChild(rig);
+    const refusal = "pip.glb: primitive 0 of mesh 'body' on node 'body': morph target 'kick' moves 1 vertices within 5 mm of the ground contact by up to 30.0 mm";
+    expect(() => measureGround(doc, 'pip.glb')).toThrow(refusal);
+    await doc.transform(quantize());
+    expect(() => measureGround(doc, 'pip.glb')).toThrow("morph target 'kick' moves 1 vertices within 5 mm of the ground contact");
+  });
+
+  it('refuses a morph target that carries a higher vertex down to the ground, and a default weight outside 0 to 1', () => {
     const doc = new Document();
     const prim = box(doc, 0, 1);
-    const lift = accessor(doc, 'VEC3', new Float32Array(24));
-    prim.addTarget(doc.createPrimitiveTarget('lift').setAttribute('POSITION', lift));
-    sceneOf(doc).addChild(doc.createNode('nest').setMesh(doc.createMesh('nest').addPrimitive(prim)));
-    expect(() => measureGround(doc, 'nest.glb')).toThrow(
-      "nest.glb: primitive 0 of mesh 'nest' on node 'nest' has 1 morph target(s)",
-    );
+    // sag drops the box's upper corners by 0.998 m, to 2 mm over the ground, inside the 5 mm band.
+    const sag = new Float32Array(24);
+    for (const corner of [4, 5, 6, 7]) sag[corner * 3 + 1] = -0.998;
+    prim.addTarget(doc.createPrimitiveTarget('sag').setAttribute('POSITION', accessor(doc, 'VEC3', sag)));
+    const mesh = doc.createMesh('hem').addPrimitive(prim);
+    sceneOf(doc).addChild(doc.createNode('hem').setMesh(mesh));
+    expect(() => measureGround(doc, 'hem.glb')).toThrow("morph target 'sag' carries 4 vertices down to within 5 mm of the ground contact (to 0.0020 m)");
+    // At 0.99 m the corners stop 1 cm up, out of the band, and the target passes; a default weight past 1 would carry
+    // them further than the rule judged.
+    for (const corner of [4, 5, 6, 7]) sag[corner * 3 + 1] = -0.99;
+    prim.listTargets()[0]?.getAttribute('POSITION')?.setArray(sag);
+    expect(measureGround(doc, 'hem.glb').asset).toBe(0);
+    mesh.setWeights([1.5]);
+    expect(() => measureGround(doc, 'hem.glb')).toThrow("hem.glb: primitive 0 of mesh 'hem' on node 'hem': its mesh's default morph weight 1.5 is outside 0 to 1");
   });
 
   it('refuses a top-level empty with geometry under it that carries a rotation, and lets a marker turn', () => {

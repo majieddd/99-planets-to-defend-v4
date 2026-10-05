@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateAsset, fileFailures } from '../../../tools/assets/check.mjs';
+import { evaluateAsset, fileFailures, timedClips } from '../../../tools/assets/check.mjs';
 
 const budgets = {
   xeno: { tris: 9000, bones: 24, texture: 1024, ink: true, animations: ['idle', 'walk', 'attack'] },
@@ -68,6 +68,79 @@ describe('evaluateAsset', () => {
   it('skips textures and flags unknown families', () => {
     expect(evaluateAsset({ ...husk(), kind: 'texture' }, budgets, timings)).toEqual([]);
     expect(evaluateAsset({ ...husk(), family: 'nope' }, budgets, timings)).toEqual(["no budget for family 'nope'"]);
+  });
+});
+
+describe("morph targets and Pip's attack", () => {
+  const FACE = ['blink_L', 'blink_R', 'smile', 'brows_up', 'pucker'];
+  const commanders = {
+    commanders: { tris: 24000, bones: 32, texture: 1024, ink: true, animations: ['idle', 'run', 'attack'], morphs: FACE },
+    xeno: budgets.xeno,
+  };
+  const commanderTimings = { ...timings, commanders: { commander_pip: { attack: { duration: 0.85, strike: 0.34 } } } };
+  // Pip as the recipe build ships him: 23,999 triangles, under the commanders line, three 1024 px textures (the body and
+  // armour atlas and its emissive, and the head's own albedo on its second material), and his attack on his own timing.
+  const TEXTURE_1024 = { width: 1024, height: 1024, mime: 'image/webp' };
+  const ATTACK = { name: 'attack', duration: 0.85, loop: false, strike: 0.34, exportedDuration: 0.85 };
+  function pip(overrides: Record<string, unknown> = {}) {
+    return husk({
+      name: 'commander_pip',
+      family: 'commanders',
+      file: 'commanders/commander_pip.glb',
+      tris: 23999,
+      bones: 24,
+      textures: [TEXTURE_1024, TEXTURE_1024, TEXTURE_1024],
+      morphs: FACE,
+      animations: [
+        { name: 'idle', duration: 1.6, loop: true, strike: null, exportedDuration: 1.6 },
+        { name: 'run', duration: 0.7, loop: true, strike: null, exportedDuration: 0.7 },
+        ATTACK,
+      ],
+      ground: [{ node: null, minY: 0, sink: 0 }],
+      ...overrides,
+    });
+  }
+
+  it('passes the five face morphs on a commander, and fails any morph its family does not name', () => {
+    expect(evaluateAsset(pip(), commanders, timings)).toEqual([]);
+    expect(evaluateAsset(pip({ morphs: [...FACE, 'foot_curl'] }), commanders, timings)).toEqual([
+      "morph targets foot_curl not in the commanders budget's list (blink_L, blink_R, smile, brows_up, pucker)",
+    ]);
+    // A family that names no morphs takes none, and an entry that records none passes whatever its family allows.
+    expect(evaluateAsset(husk({ morphs: ['blink_L'] }), commanders, timings)).toEqual(["morph targets blink_L not in the xeno budget's list (none)"]);
+    expect(evaluateAsset(husk(), commanders, timings)).toEqual([]);
+  });
+
+  it("passes Pip on the triangle line and fails him over it; the texture line caps each texture's size, not their count", () => {
+    expect(evaluateAsset(pip(), commanders, commanderTimings)).toEqual([]);
+    expect(evaluateAsset(pip({ tris: 24001 }), commanders, commanderTimings)).toEqual(['tris 24001 > 24000']);
+    // The head texture is a third 1024 px texture, which the line allows; a larger one fails however few there are.
+    expect(evaluateAsset(pip({ textures: [{ width: 2048, height: 1024 }] }), commanders, commanderTimings)).toEqual(['texture 2048x1024 > 1024']);
+  });
+
+  it('requires every commander clip, with no exception left for a model whose attack once had not shipped', () => {
+    const idleAndRun = (pip().animations as { name: string }[]).filter((clip) => clip.name !== 'attack');
+    expect(evaluateAsset(pip({ animations: idleAndRun }), commanders, commanderTimings)).toEqual(["missing animation 'attack'"]);
+    expect(evaluateAsset(pip({ name: 'commander_bo', animations: idleAndRun }), commanders, commanderTimings)).toEqual(["missing animation 'attack'"]);
+  });
+
+  it("holds Pip's attack to his own entry in timings.json: duration, exported duration and strike", () => {
+    const off = (attack: Record<string, unknown>) => pip({ animations: [...(pip().animations as object[]).slice(0, 2), { ...ATTACK, ...attack }] });
+    expect(evaluateAsset(off({ strike: 0.3 }), commanders, commanderTimings)).toEqual(['attack strike 0.3 != timings 0.34']);
+    expect(evaluateAsset(off({ duration: 0.9, exportedDuration: 0.9 }), commanders, commanderTimings)).toEqual([
+      'attack duration 0.9 != timings 0.85',
+      'attack exported duration 0.900 != timings 0.85',
+    ]);
+    // Within one frame (1 / 30 s) of the contract passes, as the export's frame rounding needs.
+    expect(evaluateAsset(off({ strike: 0.35 }), commanders, commanderTimings)).toEqual([]);
+    // The real export: 0.85 s is 25.5 frames, and the GLB's clip ends at 25 frames, 0.8333 s, as the manifest records
+    // it; a clip a frame and a half short is out.
+    expect(evaluateAsset(off({ exportedDuration: 0.8333333134651184 }), commanders, commanderTimings)).toEqual([]);
+    expect(evaluateAsset(off({ exportedDuration: 0.8 }), commanders, commanderTimings)).toEqual(['attack exported duration 0.800 != timings 0.85']);
+    // The pass line names the contracts held; a model with no entry, or a texture, names none.
+    expect(timedClips(pip(), commanderTimings)).toEqual(['attack 0.85 s, strike 0.34 s']);
+    expect(timedClips(pip({ name: 'commander_bo' }), commanderTimings)).toEqual([]);
+    expect(timedClips({ ...pip(), kind: 'texture' }, commanderTimings)).toEqual([]);
   });
 });
 

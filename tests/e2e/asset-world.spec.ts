@@ -20,6 +20,7 @@ interface Root {
   entry: string;
   node: string | null;
   family: string;
+  zone: string;
   clip: string | null;
   position: [number, number, number];
 }
@@ -41,6 +42,27 @@ interface LabelReading {
   x: number;
   y: number;
   fontPx: number;
+}
+
+/** What `__P99__.play()` reads of the play prototype (labs/world/play.ts). */
+interface PlayReading {
+  on: boolean;
+  position: number[] | null;
+  tangent: number[] | null;
+  speed: number;
+  runWeight: number;
+  runTimeScale: number;
+  stride: { loopMetres: number; loopSeconds: number; clipSpeed: number } | null;
+  /** How far he stands outside the nearest member's reach, in metres (negative inside one). */
+  clearance: number | null;
+  yaw: number;
+  /** His swing: whether he is in one, the attack clip's time and weight, the clip's length, its strike, and strikes so far. */
+  attacking: boolean;
+  attackTime: number | null;
+  attackWeight: number;
+  attackSeconds: number | null;
+  strikeAt: number | null;
+  strikes: number;
 }
 
 const manifest = JSON.parse(readFileSync('public/assets/manifest.json', 'utf8')) as { assets: ManifestEntry[] };
@@ -66,17 +88,27 @@ function required(): string[] {
  * browser test's ground allowances, Asset World layout). The Kit's ground contract allows 5 mm of rounding. A
  * structure's lean follows its slope only so far, and its footprint's edges stray up to 4.4 cm from the ground (LEAN);
  * the kit's rocks and flora lean on the arc's slopes only as far as the Style Lab's scatter does; and a character stands
- * in its clip's opening pose, not the bind pose the contract measures (Bulwark's run opens with both feet off the ground).
+ * plumb in its clip's opening pose, not the bind pose the contract measures, so a character's float and sink are held
+ * apart. Its float may reach 5.5 cm: Bulwark's run opens with both feet off the ground, 3.8 cm up on the level
+ * clearing, and since Pip's attack member moved Bulwark's row 2.6 m further onto the slope it reads 5.24 cm at 18 m
+ * from the pole, where the ground falls away under his plumb stance. Its sink may reach 1 cm, a 1.5 cm limit with the
+ * contract: the deepest character reads 0.71 cm, Pip's attack member standing plumb on the slope 10.6 m out, while
+ * Pip's idle sank 1.69 cm and his face member 3.47 cm before the recipe's ground pass (the idle's sword tip in the
+ * ground). One allowance for both sides, checked on the size of the reading alone, had loosened sinking to the 6.0 cm
+ * limit only Bulwark's float needed, which passed both. Both stay far under the 15 to 26 cm by which misplaced roots
+ * once sank.
  */
 const CONTRACT_M = 0.005;
 const STRUCTURE_STRAY_M = 0.044;
 const KIT_STRAY_M = 0.025;
-const CLIP_STRAY_M = 0.04;
+const CLIP_FLOAT_M = 0.055;
+const CLIP_SINK_M = 0.01;
 
-function groundAllowance(member: (typeof MEMBERS)[number]): number {
-  if (member.clip) return CLIP_STRAY_M;
-  if (member.entry === 'verdant_kit') return KIT_STRAY_M;
-  return member.lean === LEAN.structure ? STRUCTURE_STRAY_M : 0;
+/** A member's allowance beyond the contract above its designed sink (float) and below it (sink), in metres. */
+function groundAllowance(member: (typeof MEMBERS)[number]): { float: number; sink: number } {
+  if (member.clip) return { float: CLIP_FLOAT_M, sink: CLIP_SINK_M };
+  const stray = member.entry === 'verdant_kit' ? KIT_STRAY_M : member.lean === LEAN.structure ? STRUCTURE_STRAY_M : 0;
+  return { float: stray, sink: stray };
 }
 
 function collectConsole(page: Page): { errors: string[]; warnings: string[] } {
@@ -94,6 +126,91 @@ async function open(page: Page, query: string): Promise<void> {
   await page.goto(`./labs/world.html${query}`);
   await page.waitForFunction(() => window.__P99__?.ready === true && window.__P99__?.page === 'world', undefined, { timeout: 180_000 });
 }
+
+/** The play recorder's state in the page (startRecording). */
+type Recorder = { playSamples: PlayReading[]; playStop: boolean; playMark: number };
+
+/**
+ * Starts reading play() on every frame in the page, since reads from the test, each a round trip to a page busy under
+ * SwiftShader, once let the whole 0.83 s swing pass between two of them. The first reading is taken at once. With
+ * `pressF`, F's keydown and keyup are dispatched in the same call, right after it, so the swing starts from the state
+ * recorded: pressed from the test once the recorder had started, F came a round trip later, while he ran on under the
+ * held key toward whatever stood ahead.
+ */
+async function startRecording(page: Page, pressF = false): Promise<void> {
+  await page.evaluate((press) => {
+    const recorder = window as unknown as Recorder;
+    recorder.playSamples = [(window.__P99__!['play'] as () => PlayReading)()];
+    recorder.playStop = false;
+    const tick = (): void => {
+      if (recorder.playStop) return;
+      recorder.playSamples.push((window.__P99__!['play'] as () => PlayReading)());
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    if (press) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF', key: 'f' }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyF', key: 'f' }));
+    }
+  }, pressF);
+}
+
+/** Stops the recorder and returns every reading it took. */
+async function stopRecording(page: Page): Promise<PlayReading[]> {
+  return page.evaluate(() => {
+    const recorder = window as unknown as Recorder;
+    recorder.playStop = true;
+    return recorder.playSamples;
+  });
+}
+
+/** Waits until the recorder has seen a swing begin and end, and, with `running`, him run again after it. */
+async function waitForSwing(page: Page, running: boolean): Promise<void> {
+  await page.waitForFunction(
+    (run) => {
+      const samples = (window as unknown as Recorder).playSamples;
+      const first = samples.findIndex((sample) => sample.attacking);
+      return first >= 0 && samples.slice(first).some((sample) => !sample.attacking && (!run || sample.runWeight > 0.5));
+    },
+    running,
+    { timeout: 60_000 },
+  );
+}
+
+/**
+ * The frames the recorder runs on past a click's or a drag's release to see whether it started a swing. The page's next
+ * frame takes an attack the release asked for, so a swing shows within a frame or two of it; five leave room to spare
+ * and cost a quarter of a second at SwiftShader's 20 frames a second.
+ */
+const SWING_SHOWS_WITHIN_FRAMES = 5;
+
+/** How long the click test holds its press, a fifth of PLAY_CLICK_MAX_SECONDS and about half an ordinary click, in ms. */
+const CLICK_HOLD_MS = 50;
+
+/** The page's event times of the click test's press and release, in ms (null until each arrives). */
+type ClickTimes = { down: number | null; up: number | null };
+
+/**
+ * Marks how many frames the recorder has read and waits until it has read `frames` more, or, with `untilSwing`, until it
+ * has seen a swing, if that comes first.
+ */
+async function waitFramesPast(page: Page, frames: number, untilSwing: boolean): Promise<void> {
+  await page.evaluate(() => {
+    const recorder = window as unknown as Recorder;
+    recorder.playMark = recorder.playSamples.length;
+  });
+  await page.waitForFunction(
+    ([count, swing]) => {
+      const recorder = window as unknown as Recorder;
+      return (swing && recorder.playSamples.some((sample) => sample.attacking)) || recorder.playSamples.length >= recorder.playMark + count;
+    },
+    [frames, untilSwing] as const,
+    { timeout: 60_000 },
+  );
+}
+
+/** How many swings a recording saw begin. */
+const swingsIn = (samples: readonly PlayReading[]): number => samples.filter((sample, index) => sample.attacking && !(samples[index - 1]?.attacking ?? false)).length;
 
 /** Where a world point lands on screen under a camera reading, in normalized device coordinates, and whether in front. */
 function project(camera: CameraReading, [x, y, z]: readonly number[]): { x: number; y: number; w: number } {
@@ -148,6 +265,8 @@ test.describe('the Asset World', () => {
         towers: call<CameraReading>('camera'),
         towerLabels: call<LabelReading[]>('labels').filter((label) => label.shown).map((label) => label.text),
         frameMs: call<number>('frameMs'),
+        // Pip's faces, read after frames have drawn, when every hull has re-pointed at its body's morph influences.
+        faces: call<{ name: string; blink: number; hullsShared: boolean }[]>('faces'),
         overview: null as CameraReading | null,
       };
       // The overview's camera, read and left within this call, so SwiftShader never draws the whole world: a frame of it
@@ -181,11 +300,18 @@ test.describe('the Asset World', () => {
       const record = manifest.assets.find((asset) => asset.name === entry)?.ground?.find((r) => r.node === node);
       expect(record, `the manifest has no ground record for member "${contact.name}" (entry "${entry}", node ${JSON.stringify(node)})`).toBeDefined();
       const height = fromCentre(contact.lowest) - fromCentre(contact.ground);
-      return { name: contact.name, off: height + record!.sink, limit: CONTRACT_M + groundAllowance(member!) };
+      const allowance = groundAllowance(member!);
+      return { name: contact.name, off: height + record!.sink, float: CONTRACT_M + allowance.float, sink: CONTRACT_M + allowance.sink };
     });
-    const unground = contacts.filter((contact) => Math.abs(contact.off) > contact.limit);
-    const worst = contacts.reduce((a, b) => (Math.abs(b.off) > Math.abs(a.off) ? b : a));
+    // Each side against its own limit: above the ground by the float, below it by the sink.
+    const limitOf = (contact: (typeof contacts)[number]) => (contact.off >= 0 ? contact.float : contact.sink);
+    const unground = contacts.filter((contact) => contact.off > contact.float || -contact.off > contact.sink);
+    const worst = contacts.reduce((a, b) => (Math.abs(b.off) / limitOf(b) > Math.abs(a.off) / limitOf(a) ? b : a));
+    const sinking = contacts.filter((contact) => contact.off < 0);
+    const deepest = sinking.length ? sinking.reduce((a, b) => (b.off < a.off ? b : a)) : null;
 
+    // The commanders' zone, left to right as placed: Pip (commander), the default, first, then Bulwark, the alternate.
+    const commanders = state.roots.filter((root) => root.zone === 'commanders').map((root) => root.name);
     const towers = state.roots.filter((root) => root.family === 'towers');
     const towersUnframed = towers.filter((root) => !inFrame(state.towers, root.position)).map((root) => root.name);
     const outside = state.roots.filter((root) => !inFrame(state.overview!, root.position)).map((root) => root.name);
@@ -194,9 +320,12 @@ test.describe('the Asset World', () => {
       `asset world [${test.info().project.name}]: assets ${state.assets}, look ${state.look}, opened ${state.focused} (${state.search}), ` +
       `placed ${state.placed.length} names covering ${need.length - missing.length} of ${need.length} required, missing ${JSON.stringify(missing)}, ` +
       `registry gaps ${JSON.stringify(gaps)}, clips no root loops ${JSON.stringify(unlooped)}, ${state.roots.length} roots, ` +
-      `ground: worst ${worst.name} ${(worst.off * 100).toFixed(2)} cm off its sink (limit ${(worst.limit * 100).toFixed(1)} cm), off their limit ${JSON.stringify(unground)}; ` +
+      `ground: nearest its limit ${worst.name} ${(worst.off * 100).toFixed(2)} cm off its sink (limit ${worst.off >= 0 ? '+' : '-'}${(limitOf(worst) * 100).toFixed(1)} cm), ` +
+      `deepest ${deepest ? `${deepest.name} ${(deepest.off * 100).toFixed(2)} cm (limit -${(deepest.sink * 100).toFixed(1)} cm)` : 'none'}, off their limit ${JSON.stringify(unground)}; ` +
       `ground offsets ${contacts.map((c) => `${c.name} ${(c.off * 100).toFixed(2)}`).join(', ')} cm; ` +
       `towers view unframed ${JSON.stringify(towersUnframed)}, labels ${JSON.stringify(state.towerLabels)}; outside the overview ${JSON.stringify(outside)}; ` +
+      `commanders ${JSON.stringify(commanders)}; ` +
+      `faces ${JSON.stringify(state.faces.map((face) => `${face.name} hulls ${face.hullsShared ? 'shared' : 'NOT shared'}`))}; ` +
       `frame interval ${state.frameMs.toFixed(0)} ms, ${log.errors.length} console errors`;
     console.log(line);
     expect(state.assets, line).toBe(true);
@@ -211,6 +340,10 @@ test.describe('the Asset World', () => {
     expect(towersUnframed, line).toEqual([]);
     expect(state.towerLabels, line).toEqual(['Bolt Sentinel', 'Mark I', 'Mark II', 'Mark III']);
     expect(outside, line).toEqual([]);
+    expect(commanders, line).toEqual(['pip_idle', 'pip_run', 'pip_face', 'pip_attack', 'bulwark_idle', 'bulwark_run', 'bulwark_attack']);
+    // Every Pip instance has its own face, and every one of their hulls follows its body's morphs, the copies' too.
+    expect(state.faces.map((face) => face.name), line).toEqual(['pip_idle', 'pip_run', 'pip_face', 'pip_attack']);
+    expect(state.faces.every((face) => face.hullsShared), line).toBe(true);
     // With no dials link the world opens on DEFAULT_DIALS, Painted-Anime-Inkline 4.0, the set the Style Lab opens on.
     expect(state.look, line).toBe('locked');
     expect(state.dials, line).toEqual(DEFAULT_DIALS);
@@ -353,9 +486,210 @@ test.describe('the Asset World', () => {
       expect(log.errors, line).toEqual([]);
     });
 
+    test('opens Play Pip from ?play=pip, walks him along the ground on a held key, and follows him', async ({ page }) => {
+      test.setTimeout(240_000);
+      const log = collectConsole(page);
+      await open(page, '?tier=low&play=pip');
+      const read = () =>
+        page.evaluate(() => {
+          const p99 = window.__P99__!;
+          const play = (p99['play'] as () => PlayReading)();
+          const surface = play.tangent ? (p99['surfaceAt'] as (x: number, z: number) => number[])(play.tangent[0]!, play.tangent[1]!) : null;
+          return { play, surface, target: (p99['camera'] as () => CameraReading)().target, search: location.search };
+        });
+      const start = await read();
+      // Checked before the key is held, so a play mode that never started fails here on its reading and the console,
+      // rather than on the minute's wait for a step below.
+      const startLine = `asset world play [${test.info().project.name}]: start ${JSON.stringify(start.play)}; address ${start.search}; console errors ${JSON.stringify(log.errors)}`;
+      expect(start.play.on, startLine).toBe(true);
+      // He comes out clear of every member's reach, read from the drawn bounds of the world as laid out.
+      expect(start.play.clearance, startLine).toBeGreaterThan(0);
+      // Held until he has covered half a metre, since SwiftShader's frames are slow and each moves him at most 1/20 s.
+      await page.keyboard.down('KeyW');
+      await page.waitForFunction(
+        (from) => {
+          const now = (window.__P99__!['play'] as () => PlayReading)().tangent;
+          return now !== null && Math.hypot(now[0]! - from[0]!, now[1]! - from[1]!) > 0.5;
+        },
+        start.play.tangent ?? [0, 0],
+        { timeout: 60_000 },
+      );
+      const held = await read();
+      await page.keyboard.up('KeyW');
+      const moved = Math.hypot(held.play.tangent![0]! - start.play.tangent![0]!, held.play.tangent![1]! - start.play.tangent![1]!);
+      const offGround = Math.hypot(...held.play.position!.map((value, i) => value - held.surface![i]!));
+      const followed = Math.hypot(...held.target.map((value, i) => value - start.target[i]!));
+      const line =
+        `asset world play [${test.info().project.name}]: moved ${moved.toFixed(2)} m at ${held.play.speed.toFixed(2)} m/s ` +
+        `(run weight ${held.play.runWeight.toFixed(2)}, run rate ${held.play.runTimeScale.toFixed(2)}), ${(offGround * 1000).toFixed(2)} mm off the ground, ` +
+        `camera target followed ${followed.toFixed(2)} m; run loop ${held.play.stride ? `${held.play.stride.loopMetres.toFixed(3)} m in ${held.play.stride.loopSeconds.toFixed(3)} s` : 'unread'}; ` +
+        `spawn clearance ${start.play.clearance?.toFixed(2)} m; address ${held.search}`;
+      console.log(line);
+      expect(start.search, line).toContain('play=pip');
+      expect(moved, line).toBeGreaterThan(0.5);
+      expect(held.play.speed, line).toBeGreaterThan(0);
+      expect(offGround, line).toBeLessThan(0.001);
+      expect(followed, line).toBeGreaterThan(0.1);
+      expect(held.play.stride, line).not.toBeNull();
+
+      // The attack: F with S held. He swings once, stops dead for the swing and keeps his facing, the clip reaches its
+      // strike, and once it ends he runs on under the held key. F is pressed in the call that starts the recorder. S turns
+      // him back toward the cameras, over the open clearing between his row and the kit's arc, more than 10 m clear, so
+      // the run after the swing does not depend on how far the walk above carried him toward his row: run on with W,
+      // toward the row, he came out of one swing 0.53 m from a member's reach, where S heads him away from the row.
+      await page.keyboard.down('KeyS');
+      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().runWeight > 0.5, undefined, { timeout: 60_000 });
+      await startRecording(page, true);
+      // Until the swing has come and gone and he runs again under the held key.
+      await waitForSwing(page, true);
+      const samples = await stopRecording(page);
+      await page.keyboard.up('KeyS');
+      const before = samples[0]!;
+      const first = samples.findIndex((sample) => sample.attacking);
+      const last = samples.length - 1 - [...samples].reverse().findIndex((sample) => sample.attacking);
+      const swing = samples.slice(first, last + 1);
+      const swingStart = swing[0]!;
+      const beforeSwing = samples[first - 1]!;
+      const atStrike = swing.find((sample) => (sample.attackTime ?? 0) >= (sample.strikeAt ?? Infinity));
+      const struck = swing.filter((sample) => (sample.attackTime ?? 0) >= (sample.strikeAt ?? Infinity));
+      const after = samples.slice(last + 1).find((sample) => sample.runWeight > 0.5)!;
+      const swings = swingsIn(samples);
+      const turnedDeg = Math.max(...swing.map((sample) => Math.abs(Math.atan2(Math.sin(sample.yaw - swingStart.yaw), Math.cos(sample.yaw - swingStart.yaw))))) * (180 / Math.PI);
+      const attackLine =
+        `asset world play attack [${test.info().project.name}]: ${samples.length} frames read; running at ${before.speed.toFixed(2)} m/s (run weight ${before.runWeight.toFixed(2)}, clearance ${before.clearance?.toFixed(2)} m), ` +
+        `F started ${swings} swing over ${swing.length} frames, from clip time ${swingStart.attackTime?.toFixed(3)} s of ${swingStart.attackSeconds?.toFixed(3)} s; ` +
+        `run weight ${beforeSwing.runWeight.toFixed(3)} on the frame before the swing and ${swingStart.runWeight.toFixed(3)} on its first, under a swing weight of ${swingStart.attackWeight.toFixed(3)}; ` +
+        `first frame at or past the strike ${atStrike ? `clip time ${atStrike.attackTime?.toFixed(3)} s (strike ${atStrike.strikeAt} s), weight ${atStrike.attackWeight.toFixed(2)}, speed ${atStrike.speed.toFixed(2)} m/s, strikes ${atStrike.strikes}` : 'none'}; ` +
+        `largest speed through the swing ${Math.max(...swing.map((sample) => sample.speed)).toFixed(2)} m/s from its first frame, turned at most ${turnedDeg.toFixed(2)} degrees; ` +
+        `last swing frame at clip time ${swing.at(-1)!.attackTime?.toFixed(3)} s, weight ${swing.at(-1)!.attackWeight.toFixed(3)}; ` +
+        `after the swing attacking ${after.attacking}, weight ${after.attackWeight.toFixed(2)}, run weight ${after.runWeight.toFixed(2)} at ${after.speed.toFixed(2)} m/s, ` +
+        `clearance ${after.clearance?.toFixed(2)} m, strikes ${after.strikes}`;
+      console.log(attackLine);
+      expect(before.attacking, attackLine).toBe(false);
+      expect(swings, attackLine).toBe(1);
+      // Within one 30 fps frame of the 0.85 s contract, the tolerance assets:check holds the export to: the exporter
+      // samples whole frames, so the clip is 25 frames, 0.833 s. toBeCloseTo(0.85, 1) let it be 0.05 s off.
+      expect(Math.abs(swingStart.attackSeconds! - 0.85), attackLine).toBeLessThanOrEqual(1 / 30);
+      expect(swingStart.strikeAt, attackLine).toBe(0.34);
+      // The trigger frame keeps the run's weight while the swing fades in over it: following his speed, zeroed on that
+      // frame, it dropped from 1 to 0 at once and showed the idle under the swing's first frame (blendRunWeight). The
+      // page caps a frame's step at 1/20 s, so the trigger frame always lands inside the 0.07 s fade in.
+      expect(swingStart.runWeight, attackLine).toBe(beforeSwing.runWeight);
+      // The clip reaches its strike at full weight; from the swing's first frame to its end he stands still, stopped dead
+      // on the frame that took F, facing as he did when the swing began.
+      expect(atStrike, attackLine).toBeDefined();
+      expect(atStrike!.attackWeight, attackLine).toBe(1);
+      expect(atStrike!.strikes, attackLine).toBe(1);
+      expect(struck.length, attackLine).toBeGreaterThan(0);
+      for (const sample of swing) expect(sample.speed, attackLine).toBe(0);
+      expect(turnedDeg, attackLine).toBe(0);
+      // One swing for one press, and the run back under the held key once it ended.
+      expect(after.attacking, attackLine).toBe(false);
+      expect(after.attackWeight, attackLine).toBe(0);
+      expect(after.strikes, attackLine).toBe(1);
+      expect(after.runWeight, attackLine).toBeGreaterThan(0.5);
+      expect(after.speed, attackLine).toBeGreaterThan(0);
+
+      // A left click on the canvas's centre swings once, as F does; he stands, W being up. The press and the release go
+      // through the DevTools protocol with timestamps CLICK_HOLD_MS apart. page.mouse.click sends the release only once
+      // Chromium has acknowledged the press, which SwiftShader's busy main thread can hold past PLAY_CLICK_MAX_SECONDS
+      // (0.25 s): the page then read a held press, started no swing, and the wait for one ran out its minute. The page's
+      // event.timeStamp carries the protocol's timestamps (measured: a release sent 402 ms after its press read a hold
+      // of 50.000 ms), so the hold the page measures is the one asked, however late the release arrives.
+      const canvas = (await page.locator('#stage canvas').boundingBox())!;
+      const centre = { x: canvas.x + canvas.width / 2, y: canvas.y + canvas.height / 2 };
+      await page.mouse.move(centre.x, centre.y);
+      await page.evaluate(() => {
+        const times: ClickTimes = { down: null, up: null };
+        (window as unknown as { clickTimes: ClickTimes }).clickTimes = times;
+        const stage = document.querySelector('#stage canvas')!;
+        stage.addEventListener('pointerdown', (event) => (times.down = event.timeStamp), { once: true });
+        stage.addEventListener('pointerup', (event) => (times.up = event.timeStamp), { once: true });
+      });
+      await startRecording(page);
+      const cdp = await page.context().newCDPSession(page);
+      const at = { x: centre.x, y: centre.y, button: 'left', clickCount: 1 } as const;
+      const pressedAt = Date.now() / 1000;
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...at, buttons: 1, timestamp: pressedAt });
+      // The release is sent no earlier than its timestamp, so the page never receives an event stamped in its future.
+      const early = pressedAt + CLICK_HOLD_MS / 1000 - Date.now() / 1000;
+      if (early > 0) await page.waitForTimeout(early * 1000);
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...at, buttons: 0, timestamp: pressedAt + CLICK_HOLD_MS / 1000 });
+      await cdp.detach();
+      // A click that starts no swing fails here with the hold the page measured, rather than in the minute's wait below.
+      await waitFramesPast(page, SWING_SHOWS_WITHIN_FRAMES, true);
+      const clickTimes = await page.evaluate(() => (window as unknown as { clickTimes: ClickTimes }).clickTimes);
+      const hold = clickTimes.down !== null && clickTimes.up !== null ? clickTimes.up - clickTimes.down : null;
+      const holdText = hold === null ? `unread (pointerdown at ${clickTimes.down}, pointerup at ${clickTimes.up})` : `${hold.toFixed(3)} ms`;
+      const started = await page.evaluate(() => (window as unknown as Recorder).playSamples.some((sample) => sample.attacking));
+      expect(started, `asset world play click [${test.info().project.name}]: no swing within ${SWING_SHOWS_WITHIN_FRAMES} frames of the release; the page measured a hold of ${holdText}`).toBe(true);
+      await waitForSwing(page, false);
+      const clicked = await stopRecording(page);
+      const clickLine =
+        `asset world play click [${test.info().project.name}]: ${clicked.length} frames read; a left click at the canvas centre (${centre.x}, ${centre.y}), ` +
+        `pressed for ${CLICK_HOLD_MS} ms by the protocol's timestamps and held ${holdText} by the page's event times, ` +
+        `started ${swingsIn(clicked)} swing; strikes ${clicked[0]!.strikes} before, ${clicked.at(-1)!.strikes} after`;
+      console.log(clickLine);
+      expect(hold, clickLine).not.toBeNull();
+      expect(Math.abs(hold! - CLICK_HOLD_MS), clickLine).toBeLessThan(1);
+      expect(clicked[0]!.attacking, clickLine).toBe(false);
+      expect(swingsIn(clicked), clickLine).toBe(1);
+      expect(clicked.at(-1)!.strikes - clicked[0]!.strikes, clickLine).toBe(1);
+
+      // A press, a 40 px move and a release are OrbitControls' orbit: the camera turns and no swing starts. The recorder
+      // runs on for SWING_SHOWS_WITHIN_FRAMES frames past the release, where a swing it started would show.
+      const cameraAt = () => page.evaluate(() => (window.__P99__!['camera'] as () => CameraReading)().position);
+      const cameraBefore = await cameraAt();
+      await startRecording(page);
+      await page.mouse.move(centre.x, centre.y);
+      await page.mouse.down();
+      await page.mouse.move(centre.x + 40, centre.y, { steps: 4 });
+      await page.mouse.up();
+      await waitFramesPast(page, SWING_SHOWS_WITHIN_FRAMES, false);
+      const dragged = await stopRecording(page);
+      const cameraAfter = await cameraAt();
+      const orbited = Math.hypot(...cameraAfter.map((value, i) => value - cameraBefore[i]!));
+      const dragLine =
+        `asset world play drag [${test.info().project.name}]: ${dragged.length} frames read; a 40 px drag from the canvas centre started ${swingsIn(dragged)} swings ` +
+        `(a frame attacking ${dragged.some((sample) => sample.attacking)}), strikes ${dragged[0]!.strikes} before, ${dragged.at(-1)!.strikes} after; ` +
+        `the camera moved ${orbited.toFixed(3)} m`;
+      console.log(dragLine);
+      expect(dragged.some((sample) => sample.attacking), dragLine).toBe(false);
+      expect(dragged.at(-1)!.strikes, dragLine).toBe(dragged[0]!.strikes);
+      // The 40 px drag asks OrbitControls for a 53 degree turn on this 270 px tall canvas (a drag the canvas's height is
+      // a whole turn), which the damping plays out over the frames after, so the camera moves metres by the time the
+      // recorder stops (about 4 m in recent runs). He stands, so the follow carries the camera nowhere: 5 cm is far
+      // above anything but the orbit and far below what the orbit gives.
+      expect(orbited, dragLine).toBeGreaterThan(0.05);
+      expect(log.errors, line).toEqual([]);
+    });
+
     // The owner follows the work on a phone; 375 x 667 is the iPhone SE and iPhone 8 viewport.
     test.describe('on a 375 x 667 phone', () => {
       test.use({ viewport: { width: 375, height: 667 }, hasTouch: true, isMobile: true });
+
+      test('shows the Attack button while Pip plays, and swings once for one tap on it', async ({ page }) => {
+        test.setTimeout(240_000);
+        const log = collectConsole(page);
+        await open(page, '?tier=low&play=pip');
+        // The button shows on a coarse pointer while he plays, so this touch context must show it.
+        const button = page.locator('#attack');
+        await expect(button).toBeVisible();
+        const box = (await button.boundingBox())!;
+        await startRecording(page);
+        await button.tap();
+        await waitForSwing(page, false);
+        const tapped = await stopRecording(page);
+        const line =
+          `asset world play tap [${test.info().project.name}]: Attack button ${Math.round(box.width)}x${Math.round(box.height)} at (${Math.round(box.x)}, ${Math.round(box.y)}); ` +
+          `${tapped.length} frames read; one tap started ${swingsIn(tapped)} swing; strikes ${tapped[0]!.strikes} before, ${tapped.at(-1)!.strikes} after; ` +
+          `${log.errors.length} console errors`;
+        console.log(line);
+        expect(tapped[0]!.attacking, line).toBe(false);
+        expect(swingsIn(tapped), line).toBe(1);
+        expect(tapped.at(-1)!.strikes - tapped[0]!.strikes, line).toBe(1);
+        expect(log.errors, line).toEqual([]);
+      });
 
       test('starts with the panel closed and the canvas clear, opens and closes the panel, and names the families', async ({ page }) => {
         test.setTimeout(240_000);
@@ -409,8 +743,9 @@ test.describe('the Asset World', () => {
         expect(layout.canvas, line).toEqual({ x: 0, y: 0, width: layout.viewport.width, height: layout.viewport.height });
         expect(share, line).toBeLessThanOrEqual(0.2);
         expect(layout.centreIsCanvas, line).toBe(true);
-        // On a phone the overview names the six families and leaves the members to their own views.
-        expect(layout.labels.filter((label) => label.kind === 'family'), line).toHaveLength(6);
+        // On a phone the overview names the six zones on seven placards (the commanders' zone hangs one under each
+        // commander's row, Pip's and Bulwark's) and leaves the members to their own views.
+        expect(layout.labels.filter((label) => label.kind === 'family'), line).toHaveLength(7);
         expect(layout.labels.filter((label) => label.kind === 'member'), line).toHaveLength(0);
         for (const label of layout.labels) expect(label.fontPx, `${label.text}: ${line}`).toBeGreaterThanOrEqual(12);
         expect(log.errors, line).toEqual([]);

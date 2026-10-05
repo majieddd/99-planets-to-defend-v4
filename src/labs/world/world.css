@@ -155,6 +155,83 @@
   color: var(--gold);
 }
 
+/* Play Pip (prototype). The hint names the controls in the top left, clear of the panel on the right and the banner in
+   the middle. The thumb pad shows only while playing on a touch screen, in the bottom left over the look chip, which it
+   hides then; 140 px across with a 60 px knob sits under an adult thumb, as a phone game's pad does. */
+.play-hint {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  max-width: min(360px, calc(100vw - 24px));
+  background: rgba(20, 22, 29, 0.9);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font: 400 12.5px/1.4 var(--font-body);
+  color: var(--paper);
+}
+
+.play-hint[hidden],
+.pad[hidden],
+.attack-button[hidden] {
+  display: none;
+}
+
+/* The attack button shows with the pad, on a touch screen while playing, in the bottom right under the other thumb and
+   level with the pad's centre. 88 px across is twice the 44 px least target and about a thumb pad's width, so the
+   thumb finds it without looking; the frame interval chip below it ends 45 px up, under the button's 82 px. */
+.attack-button {
+  position: fixed;
+  right: 24px;
+  bottom: calc(56px + (140px - 88px) / 2);
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline);
+  background: rgba(20, 22, 29, 0.6);
+  color: var(--paper);
+  font: 700 15px/1 var(--font-display);
+  letter-spacing: 0.04em;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.attack-button:active {
+  background: rgba(236, 232, 220, 0.75);
+  color: #14161d;
+}
+
+.pad {
+  position: fixed;
+  left: 24px;
+  bottom: 56px;
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline);
+  background: rgba(20, 22, 29, 0.45);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.pad-knob {
+  position: absolute;
+  left: 40px;
+  top: 40px;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: rgba(236, 232, 220, 0.75);
+  pointer-events: none;
+}
+
+.pad-shown .look {
+  visibility: hidden;
+}
+
 /* Phones. NARROW_SCREEN in labs/style/referenceBoard.ts is this same query, and it starts the panel closed at load; the
    rules below mirror the Style Lab's phone layout for its dials panel. Nothing here reaches 768 px and wider. */
 @media (max-width: 767px) {
@@ -268,7 +345,29 @@
   /* The open panel covers the banner and the look note rather than half covering them; panel.ts keeps panel-open on the
      body while it is open. */
   .panel-open .banner,
-  .panel-open .look {
+  .panel-open .look,
+  .panel-open .play-hint {
     visibility: hidden;
+  }
+
+  /* The hint keeps clear of the closed panel's "World" title in the top right, and the pad of the frame interval chip. */
+  .play-hint {
+    top: 8px;
+    left: 8px;
+    max-width: calc(100vw - 16px - 112px);
+    padding: 4px 8px;
+    font-size: 12px;
+    line-height: var(--chip-line);
+  }
+
+  .pad {
+    left: 16px;
+    bottom: calc(8px + var(--chip-line) + 10px + 16px);
+  }
+
+  /* Level with the pad's centre, in the corner the frame interval chip leaves free on a phone. */
+  .attack-button {
+    right: 16px;
+    bottom: calc(8px + var(--chip-line) + 10px + 16px + (140px - 88px) / 2);
   }
 }

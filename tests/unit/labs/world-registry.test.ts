@@ -1,21 +1,30 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { COMMANDER_LABELS } from '../../../src/labs/shared/commanders';
 import { FAMILY_STANDARD_BLEND, standardBlendFor } from '../../../src/render/assets/familyBlend';
 import {
   BULWARK_ROW_START,
+  CHARACTER_ROW_DEPTH,
+  CHARACTER_ROW_GAP,
   CHARACTER_SPACING,
   clipHasReason,
   CLIPS_NOT_SHOWN,
+  COMMANDER_ROW_GAP,
   coverageGaps,
   HUSK_ROW_START,
+  LEAN,
   MEMBERS,
   NON_PLACEABLE,
+  PIP_ROW_START,
   requiredPieces,
+  showableMembers,
+  THREE_QUARTER_TURN_DEG,
   toTangent,
   WORLD_REACH,
   ZONES,
   type CoverageManifest,
 } from '../../../src/labs/world/registry';
+import { memberOptions } from '../../../src/labs/world/panel';
 import { WORLD_CASTER_MARGIN, WORLD_SHADOW_HALF_WIDTH } from '../../../src/labs/world/sun';
 
 interface ShippedManifest extends CoverageManifest {
@@ -111,6 +120,8 @@ describe('the Asset World registry', () => {
   it('reads the placeables from the ground records: a whole-asset record covers the asset, otherwise each named node', () => {
     const find = (name: string) => manifest.assets.find((entry) => entry.name === name)!;
     expect(requiredPieces(find('bulwark'))).toEqual([]);
+    // Pip is placed whole, like Bulwark: his rig's top-level empty is covered by the whole-asset record.
+    expect(requiredPieces(find('commander_pip'))).toEqual([]);
     expect(requiredPieces(find('worldheart'))).toEqual([]);
     expect(requiredPieces(find('bolt_sentinel'))).toEqual(['bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
     expect([...requiredPieces(find('verdant_kit'))].sort()).toEqual([...find('verdant_kit').nodes].sort());
@@ -122,14 +133,32 @@ describe('the Asset World registry', () => {
     for (const m of MEMBERS) {
       const entry = manifest.assets.find((asset) => asset.name === m.entry)!;
       expect(m.family, m.name).toBe(entry.family);
-      expect(ZONES.some((zone) => zone.family === m.family), m.name).toBe(true);
+      expect(ZONES.some((zone) => zone.family === m.zone), m.name).toBe(true);
+      // Every member stands in its family's zone; Pip's no longer has one of its own beside Bulwark's.
+      expect(m.zone, m.name).toBe(m.family);
       if (m.clip) expect(entry.animations.map((clip) => clip.name), m.name).toContain(m.clip);
       if (typeof m.heartStage === 'number') expect(entry.nodes, m.name).toContain(`heart_stage_${String(m.heartStage).padStart(2, '0')}`);
     }
-    // The members the world shows: the Husk idle, walking and attacking, Bulwark idle, running and attacking, the three
-    // fixed heart stages and the slider's heart, and the three tower marks.
+    // The members the world shows: the Husk idle, walking and attacking, the commanders, the three fixed heart stages and
+    // the slider's heart, and the three tower marks.
     expect(MEMBERS.filter((m) => m.entry === 'husk').map((m) => m.clip)).toEqual(['idle', 'walk', 'attack']);
-    expect(MEMBERS.filter((m) => m.entry === 'bulwark').map((m) => m.clip)).toEqual(['idle', 'run', 'attack']);
+    // The commanders' zone: Pip (commander), the default, first, idle, running, a third idle whose face cycles the
+    // expression demo, and attacking; then Bulwark, the alternate, idle, running and attacking.
+    expect(ZONES.find((zone) => zone.family === 'commanders')?.label).toBe('Commanders');
+    expect(MEMBERS.filter((m) => m.zone === 'commanders').map((m) => [m.name, m.entry, m.clip, m.faceDemo, m.label, m.character])).toEqual([
+      ['pip_idle', 'commander_pip', 'idle', false, 'Idle', 'Pip (commander)'],
+      ['pip_run', 'commander_pip', 'run', false, 'Run', 'Pip (commander)'],
+      ['pip_face', 'commander_pip', 'idle', true, 'Face', 'Pip (commander)'],
+      ['pip_attack', 'commander_pip', 'attack', false, 'Attack', 'Pip (commander)'],
+      ['bulwark_idle', 'bulwark', 'idle', false, 'Idle', 'Bulwark'],
+      ['bulwark_run', 'bulwark', 'run', false, 'Run', 'Bulwark'],
+      ['bulwark_attack', 'bulwark', 'attack', false, 'Attack', 'Bulwark'],
+    ]);
+    expect(COMMANDER_LABELS.pip).toBe('Pip (commander)');
+    expect(MEMBERS.filter((m) => m.faceDemo).map((m) => m.name)).toEqual(['pip_face']);
+    // Only a zone shared by more than one character names them; the Husk's members name their clips alone.
+    expect(MEMBERS.filter((m) => m.character !== null).every((m) => m.zone === 'commanders')).toBe(true);
+    expect(ZONES.map((zone) => zone.family)).toEqual(['env', 'towers', 'nests', 'xeno', 'commanders', 'heart']);
     expect(MEMBERS.filter((m) => m.entry === 'worldheart').map((m) => m.heartStage)).toEqual([0, 5, 10, 'live']);
     expect(MEMBERS.filter((m) => m.entry === 'bolt_sentinel').map((m) => m.node)).toEqual(['bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
   });
@@ -151,13 +180,90 @@ describe('the Asset World registry', () => {
     expect(nearest, pair).toBeGreaterThanOrEqual(2.4);
   });
 
-  it('keeps 4 m between the Husk row and Bulwark row, so the two families read apart', () => {
+  it('stands Pip first on the level clearing after the Husk, then Bulwark, 4 m and 5 m apart, so the three read apart', () => {
     const husk = MEMBERS.filter((m) => m.entry === 'husk');
     const bulwark = MEMBERS.filter((m) => m.entry === 'bulwark');
+    const pip = MEMBERS.filter((m) => m.entry === 'commander_pip');
+    expect([HUSK_ROW_START, PIP_ROW_START]).toEqual([-6.4, 2.8]);
+    // Bulwark's row follows the end of Pip's, so its start comes from the rows' geometry, not a literal: 13 m while Pip
+    // had three members, and 15.6 m since his attack member joined them, with nothing here changed.
+    expect(BULWARK_ROW_START).toBeCloseTo(PIP_ROW_START + (pip.length - 1) * CHARACTER_SPACING + COMMANDER_ROW_GAP, 12);
+    expect([pip.length, BULWARK_ROW_START]).toEqual([4, expect.closeTo(15.6, 9)]);
     expect(husk[0]!.s).toBe(HUSK_ROW_START);
+    expect(pip[0]!.s).toBe(PIP_ROW_START);
     expect(bulwark[0]!.s).toBe(BULWARK_ROW_START);
-    expect(Math.min(...bulwark.map((m) => m.s)) - Math.max(...husk.map((m) => m.s))).toBeCloseTo(4, 12);
-    for (const row of [husk, bulwark]) for (let i = 1; i < row.length; i++) expect(row[i]!.s - row[i - 1]!.s).toBeCloseTo(CHARACTER_SPACING, 12);
+    // Left to right as the cameras see them: the Husk, Pip, then Bulwark.
+    expect(Math.min(...pip.map((m) => m.s)) - Math.max(...husk.map((m) => m.s))).toBeCloseTo(CHARACTER_ROW_GAP, 12);
+    expect(Math.min(...bulwark.map((m) => m.s)) - Math.max(...pip.map((m) => m.s))).toBeCloseTo(COMMANDER_ROW_GAP, 12);
+    expect([CHARACTER_ROW_GAP, COMMANDER_ROW_GAP]).toEqual([4, 5]);
+    // Pip's idle and run stand on the level clearing, inside 6 m of the pole, where the relief begins; his face member
+    // and his attack, which came last, stand past it, at 8 m and 10.6 m.
+    const clearing = pip.filter((member) => member.name === 'pip_idle' || member.name === 'pip_run');
+    expect(clearing.map((m) => m.name)).toEqual(['pip_idle', 'pip_run']);
+    for (const m of clearing) expect(Math.hypot(m.s, m.d), m.name).toBeLessThan(6);
+    expect(pip.filter((member) => !clearing.includes(member)).map((m) => [m.name, Math.hypot(m.s, m.d)])).toEqual([
+      ['pip_face', expect.closeTo(8, 9)],
+      ['pip_attack', expect.closeTo(10.6, 9)],
+    ]);
+    for (const row of [husk, bulwark, pip]) {
+      for (let i = 1; i < row.length; i++) expect(row[i]!.s - row[i - 1]!.s).toBeCloseTo(CHARACTER_SPACING, 12);
+      for (const m of row) expect([m.d, m.lean, m.turnDeg], m.name).toEqual([CHARACTER_ROW_DEPTH, LEAN.plumb, THREE_QUARTER_TURN_DEG]);
+    }
+  });
+
+  it('names a member put in ahead of its clip and leaves it out, so a clip that ships later needs one member and no other change', () => {
+    // The rule is tested on a manifest of its own: a copy of Bulwark's entry without his attack, beside his other
+    // members, as Pip's entry stood before his attack shipped.
+    const bulwark = manifest.assets.find((asset) => asset.name === 'bulwark')!;
+    const entry = { ...bulwark, name: 'early_commander', animations: bulwark.animations.filter((animation) => animation.name !== 'attack') };
+    const members = MEMBERS.filter((m) => m.entry === 'bulwark' && m.clip !== 'attack').map((m) => ({ ...m, name: `early_${m.clip}`, entry: entry.name }));
+    const early = { ...members[0]!, name: 'early_attack', label: 'Attack', clip: 'attack' };
+    const before: CoverageManifest = { assets: [entry] };
+    // Before the clip ships, the model's other members cover it, with no member and no CLIPS_NOT_SHOWN reason for it.
+    expect(coverageGaps(before, members)).toEqual([]);
+    // A member put in ahead of the clip is named, and the page leaves it out rather than stopping on a missing clip.
+    const earlyGaps = coverageGaps(before, [...members, early]);
+    expect(earlyGaps).toEqual([expect.stringContaining('member "early_attack" loops a clip "attack" that "early_commander" does not export')]);
+    expect(showableMembers(new Map([[entry.name, entry.animations.map((animation) => animation.name)]]), earlyGaps, [...members, early])).toEqual({ shown: members, unnamed: [] });
+    // The clip ships: the coverage check names exactly it, and one member that loops it closes the gap.
+    const shipped: CoverageManifest = { assets: [{ ...entry, animations: [...entry.animations, { name: 'attack' }] }] };
+    expect(coverageGaps(shipped, members)).toEqual([expect.stringContaining('"early_commander" has a clip "attack" that no Asset World member loops')]);
+    expect(coverageGaps(shipped, [...members, early])).toEqual([]);
+  });
+
+  it('builds every member the loaded models can show, and names any it leaves out that the coverage gaps do not', () => {
+    const loaded = new Map(manifest.assets.filter((asset) => asset.kind === 'model').map((asset) => [asset.name, asset.animations.map((animation) => animation.name)]));
+    expect(showableMembers(loaded, coverageGaps(manifest))).toEqual({ shown: [...MEMBERS], unnamed: [] });
+    // A GLB rebuilt without its run clip while the manifest still lists it: the coverage check, which reads the
+    // manifest, has nothing to say, so the member the page drops is named here. It used to drop out without a word.
+    const stale = new Map(loaded).set('commander_pip', loaded.get('commander_pip')!.filter((clip) => clip !== 'run'));
+    const dropped = showableMembers(stale, coverageGaps(manifest));
+    expect(dropped.shown).toEqual(MEMBERS.filter((m) => m.name !== 'pip_run'));
+    expect(dropped.unnamed).toEqual([expect.stringMatching(/^member "pip_run" loops a clip "run" that the loaded "commander_pip" model does not carry/)]);
+    // A model that is not among the loaded ones: each of its members is named.
+    const withoutNest = new Map(loaded);
+    withoutNest.delete('nest');
+    expect(showableMembers(withoutNest, []).unnamed).toEqual(['member "nest" is left out because its model "nest" is not among the loaded models']);
+    // A member the coverage gaps already name is left out with no second sentence.
+    const early = { ...MEMBERS.find((m) => m.name === 'pip_idle')!, name: 'pip_dance', label: 'Dance', clip: 'dance' };
+    expect(showableMembers(loaded, coverageGaps(manifest, [...MEMBERS, early]), [...MEMBERS, early])).toEqual({ shown: [...MEMBERS], unnamed: [] });
+  });
+
+  it("names each commander's members in the panel's member list by his name, and the Husk's by their clip alone", () => {
+    const options = memberOptions('commanders');
+    expect(options['Pip (commander) idle (pip_idle)']).toBe('pip_idle');
+    expect(options['Bulwark idle (bulwark_idle)']).toBe('bulwark_idle');
+    const commanders = MEMBERS.filter((m) => m.zone === 'commanders');
+    expect(Object.values(options)).toEqual(['', ...commanders.map((m) => m.name)]);
+    expect(options['Pip (commander) attack (pip_attack)']).toBe('pip_attack');
+    expect(Object.keys(memberOptions('xeno'))).toEqual(['Whole view', 'Idle (husk_idle)', 'Walk (husk_walk)', 'Attack (husk_attack)']);
+    // A family's only member has no label, and the list names it by its address.
+    expect(Object.keys(memberOptions('nests'))).toEqual(['Whole view', 'nest']);
+  });
+
+  it('fails a member standing in a zone ZONES does not list, by name', () => {
+    const astray = MEMBERS.map((m) => (m.name === 'pip_face' ? { ...m, zone: 'previews' } : m));
+    expect(coverageGaps(manifest, astray)).toEqual([expect.stringMatching(/member "pip_face" stands in zone "previews", which ZONES does not list/)]);
   });
 
   it('maps the view frame onto the tangent plane without stretching it', () => {

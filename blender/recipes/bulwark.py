@@ -20,44 +20,16 @@ chamfer faces take a warm light rim region, because Cycles pointiness on these s
 everywhere (median 0.546; the rims start at the 95th percentile, 0.58, measured), so the composite's curvature term
 lifts whole surfaces instead of edges. Each plate region also carries a painted warm cap on its upward faces
 (paint.add_cap): the key light painted in, as the Verdant kit paints its light crowns."""
-import dataclasses
 import math
 
-import bmesh
-import bpy
 from mathutils import Vector
 
 from lib import anim, export, geo, ink, paint, palette, rig, scene
+# The sculpted primitives and the plate family's colours, caps and paint style, which lib/charforge.py's armour shares.
+from lib.armour import (BRUSH_SCALE, CAP, CAPS, COLOURS, PLATE_DEG, PLATE_STYLE, RIM_KEY, bend_over, blade, chain, lerp, limb, loft,
+                        mirror_lon, place, plate, rows_mesh, solid, spow, sq_point, taper, upright, volume)
 from lib.ctx import AnimRecord, AssetRecord
 
-# The packed atlas holds about 130 texels per metre (measured after the paint UV pass; many small plate islands each
-# carry the pack margin). The brush tile's strokes are 12 to 26 of its 512 texels wide and one tile spans
-# 1 / BRUSH_SCALE metres, so 0.5 keeps the narrowest stroke about 6 bake texels wide.
-BRUSH_SCALE = 0.5
-# Neighbouring faces of the curved plates meet at 10 to 25 degrees and a one-segment chamfer meets both the face and the
-# rim at 45, so 40 rolls the light across each plate and keeps its chamfer as one crisp line.
-PLATE_DEG = 40.0
-
-# Recipe-local colours, picked by the worst ground rather than the Verdant one. Rendered without ink (front
-# three-quarter and third-person views pooled), the share of the figure at least 15 L* off the ground is 66% over
-# Verdant foliage (rendered L* 46), 65% over near-black #1c1b20 (10) and 99% over pale sand #e6dcc4 (88) with this
-# slate (albedo L* 44, rendered 27), and no mid plate tried raises the lowest of the three: round two's slate (L* 40)
-# left 56% over near-black, #6b7a90 (51) 56% over the greens. Light and mid grounds also have the runtime ink to carry
-# the silhouette; a dark ground has only value. The dark plate, silver trims and ivory keep their values, and the
-# groups stay apart (rendered medians 16, 27, 52 and 60).
-COLOURS = {
-    'plate': '#5a6a83', 'plate_dark': '#323c4f', 'plate_light': '#c2ccd8', 'enamel': '#ebe1ca', 'undersuit': '#22263a',
-    'rim': '#dacdb5', 'rim_enamel': '#fff4dc', 'blade': '#dce6f0',
-}
-# The painted key light: each plate colour's warm light counterpart on its upward faces. The slate's cap keeps round
-# two's step from its plate (14 L* lighter and warmer, in CIE Lab), so the lighter slate keeps the same key light.
-CAPS = {'plate': '#858e99', 'plate_dark': '#4c5566', 'plate_light': '#e0e5eb', 'enamel': '#fff7e4', 'rim': '#f0e6d0'}
-# The Verdant kit's stroke settings (breakup 0.5 lets whole strokes cross the edge, softness 0.03 keeps them crisp); a
-# threshold of 0.3 puts the edge a little above each form's horizon, so tops and upper flanks catch the key.
-CAP = {'threshold': 0.3, 'softness': 0.03, 'breakup': 0.5}
-# At PLAYER_STYLE's gain of 2 the curvature term adds almost nothing here (see the docstring); 3 lends every surface a
-# faint warm lift without flattening the plate groups, which the painted rims keep apart.
-BULWARK_STYLE = dataclasses.replace(palette.PLAYER_STYLE, curv_gain=3.0, edge_light=0.6, edge_tint=(1.0, 0.86, 0.66))
 # Next to the 0.34 m pauldrons round one's 0.25 m helm read as a pinhead from the gameplay camera, and readability at
 # distance beats a strict head count, so the helm is 12% larger (0.28 m). It grows about its base, so it rises and
 # widens instead of sinking into the gorget.
@@ -67,166 +39,6 @@ HELM_BASE_Z = 1.69
 # the head's outline from the side and from above; the brow's lift off the skull.
 CREST = (0.014, 0.14, 0.036)
 BROW = 1.07
-
-
-def _spow(value, exponent):
-    return math.copysign(abs(value) ** exponent, value)
-
-
-def _mesh(name, rows, closed, material):
-    """Quads between successive rows of points. A one-point row is a pole, closed by a fan of triangles, never by a
-    ring of zero-area quads. Rows run bottom to top and points counterclockwise seen from outside, so faces point out."""
-    bm = bmesh.new()
-    vrows = [[bm.verts.new(p) for p in row] for row in rows]
-    n = max(len(row) for row in rows)
-    for lo, hi in zip(vrows[:-1], vrows[1:]):
-        for i in range(n if closed else n - 1):
-            k = (i + 1) % n
-            if len(lo) == 1:
-                bm.faces.new((lo[0], hi[k], hi[i]))
-            elif len(hi) == 1:
-                bm.faces.new((lo[i], lo[k], hi[0]))
-            else:
-                bm.faces.new((lo[i], lo[k], hi[k], hi[i]))
-    mesh = bpy.data.meshes.new(name)
-    bm.to_mesh(mesh)
-    bm.free()
-    if material is not None:
-        mesh.materials.append(material)
-    return scene.link(bpy.data.objects.new(name, mesh))
-
-
-def _sq_point(radii, e_v, e_h, lon, lat):
-    ring = max(math.cos(lat), 0.0) ** e_v
-    return Vector((radii[0] * ring * _spow(math.cos(lon), e_h), radii[1] * ring * _spow(math.sin(lon), e_h),
-                   radii[2] * _spow(math.sin(lat), e_v)))
-
-
-def _place(ob, location, rotation):
-    ob.location = location
-    ob.rotation_euler = rotation
-    return ob
-
-
-def _chain(*deforms):
-    def deform(p):
-        for fn in deforms:
-            if fn is not None:
-                p = fn(p)
-        return p
-    return deform
-
-
-def _taper(half, bottom, top):
-    """Scales x and y linearly with z, from `bottom` at -half to `top` at +half."""
-    def deform(p):
-        s = bottom + (top - bottom) * (p.z / half + 1.0) / 2.0
-        return Vector((p.x * s, p.y * s, p.z))
-    return deform
-
-
-def _bend_over(radius, lift=0.0):
-    """Wraps a shape laid along y over a circle of `radius` in the yz plane (centre at z = -radius)."""
-    def deform(p):
-        a = p.y / radius
-        r = radius + p.z + lift
-        return Vector((p.x, r * math.sin(a), r * math.cos(a) - radius))
-    return deform
-
-
-def volume(name, radii, e_v=1.0, e_h=1.0, nu=16, nv=10, deform=None, material=None, location=(0, 0, 0), rotation=(0, 0, 0)):
-    """A closed superquadric: an exponent below 1 squares that section toward a rounded box, 1 keeps it elliptic."""
-    rows = []
-    for j in range(nv + 1):
-        lat = -math.pi / 2 + math.pi * j / nv
-        row = [_sq_point(radii, e_v, e_h, -math.pi + 2 * math.pi * i / nu, lat) for i in range(1 if j in (0, nv) else nu)]
-        rows.append([deform(p) for p in row] if deform else row)
-    return _place(_mesh(name, rows, True, material), location, rotation)
-
-
-def _solid(ob, thickness, bevel=True):
-    """Thickens a plate inward. A plate region names its rim region (see _regions): the rim and chamfer faces take it,
-    which paints the warm edge line."""
-    mat = ob.data.materials[0] if ob.data.materials else None
-    rim = bpy.data.materials.get(mat['bulwark_rim']) if mat is not None and 'bulwark_rim' in mat else None
-    if rim is not None:
-        ob.data.materials.append(rim)
-    geo.modifier(ob, 'SOLIDIFY', thickness=thickness, offset=-1.0, use_even_offset=True, use_rim=True,
-                 material_offset_rim=1 if rim is not None else 0)
-    if bevel:
-        # Under half the thickness, so the two rim chamfers never meet (they would leave zero-area faces).
-        geo.modifier(ob, 'BEVEL', width=thickness * 0.3, segments=1, limit_method='ANGLE', angle_limit=math.radians(55),
-                     material=1 if rim is not None else -1)
-    return ob
-
-
-def plate(name, radii, lon, lat, thickness, e_v=1.0, e_h=1.0, nu=12, nv=3, deform=None, material=None,
-          location=(0, 0, 0), rotation=(0, 0, 0), bevel=True):
-    """A curved plate cut from a superquadric between longitudes and latitudes in degrees (lon 0 is +x, -90 the front).
-    A latitude of 90 closes it to a pole: a dome."""
-    lon0, lon1 = (math.radians(a) for a in lon)
-    lat0, lat1 = (math.radians(a) for a in lat)
-    closed = abs(lon1 - lon0 - 2 * math.pi) < 1e-6
-    rows = []
-    for j in range(nv + 1):
-        la = lat0 + (lat1 - lat0) * j / nv
-        if abs(la - math.pi / 2) < 1e-6:
-            row = [Vector((0.0, 0.0, radii[2]))]
-        else:
-            row = [_sq_point(radii, e_v, e_h, lon0 + (lon1 - lon0) * i / nu, la) for i in range(nu if closed else nu + 1)]
-        rows.append([deform(p) for p in row] if deform else row)
-    return _solid(_place(_mesh(name, rows, closed, material), location, rotation), thickness, bevel)
-
-
-def loft(name, sections, lon, thickness, e_h=1.0, nu=12, material=None, location=(0, 0, 0), rotation=(0, 0, 0), bevel=True):
-    """A plate lofted through superelliptic arcs (z, rx, ry) listed bottom to top; a 360 degree span closes it."""
-    lon0, lon1 = (math.radians(a) for a in lon)
-    closed = abs(lon1 - lon0 - 2 * math.pi) < 1e-6
-    angles = [lon0 + (lon1 - lon0) * i / nu for i in range(nu if closed else nu + 1)]
-    rows = [[Vector((rx * _spow(math.cos(a), e_h), ry * _spow(math.sin(a), e_h), z)) for a in angles] for z, rx, ry in sections]
-    return _solid(_place(_mesh(name, rows, closed, material), location, rotation), thickness, bevel)
-
-
-def _upright(ob, a, b):
-    """Lays a part built along +z between points a and b with +z toward the higher one, so its local y stays near world
-    y (the back): turning +z onto a downward bone is a half turn about an arbitrary axis."""
-    a, b = Vector(a), Vector(b)
-    lo, hi = (a, b) if a.z <= b.z else (b, a)
-    ob.rotation_euler = Vector((0, 0, 1)).rotation_difference(hi - lo).to_euler()
-    ob.location = (lo + hi) / 2
-    return ob
-
-
-def limb(name, a, b, ra, rb, e_v=0.4, e_h=1.0, nu=12, nv=8, deform=None, material=None):
-    """A tube with rounded ends from a (radius ra) to b (radius rb)."""
-    a, b = Vector(a), Vector(b)
-    half = (b - a).length / 2
-    lo_r, hi_r = (ra, rb) if a.z <= b.z else (rb, ra)
-    ob = volume(name, (1.0, 1.0, half), e_v, e_h, nu, nv, deform=_chain(_taper(half, lo_r, hi_r), deform), material=material)
-    return _upright(ob, a, b)
-
-
-def lerp(a, b, t):
-    return Vector(a).lerp(Vector(b), t)
-
-
-def blade(name, base, length, half_width, half_thick, material, sections=8):
-    """A hexagonal-section blade along -y from `base`: flat faces on both sides carry the fuller, edges up and down,
-    and the last stretch narrows to the point."""
-    base = Vector(base)
-    rows = [[base.copy()]]
-    for k in range(sections):
-        s = k / (sections - 1) * 0.86
-        w = half_width * (1.0 - 0.1 * s) * (1.0 if s < 0.7 else (1.0 - s) / 0.3)
-        hexagon = [(0, w), (-half_thick, 0.35 * w), (-half_thick, -0.35 * w), (0, -w), (half_thick, -0.35 * w), (half_thick, 0.35 * w)]
-        rows.append([Vector((base.x + x, base.y - length * s, base.z + z)) for x, z in hexagon])
-    rows.append([Vector((base.x, base.y - length, base.z))])
-    return _mesh(name, rows, True, material)
-
-
-def mirror_lon(lon, s):
-    """A longitude range for side s (+1 left, -1 right), mirrored across x."""
-    return lon if s > 0 else (180.0 - lon[1], 180.0 - lon[0])
 
 
 def _regions():
@@ -244,7 +56,7 @@ def _regions():
     rim = paint.add_cap(palette.region('bulwark_rim', c['rim']), CAPS['rim'], **CAP)
     rim_enamel = palette.region('bulwark_rim_enamel', c['rim_enamel'])
     for key in ('plate', 'plate_dark', 'plate_light', 'enamel'):
-        r[key]['bulwark_rim'] = (rim_enamel if key == 'enamel' else rim).name
+        r[key][RIM_KEY] = (rim_enamel if key == 'enamel' else rim).name
         paint.add_cap(r[key], CAPS[key], **CAP)
     return r
 
@@ -293,11 +105,11 @@ def parts(arm, r):
             p = Vector((p.x, p.y - 0.022 * max(0.0, 1.0 - abs(p.x) / 0.15) ** 2, p.z))
         return p
 
-    c_deform = _chain(_taper(c_half, 0.72, 1.08), keel)
+    c_deform = chain(taper(c_half, 0.72, 1.08), keel)
     add(volume('b_cuirass', c_radii, c_ev, c_eh, 24, 14, deform=c_deform, material=r['plate'], location=c_centre), 'chest', 1.2, 'round')
 
     def on_cuirass(scale, lon, lat):
-        p = _sq_point(c_radii, c_ev, c_eh, math.radians(lon), math.radians(lat))
+        p = sq_point(c_radii, c_ev, c_eh, math.radians(lon), math.radians(lat))
         return c_deform(Vector((p.x * scale, p.y * scale, p.z * scale)))
 
     def panel_half(la):
@@ -308,14 +120,14 @@ def parts(arm, r):
         la = 4 + (46 - 4) * j / 6
         w = panel_half(la)
         rows.append([on_cuirass(1.04, -90 - w + 2 * w * i / 8, la) for i in range(9)])
-    add(_solid(_place(_mesh('b_chestpanel', rows, False, r['enamel']), c_centre, (0, 0, 0)), 0.016), 'chest', 0.9)
+    add(solid(place(rows_mesh('b_chestpanel', rows, False, r['enamel']), c_centre, (0, 0, 0)), 0.016), 'chest', 0.9)
     for side in (-1, 1):
         rows = []
         for j in range(5):
             la = 4 + (40 - 4) * j / 4
             centre = -90 + side * (panel_half(la) + 6)  # a cyan channel along each edge of the V
             rows.append([on_cuirass(1.035, centre - 3 + 3 * i, la) for i in range(3)])
-        add(_solid(_place(_mesh(f'b_channel{side:+d}', rows, False, r['glow']), c_centre, (0, 0, 0)), 0.012, bevel=False), 'chest', 0.0)
+        add(solid(place(rows_mesh(f'b_channel{side:+d}', rows, False, r['glow']), c_centre, (0, 0, 0)), 0.012, bevel=False), 'chest', 0.0)
     add(volume('b_backpack', (0.14, 0.06, 0.13), 0.5, 0.5, 16, 8, material=r['plate_dark'], location=(0, 0.177, 1.45)), 'chest', 1.0, 'round')
     for side in (-1, 1):
         add(volume(f'b_vent{side:+d}', (0.013, 0.008, 0.065), 0.4, 0.4, 8, 6, material=r['glow'], location=(side * 0.06, 0.235, 1.45)), 'chest', 0.0, 'round')
@@ -344,7 +156,7 @@ def parts(arm, r):
 
     add(helm_plate('b_mask', 1.07, (-165, -15), (-66, -9), 0.018, r['plate_light'], nv=4, deform=mask_keel), 'head', 0.9)
     add(helm_plate('b_nape', 1.08, (15, 165), (-74, -30), 0.016, r['plate_dark'], nv=3), 'head', 0.9)
-    crest = volume('b_crest', tuple(x * hs for x in CREST), 0.5, 0.6, 10, 12, deform=_bend_over(s_radii[2], 0.008 * hs),
+    crest = volume('b_crest', tuple(x * hs for x in CREST), 0.5, 0.6, 10, 12, deform=bend_over(s_radii[2], 0.008 * hs),
                    material=r['enamel'], location=s_centre + Vector((0, 0, s_radii[2])))
     add(crest, 'head', 0.9, 'round')
     for side in (-1, 1):
@@ -376,7 +188,7 @@ def parts(arm, r):
         add(volume(f'b_fan.{side}', (0.013, 0.064, 0.07), 0.5, 0.5, 10, 6, material=r['plate_light'], location=fa_h + Vector((s * 0.078, 0.014, 0.0))), f'forearm.{side}', 0.8, 'round')
         add(limb(f'b_vambrace.{side}', lerp(fa_h, fa_t, 0.12), lerp(fa_h, fa_t, 0.8), 0.074, 0.09, e_v=0.35, material=r['plate']), f'forearm.{side}', 1.0, 'round')
         cuff = loft(f'b_cuff.{side}', [(-0.045, 0.09, 0.09), (0.0, 0.104, 0.104), (0.045, 0.124, 0.124)], (-180, 180), 0.016, 1.0, 16, r['plate_light'])
-        add(_upright(cuff, lerp(fa_h, fa_t, 0.98), lerp(fa_h, fa_t, 0.66)), f'forearm.{side}', 1.0)
+        add(upright(cuff, lerp(fa_h, fa_t, 0.98), lerp(fa_h, fa_t, 0.66)), f'forearm.{side}', 1.0)
         fist_c = lerp(hd_h, hd_t, 0.45)
         add(volume(f'b_fist.{side}', (0.062, 0.068, 0.074), 0.55, 0.55, 12, 8, material=r['plate_dark'], location=fist_c), f'hand.{side}', 0.9, 'round')
         add(volume(f'b_knuckle.{side}', (0.025, 0.06, 0.038), 0.5, 0.5, 10, 6, material=r['plate_light'], location=fist_c + Vector((s * 0.057, -0.004, -0.006))), f'hand.{side}', 0.6, 'round')
@@ -387,11 +199,11 @@ def parts(arm, r):
         x = th_t.x
         add(limb(f'b_thigh.{side}', th_h, th_t, 0.096, 0.074, material=r['suit']), f'thigh.{side}', 0.9, 'round')
         cuisse = loft(f'b_cuisse.{side}', [(-0.16, 0.098, 0.095), (0.0, 0.112, 0.108), (0.15, 0.117, 0.113)], mirror_lon((-170, 75), s), 0.016, 0.9, 12, r['plate'])
-        add(_upright(cuisse, lerp(th_h, th_t, 0.88), lerp(th_h, th_t, 0.2)), f'thigh.{side}', 1.0)
+        add(upright(cuisse, lerp(th_h, th_t, 0.88), lerp(th_h, th_t, 0.2)), f'thigh.{side}', 1.0)
         # The rear cuisse closes the back of the thigh, where the undersuit showed; both its edges tuck under the front
         # cuisse, which stands 7 mm prouder.
         rear = loft(f'b_rearcuisse.{side}', [(-0.15, 0.092, 0.089), (0.0, 0.105, 0.101), (0.14, 0.11, 0.106)], mirror_lon((50, 200), s), 0.014, 0.9, 8, r['plate'])
-        add(_upright(rear, lerp(th_h, th_t, 0.86), lerp(th_h, th_t, 0.22)), f'thigh.{side}', 0.9)
+        add(upright(rear, lerp(th_h, th_t, 0.86), lerp(th_h, th_t, 0.22)), f'thigh.{side}', 0.9)
         # Tassets ride the thighs, not the hips, so a swinging leg carries its plate instead of passing through it. They
         # grow deeper rather than wider: the hanging cuffs already cross them by 8 mm in the bind pose (the guard lifts
         # the forearms 18 to 21 cm clear), and a wider tasset would bury more of each cuff.
@@ -404,7 +216,7 @@ def parts(arm, r):
         add(volume(f'b_wing.{side}', (0.014, 0.07, 0.08), 0.5, 0.5, 10, 6, material=r['plate_light'], location=sh_h + Vector((s * 0.094, 0.004, 0.0))), f'shin.{side}', 0.8, 'round')
 
         def calf(p):
-            if p.y > 0:  # the frame is upright (see _upright), so +y is the back of the leg
+            if p.y > 0:  # the frame is upright (see upright), so +y is the back of the leg
                 p = Vector((p.x, p.y * (1.0 + 0.3 * max(0.0, 1.0 - abs(p.z - 0.09) / 0.16)), p.z))
             return p
 
@@ -418,12 +230,12 @@ def parts(arm, r):
             row = []
             for i in range(9):
                 a = math.radians(-90 - half + 2 * half * i / 8)
-                row.append(Vector((rx * _spow(math.cos(a), 0.9), ry * _spow(math.sin(a), 0.9) - keel * (1 - abs(i - 4) / 4), z)))
+                row.append(Vector((rx * spow(math.cos(a), 0.9), ry * spow(math.sin(a), 0.9) - keel * (1 - abs(i - 4) / 4), z)))
             rows.append(row)
-        shinplate = _solid(_mesh(f'b_shinplate.{side}', rows, False, r['enamel']), 0.013)
-        add(_upright(shinplate, lerp(sh_h, sh_t, 0.88), lerp(sh_h, sh_t, 0.2)), f'shin.{side}', 0.8, angle=16.0)
+        shinplate = solid(rows_mesh(f'b_shinplate.{side}', rows, False, r['enamel']), 0.013)
+        add(upright(shinplate, lerp(sh_h, sh_t, 0.88), lerp(sh_h, sh_t, 0.2)), f'shin.{side}', 0.8, angle=16.0)
         ankle = loft(f'b_ankle.{side}', [(-0.03, 0.09, 0.094), (0.0, 0.081, 0.085), (0.03, 0.074, 0.078)], (-180, 180), 0.013, 1.0, 14, r['plate_light'])
-        add(_upright(ankle, lerp(sh_h, sh_t, 0.96), lerp(sh_h, sh_t, 0.82)), f'shin.{side}', 0.9)
+        add(upright(ankle, lerp(sh_h, sh_t, 0.96), lerp(sh_h, sh_t, 0.82)), f'shin.{side}', 0.9)
 
         def sole(p):
             return Vector((p.x, p.y, max(p.z, -0.07)))  # a flat sole on the ground plane
@@ -465,9 +277,9 @@ def parts(arm, r):
             rows.append(row)
         return rows
 
-    add(_solid(_mesh('b_shield', shield_rows(0.0, 0.0), False, r['plate']), 0.04), 'socket.L', 1.3)
+    add(solid(rows_mesh('b_shield', shield_rows(0.0, 0.0), False, r['plate']), 0.04), 'socket.L', 1.3)
     # The face stands 12 mm proud and is 14 mm thick, so it sinks 2 mm into the body: no gap and no coplanar faces.
-    add(_solid(_mesh('b_shieldface', shield_rows(0.012, 0.045), False, r['enamel']), 0.014), 'socket.L', 0.8)
+    add(solid(rows_mesh('b_shieldface', shield_rows(0.012, 0.045), False, r['enamel']), 0.014), 'socket.L', 0.8)
     emblem_r, zc = radius + 0.024, 1.12
     rows = []
     for j in range(7):
@@ -480,7 +292,7 @@ def parts(arm, r):
                      for a in ((-half + 2 * half * i / 4) / emblem_r for i in range(5))])
     # The emblem stands 12 mm proud of the face and is 14 mm thick, so it too sinks 2 mm; 12 mm thick, its back lay
     # exactly on the face.
-    add(_solid(_mesh('b_emblem', rows, False, r['glow']), 0.014, bevel=False), 'socket.L', 0.0)
+    add(solid(rows_mesh('b_emblem', rows, False, r['glow']), 0.014, bevel=False), 'socket.L', 0.0)
     add(plate('b_boss', (0.065, 0.065, 0.036), (-180, 180), (0, 90), 0.015, 0.9, 0.9, 14, 3, material=r['plate_light'],
               location=(axis_x + radius + 0.008, y0, 0.8), rotation=(0, math.pi / 2, 0)), 'socket.L', 0.7)
     return out
@@ -576,7 +388,7 @@ def build(ctx):
     arm = rig.humanoid('bulwark_rig')
     mesh = rig.bind_rigid(arm, parts(arm, r), 'bulwark')
     paint.paint([mesh], name='bulwark', out_dir=ctx.bake_dir('commanders'), textures_dir=ctx.textures, size=1024,
-                style=BULWARK_STYLE, ao_distance=0.18, brush_scale=BRUSH_SCALE, emissive_strength=4.0)
+                style=PLATE_STYLE, ao_distance=0.18, brush_scale=BRUSH_SCALE, emissive_strength=4.0)
     idle = anim.make_action(arm, 'idle', idle_keys(), loc_bones=('hips',))
     run = anim.make_action(arm, 'run', run_keys(), loc_bones=('hips',))
     attack = anim.make_action(arm, 'attack', attack_keys(strike_frame, end_frame), loc_bones=('hips',))

@@ -1,0 +1,112 @@
+{
+  "name": "commander_pip",
+  "family": "commanders",
+  "file": "commanders/commander_pip.glb",
+  "kind": "model",
+  "recipe": "commander_pip",
+  "nodes": [
+    "commander_rig",
+    "commander_body",
+    "commander_armour"
+  ],
+  "animations": [
+    {
+      "name": "idle",
+      "duration": 1.6,
+      "loop": true,
+      "strike": null
+    },
+    {
+      "name": "run",
+      "duration": 0.7,
+      "loop": true,
+      "strike": null
+    },
+    {
+      "name": "attack",
+      "duration": 0.85,
+      "loop": false,
+      "strike": 0.34
+    }
+  ],
+  "tris": 23999,
+  "notes": {
+    "source": "blender/sources/charforge/pip.glb",
+    "bones": 24,
+    "morphs": [
+      "blink_L",
+      "blink_R",
+      "smile",
+      "brows_up",
+      "pucker"
+    ],
+    "height_m": 1.782,
+    "decimation": {
+      "after_cull": 61490,
+      "head_source_tris": 13253,
+      "pass1": 23252,
+      "final": 17439,
+      "head_tris": 7493
+    },
+    "morph_transfer": {
+      "blink_L": {
+        "source_max_mm": 26.9,
+        "body_max_mm": 26.9
+      },
+      "blink_R": {
+        "source_max_mm": 27.0,
+        "body_max_mm": 27.0
+      },
+      "smile": {
+        "source_max_mm": 8.7,
+        "body_max_mm": 8.7
+      },
+      "brows_up": {
+        "source_max_mm": 12.4,
+        "body_max_mm": 12.1
+      },
+      "pucker": {
+        "source_max_mm": 8.5,
+        "body_max_mm": 8.5
+      }
+    },
+    "attack_checks": {
+      "sword_shield_overlaps": 0,
+      "blade_body_overlaps": 0,
+      "frames_crossing_shield": [],
+      "frames_blade_in_body": [],
+      "min_z": -0.0,
+      "boot_shift_mm": 0.0,
+      "strike_blade_tip": {
+        "z": 0.255,
+        "y": -1.12,
+        "x": 0.094
+      }
+    },
+    "clip_ground": {
+      "idle": {
+        "retargeted_boot_min_z": -0.001,
+        "retargeted_sword_min_z": -0.0338,
+        "offset_m": 0.001,
+        "sword_turn_deg": 4.63,
+        "boot_min_z": 0.0,
+        "sword_min_z": 0.01,
+        "min_z": 0.0
+      },
+      "run": {
+        "retargeted_boot_min_z": -0.0176,
+        "retargeted_sword_min_z": 0.5135,
+        "offset_m": 0.0176,
+        "sword_turn_deg": 0.0,
+        "boot_min_z": -0.0,
+        "sword_min_z": 0.5311,
+        "min_z": -0.0
+      },
+      "attack": {
+        "offset_m": 0.0,
+        "min_z": -0.0
+      }
+    }
+  },
+  "placeables": []
+}

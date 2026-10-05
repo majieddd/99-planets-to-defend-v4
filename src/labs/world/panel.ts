@@ -2,7 +2,7 @@ import GUI, { type Controller } from 'lil-gui';
 import type { TierName } from '../../render/quality';
 import { NARROW_SCREEN } from '../style/referenceBoard';
 import { HEART_STAGES } from './layout';
-import { MEMBERS, ZONES } from './registry';
+import { MEMBERS, ZONES, type WorldMember } from './registry';
 import { CHARACTER_FAMILIES, CHARACTERS, OVERVIEW } from './views';
 
 const TITLE = 'Asset World';
@@ -23,10 +23,13 @@ export interface WorldPanelState {
   speed: number;
   paused: boolean;
   tier: TierName;
+  /** Whether Pip (commander) is out on the patch under the keys (the play prototype, play.ts). */
+  play: boolean;
 }
 
 export interface WorldPanelHandlers {
   onFocus(): void;
+  onPlay(on: boolean): void;
   onHeartLevel(level: number): void;
   onTier(tier: TierName): void;
   openStyleLab(): void;
@@ -34,16 +37,26 @@ export interface WorldPanelHandlers {
 
 /** The view dropdown: the overview and the characters, then the families in the order the zones stand. */
 export function viewOptions(): Record<string, string> {
-  const options: Record<string, string> = { Overview: OVERVIEW, 'Characters (Husk and Bulwark)': CHARACTERS };
+  const options: Record<string, string> = { Overview: OVERVIEW, 'Characters (Husk and commanders)': CHARACTERS };
   for (const zone of ZONES) options[`${zone.label} (${zone.family})`] = zone.family;
   return options;
 }
 
-/** The member dropdown for a view: the whole view first, then each member it frames, by label and name. */
+/**
+ * A member's name in the member dropdown: its label and its address, with the character first for a member that shows
+ * one, "Pip (commander) idle (pip_idle)" beside "Bulwark idle (bulwark_idle)". The list used to read "Idle (pip_idle)"
+ * beside "Idle (bulwark_idle)", so the panel never named Pip (commander) and only the addresses told the two apart.
+ */
+export function memberOptionText(m: WorldMember): string {
+  if (!m.label) return m.name;
+  return m.character ? `${m.character} ${m.label.toLowerCase()} (${m.name})` : `${m.label} (${m.name})`;
+}
+
+/** The member dropdown for a view: the whole view first, then each member it frames, by memberOptionText. */
 export function memberOptions(view: string): Record<string, string> {
   const options: Record<string, string> = { 'Whole view': '' };
-  const inView = MEMBERS.filter((m) => view === OVERVIEW || (view === CHARACTERS ? CHARACTER_FAMILIES.includes(m.family) : m.family === view));
-  for (const m of inView) options[m.label ? `${m.label} (${m.name})` : m.name] = m.name;
+  const inView = MEMBERS.filter((m) => view === OVERVIEW || (view === CHARACTERS ? CHARACTER_FAMILIES.includes(m.zone) : m.zone === view));
+  for (const m of inView) options[memberOptionText(m)] = m.name;
   return options;
 }
 
@@ -67,7 +80,12 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
   gui.onOpenClose(syncOpenClass);
   syncOpenClass();
 
+  // First, so the owner finds it without scrolling the panel on a phone.
   gui
+    .add(state, 'play')
+    .name('Play Pip (prototype)')
+    .onChange((on: boolean) => handlers.onPlay(on));
+  const viewControl: Controller = gui
     .add(state, 'view', viewOptions())
     .name('view')
     .onChange(() => {
@@ -85,7 +103,7 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
     memberControl.options(memberOptions(state.view));
   };
   // The frame loop reads the turntable and the labels from the state every frame, so neither toggle needs a handler.
-  gui.add(state, 'turntable').name('turntable');
+  const turntableControl = gui.add(state, 'turntable').name('turntable');
   gui.add(state, 'labels').name('labels');
   // The slider's top is the heart's last stage, read from HEART_STAGES rather than kept as a copy that could drift.
   gui.add(state, 'heartLevel', 0, HEART_STAGES - 1, 1).name('slider heart level').onChange((level: number) => handlers.onHeartLevel(level));
@@ -97,6 +115,8 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
   return {
     refresh() {
       rebuildMembers();
+      // While he plays, the camera follows him, so the controls that would glide it to a view or turn it wait.
+      for (const controller of [viewControl, memberControl, turntableControl]) controller.enable(!state.play);
       for (const controller of gui.controllersRecursive()) controller.updateDisplay();
     },
   };

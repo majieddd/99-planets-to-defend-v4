@@ -202,6 +202,245 @@ def test_rigid_binding_and_action_export(tmp):
     assert arm.data.pose_position == 'POSE', arm.data.pose_position
 
 
+def test_morph_export_is_opt_in(tmp):
+    # A skinned head with one face shape key, as the commander's body carries five.
+    arm = rig.humanoid('rig')
+    head = geo.box('head', (0.2, 0.2, 0.24), location=(0, 0, 1.6))
+    body = rig.bind_rigid(arm, [(head, 'head')], 'body')
+    top = max(v.co.z for v in body.data.vertices)
+    body.shape_key_add(name='Basis', from_mix=False)
+    blink = body.shape_key_add(name='blink_L', from_mix=False)
+    for v in body.data.vertices:
+        if v.co.z > top - 1e-4:
+            blink.data[v.index].co.z -= 0.05
+    # Off by default: a recipe that names nothing exports as every recipe always has, with no targets.
+    plain = glb_json(export.export_glb([arm, body], tmp / 'plain.glb'))
+    assert all('targets' not in p for m in plain['meshes'] for p in m['primitives']), plain['meshes']
+    # On: the shape key ships as a named morph target of positions alone, and the mesh stays skinned.
+    face = glb_json(export.export_glb([arm, body], tmp / 'face.glb', morphs=True))
+    prim = face['meshes'][0]['primitives'][0]
+    assert face['meshes'][0].get('extras', {}).get('targetNames') == ['blink_L'], face['meshes'][0]
+    assert [sorted(t) for t in prim['targets']] == [['POSITION']], prim['targets']
+    assert 'JOINTS_0' in prim['attributes'] and 'WEIGHTS_0' in prim['attributes'], prim['attributes']
+    # glTF is Y-up, so the lid's -0.05 along Blender's z is -0.05 along the accessor's y, its required min.
+    delta = face['accessors'][prim['targets'][0]['POSITION']]
+    assert abs(delta['min'][1] + 0.05) < 1e-5 and abs(delta['max'][1]) < 1e-5, (delta['min'], delta['max'])
+    # Modifiers are applied on every export, and one that changes the topology drops the mesh's shape keys without a
+    # word, so the export refuses rather than ship a face that never blinks.
+    body.modifiers.new('tri', 'TRIANGULATE')
+    try:
+        export.export_glb([arm, body], tmp / 'dropped.glb', morphs=True)
+    except RuntimeError as error:
+        assert "body's shape keys ['blink_L'] are missing from dropped.glb" in str(error) and 'tri (TRIANGULATE)' in str(error), error
+    else:
+        raise AssertionError('a triangulated mesh lost its shape keys and the export passed')
+
+
+def test_charforge_settings_refuse_unknown_keys(tmp):
+    from lib import charforge
+    # A known key merges one level deep, keeping its siblings.
+    s = charforge.settings({'reshape': {'chin_source_z': 1.258}})
+    assert s['reshape'] == {**charforge.DEFAULTS['reshape'], 'chin_source_z': 1.258}, s['reshape']
+    # A misspelt key, at the top, one level down or inside a nested table, stops the recipe with its dotted name.
+    for overrides, named in (({'clipz': ('idle',)}, 'clipz'), ({'reshape': {'head_factr': 1.1}}, 'reshape.head_factr'),
+                             ({'garments': {'contrast': {'hoody': 0.7}}}, 'garments.contrast.hoody'),
+                             ({'commander_pose': {charforge.P + 'RightArmm': (0, 0, -1)}}, f'commander_pose.{charforge.P}RightArmm')):
+        try:
+            charforge.settings(overrides)
+        except ValueError as error:
+            assert named in str(error), error
+        else:
+            raise AssertionError(f'settings accepted the unknown key {named}')
+    # An entry whose default is not a table is taken whole: the fist's own keys are its own.
+    assert charforge.settings({'fist': {'finger_curl_deg': {'1': 60}}})['fist'] == {'finger_curl_deg': {'1': 60}}
+
+
+def test_charforge_import_names_what_the_source_lacks(tmp):
+    from lib import charforge
+    arm = rig.humanoid('rig')
+    head = geo.box('head', (0.2, 0.2, 0.24), location=(0, 0, 1.6))
+    body = rig.bind_rigid(arm, [(head, 'head')], 'body')
+    body.parent = arm
+    bare = export.export_glb([arm, body], tmp / 'bare.glb')
+    # No shape keys: the error names the file and the missing morphs, where it was an AttributeError on None.
+    try:
+        charforge.import_source(bare)
+    except ValueError as error:
+        assert str(bare) in str(error) and 'no shape keys' in str(error), error
+    else:
+        raise AssertionError('a source without shape keys imported')
+    body.shape_key_add(name='Basis', from_mix=False)
+    body.shape_key_add(name='blink_L', from_mix=False).data[0].co.z += 0.01
+    faced = export.export_glb([arm, body], tmp / 'faced.glb', morphs=True)
+    # Shape keys but no albedo: the error names the file and the image, where the build failed later on None.
+    try:
+        charforge.import_source(faced)
+    except ValueError as error:
+        assert str(faced) in str(error) and 'no albedo image' in str(error), error
+    else:
+        raise AssertionError('a source without an albedo image imported')
+
+
+# The stand-in's wrist (the right hand's head) and its blade's tip, 0.3 m in front of the wrist and 2 cm into the ground.
+_WRIST = (-0.2, 0.0, 0.6)
+_TIP = (-0.2, -0.3, -0.02)
+
+
+def _blade():
+    """A thin four-sided pyramid hanging point down from the wrist's height to _TIP, so the blade's lowest point is one
+    vertex, its tip, whose x a turn about the right axis keeps."""
+    x, y, _ = _TIP
+    top = _WRIST[2]
+    verts = [(x - 0.01, y - 0.02, top), (x + 0.01, y - 0.02, top), (x + 0.01, y + 0.02, top), (x - 0.01, y + 0.02, top), _TIP]
+    mesh = bpy.data.meshes.new('blade')
+    mesh.from_pydata(verts, [], [(0, 1, 2, 3), (1, 0, 4), (2, 1, 4), (3, 2, 4), (0, 3, 4)])
+    mesh.update()
+    return scene.link(bpy.data.objects.new('blade', mesh))
+
+
+def _charforge_stand_in(pinned=False):
+    """A stand-in for a CharForge commander: the root hips 1 m up, pointing up (so their local Y is world up), a left
+    foot and a right hand under them, a body box on the hips, and an armour of a boot box on the foot from the ground up
+    and a blade on the hand (_blade), its faces marked as charforge's assemble marks a blade (cf_part 3). With `pinned`,
+    the armour also has a small piece marked as blade but riding the hips, 3 cm into the ground, so the sword's lowest
+    point is one the hand's turn does not carry. Bound as charforge binds."""
+    from lib import charforge
+    data = bpy.data.armatures.new('rig')
+    arm = bpy.data.objects.new('rig', data)
+    bpy.context.scene.collection.objects.link(arm)
+    scene.select_only([arm])
+    bpy.ops.object.mode_set(mode='EDIT')
+    hips = data.edit_bones.new(charforge.P + 'Hips')
+    hips.head, hips.tail = (0, 0, 1.0), (0, 0, 1.1)
+    for name, head, tail in (('LeftFoot', (0.1, 0, 0.1), (0.1, -0.1, 0.02)), ('RightHand', _WRIST, (-0.2, -0.1, 0.6))):
+        bone = data.edit_bones.new(charforge.P + name)
+        bone.head, bone.tail = head, tail
+        bone.parent = hips
+    bpy.ops.object.mode_set(mode='OBJECT')
+    body = geo.box('body', (0.3, 0.2, 0.4), location=(0, 0, 1.0))
+    boot = geo.box('boot', (0.1, 0.2, 0.1), location=(0.1, 0, 0.05))
+    parts = [(body, 'Hips', None), (boot, 'LeftFoot', 0), (_blade(), 'RightHand', 3)]
+    if pinned:
+        parts.append((geo.box('pin', (0.02, 0.02, 0.1), location=(0.3, -0.2, 0.02)), 'Hips', 3))
+    for ob, bone, code in parts:
+        scene.apply_transforms(ob)
+        ob.vertex_groups.new(name=charforge.P + bone).add([v.index for v in ob.data.vertices], 1.0, 'REPLACE')
+        if code is not None:
+            ob.data.attributes.new('cf_part', 'INT', 'FACE').data.foreach_set('value', np.full(len(ob.data.polygons), code, np.int32))
+    armour = scene.join([ob for ob, _, code in parts if code is not None], 'armour')
+    for ob in (body, armour):
+        charforge.bind(ob, arm)
+    return arm, body, armour
+
+
+def _hips_clip(arm, name, heights, hand_turn=None):
+    """A clip that only raises and lowers the hips, one key a frame from frame 1, with the hand keyed on every frame as a
+    baked source clip keys every bone, stashed as retarget_clips stashes. The hand is keyed at rest, or turned about its
+    wrist by `hand_turn`, a rotation in world space, carried into the hand's own frame (the hips never turn)."""
+    from lib import charforge
+    from mathutils import Quaternion
+    arm.animation_data_create()
+    action = bpy.data.actions.new(name)
+    arm.animation_data.action = action
+    pb = arm.pose.bones[charforge.P + 'Hips']
+    hand = arm.pose.bones[charforge.P + 'RightHand']
+    rest = arm.data.bones[hand.name].matrix_local.to_quaternion()
+    hand.rotation_quaternion = rest.inverted() @ hand_turn @ rest if hand_turn is not None else Quaternion()
+    for i, height in enumerate(heights):
+        pb.location = (0.0, height, 0.0)
+        pb.keyframe_insert('location', frame=1 + i)
+        hand.keyframe_insert('rotation_quaternion', frame=1 + i)
+    arm.animation_data.action = None
+    charforge._stash(arm, action)
+    pb.location = (0.0, 0.0, 0.0)
+    hand.rotation_quaternion = Quaternion()
+    return action
+
+
+def _keys(action, bone, prop, index):
+    from lib import charforge
+    return [kp.co[1] for fcs in charforge._channelbags(action) for fc in fcs
+            if fc.data_path == f'pose.bones["{charforge.P}{bone}"].{prop}' and fc.array_index == index for kp in fc.keyframe_points]
+
+
+def _sword_mask(armour):
+    """The armour's blade vertices, read from cf_part as ground_clips reads them."""
+    part = np.empty(len(armour.data.polygons), np.int32)
+    armour.data.attributes['cf_part'].data.foreach_get('value', part)
+    mask = np.zeros(len(armour.data.vertices), bool)
+    for polygon in armour.data.polygons:
+        if part[polygon.index] == 3:
+            mask[list(polygon.vertices)] = True
+    return mask
+
+
+def _hand_keys(action):
+    return np.array([_keys(action, 'RightHand', 'rotation_quaternion', i) for i in range(4)]).T
+
+
+def test_charforge_ground_pass_stands_each_clip_on_the_ground_by_one_constant(tmp):
+    from lib import charforge
+    from mathutils import Quaternion, Vector
+    arm, body, armour = _charforge_stand_in()
+    # The idle's hand rolls 50 degrees about the line from the wrist to the blade's tip on every key, so its keys are far
+    # from rest and the turn must be carried into the hand's frame through hand @ basis^-1, while the tip stays put.
+    roll = Quaternion((Vector(_TIP) - Vector(_WRIST)).normalized(), np.radians(50))
+    sinking = _hips_clip(arm, 'idle', [0.0, -0.01, -0.02, -0.01, 0.0], roll)
+    floating = _hips_clip(arm, 'run', [0.05, 0.06, 0.05])
+    # The stand's hand swings the blade up to lie level in front of him, 0.3 m over the wrist and 0.88 m up at its
+    # lowest, so nothing of it comes near the ground.
+    standing = _hips_clip(arm, 'stand', [0.0, 0.01, 0.0], Quaternion((1.0, 0.0, 0.0), np.radians(-90)))
+    sword = {'sword': _sword_mask(armour)}
+    tip_before = charforge._clip_lowest(arm, body, armour, sinking, sword).low['sword']
+    rolled = _hand_keys(sinking)
+    stand_hand = _hand_keys(standing)
+    out = charforge.ground_clips(arm, body, armour, {'idle': sinking, 'run': floating, 'stand': standing})
+    # The idle's boot reached 2 cm under the ground at its lowest frame; one hips offset of 2 cm puts that frame on it.
+    idle = out['idle']
+    assert abs(idle['retargeted_boot_min_z'] + 0.02) < 1e-4 and abs(idle['offset_m'] - 0.02) < 1e-4, idle
+    assert abs(idle['boot_min_z']) < 1e-4 and abs(idle['min_z']) < 1e-4, idle
+    # Every hips key moved by the same amount, so the clip's own rise and fall is kept rather than flattened.
+    assert np.allclose(_keys(sinking, 'Hips', 'location', 1), [0.02, 0.01, 0.0, 0.01, 0.02], atol=1e-6), _keys(sinking, 'Hips', 'location', 1)
+    # The blade, still 2 cm into the ground at the lowest frame after that offset, is lifted to the clearance by one turn
+    # of the hand, the same on every key and on top of the roll.
+    assert abs(idle['retargeted_sword_min_z'] + 0.04) < 1e-4, idle
+    assert idle['sword_turn_deg'] > 0 and abs(idle['sword_min_z'] - charforge.BLADE_CLEARANCE_M) < 5e-4, idle
+    hand = _hand_keys(sinking)
+    assert np.allclose(hand, hand[0], atol=1e-7) and not np.allclose(hand[0], rolled[0], atol=1e-4), (hand, rolled)
+    # The turn is about the level axis square to the line from the wrist to the tip, here the x axis, so the tip rises
+    # in its own vertical plane at the worst frame: a turn read through the hand's frame without taking the keyed roll
+    # out of it would swing the tip sideways by centimetres.
+    tip_after = charforge._clip_lowest(arm, body, armour, sinking, sword).low['sword']
+    assert tip_after[1] == tip_before[1] == 3, (tip_before, tip_after)
+    assert abs(tip_before[2][0] - _TIP[0]) < 1e-5 and abs(tip_after[2][0] - tip_before[2][0]) < 1e-5, (tip_before, tip_after)
+    assert abs(tip_after[0] - charforge.BLADE_CLEARANCE_M) < 5e-4, tip_after
+    # A clip that floats is lowered by one offset the same way: its boots were 5 cm up at their lowest, and its blade, 2 cm
+    # into the ground once the boots stand, is then lifted to the clearance.
+    run = out['run']
+    assert abs(run['retargeted_boot_min_z'] - 0.05) < 1e-4 and abs(run['offset_m'] + 0.05) < 1e-4 and abs(run['boot_min_z']) < 1e-4, run
+    assert np.allclose(_keys(floating, 'Hips', 'location', 1), [0.0, 0.01, 0.0], atol=1e-6), _keys(floating, 'Hips', 'location', 1)
+    assert run['sword_turn_deg'] > 0 and abs(run['sword_min_z'] - charforge.BLADE_CLEARANCE_M) < 5e-4, run
+    # A clip whose boots stand on the ground and whose blade stays clear of it is left alone.
+    stand = out['stand']
+    assert abs(stand['offset_m']) < 1e-4 and stand['sword_turn_deg'] == 0 and stand['sword_min_z'] > 0.5, stand
+    assert np.allclose(_keys(standing, 'Hips', 'location', 1), [0.0, 0.01, 0.0], atol=1e-6), _keys(standing, 'Hips', 'location', 1)
+    assert np.allclose(_hand_keys(standing), stand_hand, atol=1e-9), (_hand_keys(standing), stand_hand)
+
+
+def test_charforge_ground_pass_refuses_a_sword_point_the_hand_turn_does_not_carry(tmp):
+    from lib import charforge
+    arm, body, armour = _charforge_stand_in(pinned=True)
+    # The lowest sword point rides the hips, so no turn of the hand moves it: the secant has no slope to follow. It used
+    # to divide by 1e-9 there and leap through an arbitrary angle.
+    clip = _hips_clip(arm, 'idle', [0.0, 0.01, 0.0])
+    try:
+        charforge.ground_clips(arm, body, armour, {'idle': clip})
+    except RuntimeError as error:
+        assert "clip 'idle'" in str(error) and 'does not move the lowest sword point' in str(error), error
+    else:
+        raise AssertionError('a sword point the hand does not carry passed the ground pass')
+
+
 def _flat(value, shape=(4, 4)):
     return np.full(shape, value, np.float64)
 

@@ -2,15 +2,19 @@ import GUI from 'lil-gui';
 import { COLOR_DIALS, NUMERIC_RANGES, type RenderDials } from '../../render/defaults';
 import type { TierName } from '../../render/quality';
 import { NARROW_SCREEN } from './referenceBoard';
-import { PRESETS, type BulwarkMode, type PresetName } from './scene';
+import { COMMANDER_LABELS, COMMANDERS, PRESETS, type BulwarkMode, type CommanderKind, type PresetName } from './scene';
 
 const TITLE = 'Painted-Anime-Inkline 4.0';
+
+/** The commander dropdown's choices, by the name the panel shows, the default (Pip) first. */
+export const COMMANDER_OPTIONS: Readonly<Record<string, CommanderKind>> = Object.fromEntries(COMMANDERS.map((kind) => [COMMANDER_LABELS[kind], kind]));
 
 export interface LabState {
   tier: TierName;
   preset: PresetName;
   heartStage: number;
   bulwark: BulwarkMode;
+  commander: CommanderKind;
 }
 
 export interface LabHandlers {
@@ -19,6 +23,7 @@ export interface LabHandlers {
   onPreset(preset: PresetName): void;
   onHeartStage(level: number): void;
   onBulwark(mode: BulwarkMode): void;
+  onCommander(kind: CommanderKind): void;
   audit(): void;
   copyDials(): void;
   reset(): void;
@@ -86,7 +91,9 @@ export function createDialsPanel(dials: RenderDials, state: LabState, handlers: 
   lab.add(state, 'tier', ['high', 'medium', 'low']).name('quality tier').onChange((tier: TierName) => handlers.onTier(tier));
   lab.add(state, 'preset', PRESETS).name('camera').onChange((preset: PresetName) => handlers.onPreset(preset));
   lab.add(state, 'heartStage', 0, 10, 1).name('heart level').onChange((level: number) => handlers.onHeartStage(level));
-  lab.add(state, 'bulwark', ['cycle', 'idle', 'run', 'attack']).name('Bulwark').onChange((mode: BulwarkMode) => handlers.onBulwark(mode));
+  lab.add(state, 'commander', COMMANDER_OPTIONS).name('commander').onChange((kind: CommanderKind) => handlers.onCommander(kind));
+  // The mode drives whichever commander is shown; Pip holds his idle where Bulwark attacks (scene.ts).
+  lab.add(state, 'bulwark', ['cycle', 'idle', 'run', 'attack']).name('commander mode').onChange((mode: BulwarkMode) => handlers.onBulwark(mode));
   for (const [group, keys] of Object.entries(GROUPS)) {
     const folder = gui.addFolder(group);
     for (const key of keys) {

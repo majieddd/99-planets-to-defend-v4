@@ -46,6 +46,43 @@ describe('manifestEntry', () => {
     });
   });
 
+  it('records the morph target names after the clips only when the GLB has some, so an entry without morphs keeps its bytes', () => {
+    const meta = {
+      name: 'commander_pip',
+      family: 'commanders',
+      kind: 'model',
+      file: 'commanders/commander_pip.glb',
+      recipe: null,
+      nodes: [],
+      animations: [{ name: 'idle', duration: 1.6, loop: true, strike: null }],
+      notes: {},
+      placeables: [],
+    };
+    const stats = {
+      tris: 21799,
+      bones: 24,
+      animations: [{ name: 'idle', duration: 1.6 }],
+      textures: [],
+      nodes: ['commander_rig'],
+      hasInk: true,
+      doubleSided: false,
+      ground: { asset: 0, nodes: [{ name: 'commander_rig', empty: true, minY: 0 }] },
+      bytes: 1,
+    };
+    const face = ['blink_L', 'blink_R', 'smile', 'brows_up', 'pucker'];
+    const entry = manifestEntry(meta, { ...stats, morphs: face });
+    expect(entry.morphs).toEqual(face);
+    // Placed right after the clips, where the owner's manifest reads a model's animation data together.
+    expect(Object.keys(entry).slice(Object.keys(entry).indexOf('animations'), Object.keys(entry).indexOf('animations') + 3)).toEqual(['animations', 'morphs', 'tris']);
+    // No morphs, or none recorded (a manifest written before inspect.mjs read them), writes no key at all, so the JSON
+    // of every existing entry is unchanged byte for byte.
+    for (const morphs of [[], undefined]) {
+      const plain = manifestEntry(meta, { ...stats, morphs });
+      expect(Object.hasOwn(plain, 'morphs')).toBe(false);
+      expect(JSON.stringify(plain)).toBe(JSON.stringify(manifestEntry(meta, stats)));
+    }
+  });
+
   it('keeps texture entries without GLB stats', () => {
     const entry = manifestEntry({ name: 'ink_noise', family: 'textures', kind: 'texture', file: 'textures/ink_noise.png', nodes: [], animations: [] }, null);
     expect(entry).toMatchObject({ name: 'ink_noise', kind: 'texture', tris: 0, doubleSided: false, ground: [], bytes: 0 });

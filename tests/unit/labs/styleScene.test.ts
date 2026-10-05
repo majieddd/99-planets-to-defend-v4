@@ -2,15 +2,19 @@ import { readFileSync } from 'node:fs';
 import {
   AnimationClip,
   Box3,
+  CapsuleGeometry,
   Color,
+  Float32BufferAttribute,
+  Group,
   InstancedMesh,
   Line3,
   Matrix4,
+  Mesh as ThreeMesh,
+  MeshStandardMaterial,
   NumberKeyframeTrack,
   Quaternion,
   Vector3,
   type BoxGeometry,
-  type CapsuleGeometry,
   type Mesh,
   type Object3D,
   type ShaderMaterial,
@@ -22,6 +26,11 @@ import { placeholderAssets } from '../../../src/labs/style/placeholders';
 import {
   buildStyleScene,
   BULWARK_HOME,
+  COMMANDER_ATTACK_SECONDS,
+  COMMANDER_LABELS,
+  COMMANDERS,
+  CYCLE_STRIKE_AT,
+  DEFAULT_COMMANDER,
   HUSK_RADIUS,
   HUSK_SPEED,
   PRESETS,
@@ -34,7 +43,7 @@ import {
   type StyleAssets,
   type StyleScene,
 } from '../../../src/labs/style/scene';
-import type { MaterialContext } from '../../../src/render/assets/loadAsset';
+import { paintAndInk, type LoadedAsset, type MaterialContext } from '../../../src/render/assets/loadAsset';
 import { DEFAULT_DIALS } from '../../../src/render/defaults';
 import { createHullMaterial, createInkUniforms } from '../../../src/render/ink/hull';
 import { LAYERS } from '../../../src/render/layers';
@@ -52,6 +61,10 @@ const CENTER = new Vector3(0, -STYLE_PLANET_RADIUS, 0);
 const SCALE = 0.4; // the low tier's scatter scale
 const DT = 1 / 60;
 
+/**
+ * The style scene on the placeholders by default. They carry no Pip, so the scene opens on Bulwark, the fallback for
+ * the default commander, and the tests that drive the commander through it name him the placeholder Bulwark.
+ */
 function build(assets: StyleAssets = placeholderAssets(ctx), scale = SCALE): { assets: StyleAssets; style: StyleScene } {
   return { assets, style: buildStyleScene(patch, assets, ctx, scale) };
 }
@@ -490,7 +503,7 @@ describe('buildStyleScene', () => {
     });
   });
 
-  it('places every actor before the first update, so the startup preset frames Bulwark from behind', () => {
+  it('places every actor before the first update, so the startup preset frames the placeholder Bulwark from behind', () => {
     const { assets, style } = build();
     const body = worldPosition(assets.bulwark.root);
     expect(body.distanceTo(patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position)).toBeLessThan(1e-9);
@@ -590,7 +603,7 @@ describe('buildStyleScene', () => {
     for (const error of railErrors(style, assets.husk.root)) expect(error).toBeLessThan(0.01);
   });
 
-  it("keeps every rail out of Bulwark's body through a full lap of the Husk", () => {
+  it("keeps every rail out of the placeholder Bulwark's body through a full lap of the Husk", () => {
     const { assets, style } = build();
     const rails = [1, 2, 3].map((level) => {
       const rail = style.root.getObjectByName(`bolt_mk${level}_rail`) as Mesh;
@@ -625,7 +638,7 @@ describe('buildStyleScene', () => {
     expect(nearest).toBeGreaterThan(radius);
   });
 
-  it(`runs Bulwark round the ${RUN_RADIUS} m lap from home at ${RUN_SPEED} m/s in run mode, the heart on his left`, () => {
+  it(`runs the placeholder Bulwark round the ${RUN_RADIUS} m lap from home at ${RUN_SPEED} m/s in run mode, the heart on his left`, () => {
     const { assets, style } = build();
     const root = assets.bulwark.root;
     style.setBulwarkMode('run');
@@ -649,7 +662,7 @@ describe('buildStyleScene', () => {
     expect(travelled).toBeCloseTo(RUN_SPEED, 1);
   });
 
-  it('keeps Bulwark at home through idle and attack, then runs one lap from home back to home', () => {
+  it('keeps the placeholder Bulwark at home through idle and attack, then runs one lap from home back to home', () => {
     const { assets, style } = build();
     const home = patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position;
     // The cycle sets his lap angle on a line of its own, apart from run mode's step, so the run-mode test's checks on
@@ -677,7 +690,7 @@ describe('buildStyleScene', () => {
     expect(away.at(-1)! - away[0]!).toBeCloseTo((away.length - 1) * DT, 9); // one unbroken stretch
   });
 
-  it('moves Bulwark at most one run step and turns him under 40 degrees a frame, through three cycles', () => {
+  it('moves the placeholder Bulwark at most one run step and turns him under 40 degrees a frame, through three cycles', () => {
     const { assets, style } = build();
     const root = assets.bulwark.root;
     let position = worldPosition(root);
@@ -703,7 +716,7 @@ describe('buildStyleScene', () => {
     expect(largestTurn).toBeLessThan(40);
   });
 
-  it("starts run mode's lap from home, wherever a switch cut the cycle's lap short", () => {
+  it("starts the placeholder Bulwark's run-mode lap from home, wherever a switch cut the cycle's lap short", () => {
     const { assets, style } = build();
     const home = patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position;
     step(style, 7.5);
@@ -717,7 +730,7 @@ describe('buildStyleScene', () => {
     expect(worldPosition(assets.bulwark.root).distanceTo(home)).toBeLessThan(RUN_SPEED * DT + 1e-6);
   });
 
-  it('restarts a repeated strike in place instead of fading it in from the bind pose', () => {
+  it("restarts the placeholder Bulwark's repeated strike in place instead of fading it in from the bind pose", () => {
     // The strike holds the body at x = 1 and the other clips at 0, as does the body's own (bind) pose, so a strike
     // that fades in from zero weight shows as x dipping toward 0.
     const { assets, body } = withBulwarkClips({ idle: 0, run: 0, attack: 1 });
@@ -735,7 +748,7 @@ describe('buildStyleScene', () => {
     expect(lowest).toBeCloseTo(1, 9);
   });
 
-  it('idles Bulwark from the switch to attack mode until the first strike, whatever played before', () => {
+  it('idles the placeholder Bulwark from the switch to attack mode until the first strike, whatever played before', () => {
     const { assets, body } = withBulwarkClips({ idle: 0, run: 2, attack: 1 });
     const { style } = build(assets);
     style.setBulwarkMode('run');
@@ -752,5 +765,178 @@ describe('buildStyleScene', () => {
     expect(Math.max(...trace.slice(12).map(Math.abs))).toBeLessThan(1e-9);
     step(style, 0.95); // 2.5 s: the strike crossfaded in from idle and holds its last frame
     expect(body.position.x).toBeCloseTo(1, 9);
+  });
+});
+
+/**
+ * A stand-in for Pip (commander), the `commander_pip` model: a body carrying the five face morphs, with idle and run
+ * clips that hold it at their own x, and an attack clip of his contract's length when `attack` gives its x (the shipped
+ * model has one; a stand-in without it is a commander with no attack clip).
+ */
+function pipStandIn(x: { idle: number; run: number; attack?: number }): LoadedAsset {
+  const geometry = new CapsuleGeometry(0.25, 1.2).translate(0, 0.85, 0);
+  const count = geometry.getAttribute('position').count;
+  geometry.morphAttributes['position'] = ['blink_L', 'blink_R', 'smile', 'brows_up', 'pucker'].map((name) => {
+    const target = new Float32BufferAttribute(new Float32Array(count * 3), 3);
+    target.name = name;
+    return target;
+  });
+  geometry.morphTargetsRelative = true;
+  const body = new ThreeMesh(geometry, new MeshStandardMaterial());
+  body.name = 'pip_body';
+  const root = new Group();
+  root.add(body);
+  paintAndInk(root, ctx, 0.35);
+  const pose = (value: number, duration: number) => new NumberKeyframeTrack('pip_body.position[x]', [0, duration], [value, value]);
+  const clips = [new AnimationClip('idle', 1.6, [pose(x.idle, 1.6)]), new AnimationClip('run', 0.7, [pose(x.run, 0.7)])];
+  const attack = COMMANDER_ATTACK_SECONDS.pip;
+  if (x.attack !== undefined) clips.push(new AnimationClip('attack', attack, [pose(x.attack, attack)]));
+  return { root, animations: clips };
+}
+
+describe('the Style Lab commander', () => {
+  it("opens on Pip by default when his asset comes with the others, at the commander's home, with Bulwark unplaced", () => {
+    expect(DEFAULT_COMMANDER).toBe('pip');
+    // The panel offers the default first, under the name the owner's decision gives him until his character is named.
+    expect(COMMANDERS[0]).toBe('pip');
+    expect(COMMANDER_LABELS).toEqual({ pip: 'Pip (commander)', bulwark: 'Bulwark' });
+    const pip = pipStandIn({ idle: 0, run: 2 });
+    const assets = { ...placeholderAssets(ctx), pip };
+    const style = buildStyleScene(patch, assets, ctx, SCALE);
+    expect(style.commander()).toBe('pip');
+    expect(pip.root.parent).toBe(style.root);
+    expect(assets.bulwark.root.parent).toBeNull();
+    // He stands at home, facing as the commander faces, before any update, so the hero preset frames him from behind.
+    const home = patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position;
+    expect(worldPosition(pip.root).distanceTo(home)).toBeLessThan(1e-9);
+    const hero = style.preset('hero');
+    expect(Math.abs(hero.position.clone().sub(home).dot(facing(pip.root)) + 5.5)).toBeLessThan(0.1);
+    // His face is live from the build, with no switch: a pose holds on him.
+    expect(style.setFace({ blink: 1 })).toBe(true);
+    style.setFace(null);
+    // Bulwark, the alternate, is one switch away, and Pip comes back without his asset being handed over again.
+    style.setCommander('bulwark');
+    expect(style.commander()).toBe('bulwark');
+    expect(assets.bulwark.root.parent).toBe(style.root);
+    expect(pip.root.parent).toBeNull();
+    expect(worldPosition(assets.bulwark.root).distanceTo(home)).toBeLessThan(1e-9);
+    expect(() => style.setCommander('pip')).not.toThrow();
+    expect(pip.root.parent).toBe(style.root);
+  });
+
+  it('opens on Bulwark when asked, leaving Pip unplaced, and when Pip is asked for but not built', () => {
+    const pip = pipStandIn({ idle: 0, run: 2 });
+    const asked = { ...placeholderAssets(ctx), pip };
+    const onBulwark = buildStyleScene(patch, asked, ctx, SCALE, 'bulwark');
+    expect(onBulwark.commander()).toBe('bulwark');
+    expect(asked.bulwark.root.parent).toBe(onBulwark.root);
+    expect(pip.root.parent).toBeNull();
+    // Bulwark's visored rig has no face to pose.
+    expect(onBulwark.setFace({ blink: 1 })).toBe(false);
+    // With no Pip in the assets (a manifest without him, or the placeholders) the default falls back to Bulwark, and
+    // commander() says so, which the lab turns into its banner.
+    const { assets, style } = build();
+    expect(style.commander()).toBe('bulwark');
+    expect(assets.bulwark.root.parent).toBe(style.root);
+    expect(style.setFace({ blink: 1 })).toBe(false);
+    // Pip still arrives by a switch that hands his asset over, as the panel does once it has loaded him.
+    expect(() => style.setCommander('pip')).toThrow(/commander_pip/);
+    const late = pipStandIn({ idle: 0, run: 2 });
+    style.setCommander('pip', late);
+    expect(style.commander()).toBe('pip');
+    expect(late.root.parent).toBe(style.root);
+    expect(assets.bulwark.root.parent).toBeNull();
+    expect(worldPosition(late.root).distanceTo(patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position)).toBeLessThan(1e-9);
+    expect(style.setFace({ blink: 1, smile: 1 })).toBe(true);
+    style.setFace(null);
+  });
+
+  it('strikes Pip with his own attack clip for his own length in the cycle and in attack mode', () => {
+    const { style } = build();
+    const pip = pipStandIn({ idle: 0.5, run: 2, attack: 1 });
+    const body = pip.root.getObjectByName('pip_body')!;
+    style.setCommander('pip', pip);
+    // His contract, from timings.json, which the cycle's strike window takes for him.
+    expect(COMMANDER_ATTACK_SECONDS).toEqual({ pip: 0.85, bulwark: 0.85 });
+    const trace: number[] = [];
+    // Through the idle, the cycle's strike window (3 s to 3 s plus his attack) and on to 6 s, where the lap begins.
+    for (let i = 0; i < 355; i++) {
+      style.update(DT);
+      trace.push(body.position.x);
+    }
+    const at = (seconds: number) => trace[Math.round(seconds / DT) - 1]!;
+    expect(at(2.9)).toBeCloseTo(0.5, 9);
+    // The strike crossfades in over 0.18 s and holds his attack pose to the end of his clip.
+    expect(at(CYCLE_STRIKE_AT + 0.3)).toBeCloseTo(1, 9);
+    expect(at(CYCLE_STRIKE_AT + COMMANDER_ATTACK_SECONDS.pip - 0.02)).toBeCloseTo(1, 9);
+    // Then the idle again until the lap.
+    expect(at(5.9)).toBeCloseTo(0.5, 9);
+    style.setBulwarkMode('attack');
+    step(style, 2);
+    expect(body.position.x).toBeCloseTo(1, 9);
+    // And his lap still runs.
+    style.setBulwarkMode('run');
+    step(style, 1);
+    expect(body.position.x).toBeCloseTo(2, 9);
+  });
+
+  it('holds the idle where the others strike for a commander with no attack clip, in the cycle and in attack mode', () => {
+    const { style } = build();
+    const pip = pipStandIn({ idle: 0.5, run: 2 });
+    const body = pip.root.getObjectByName('pip_body')!;
+    style.setCommander('pip', pip);
+    const trace: number[] = [];
+    for (let i = 0; i < 355; i++) {
+      style.update(DT);
+      trace.push(body.position.x);
+    }
+    expect(Math.max(...trace.slice(10).map((x) => Math.abs(x - 0.5)))).toBeLessThan(1e-9);
+    style.setBulwarkMode('attack');
+    step(style, 5);
+    expect(body.position.x).toBeCloseTo(0.5, 9);
+  });
+
+  it('blinks Pip after his mixer and holds the blink while frozen', () => {
+    const { style } = build();
+    const pip = pipStandIn({ idle: 0, run: 0 });
+    const body = pip.root.getObjectByName('pip_body') as Mesh;
+    style.setCommander('pip', pip);
+    const lids = () => body.morphTargetInfluences![body.morphTargetDictionary!['blink_L']!]!;
+    let most = 0;
+    for (let i = 0; i < 360; i++) {
+      style.update(DT);
+      most = Math.max(most, lids());
+    }
+    expect(most).toBeGreaterThan(0.9);
+    style.setFace({ blink: 0.5 });
+    style.setFrozen(true);
+    step(style, 1);
+    expect(lids()).toBe(0.5);
+    style.setFace(null);
+    style.setFrozen(false);
+  });
+
+  it('hands a held face pose back to the blink when the lab leaves Pip, so a switch away and back finds him blinking', () => {
+    const { style } = build();
+    const pip = pipStandIn({ idle: 0, run: 0 });
+    const body = pip.root.getObjectByName('pip_body') as Mesh;
+    const weight = (name: string) => body.morphTargetInfluences![body.morphTargetDictionary![name]!]!;
+    style.setCommander('pip', pip);
+    style.setFace({ blink: 1, smile: 1 });
+    expect([weight('blink_L'), weight('smile')]).toEqual([1, 1]);
+    style.setCommander('bulwark');
+    // Released on the way out, not on the way back: the lids open and the smile rests while he is off stage.
+    expect([weight('blink_L'), weight('blink_R'), weight('smile')]).toEqual([0, 0, 0]);
+    style.setCommander('pip');
+    // Back on stage his lids follow the blink again, shut only for a blink and open between; held, they read 1 on
+    // every frame.
+    const lids: number[] = [];
+    for (let i = 0; i < 360; i++) {
+      style.update(DT);
+      lids.push(weight('blink_L'));
+    }
+    expect(Math.max(...lids)).toBeGreaterThan(0.9);
+    expect(Math.min(...lids)).toBe(0);
+    expect(weight('smile')).toBe(0);
   });
 });

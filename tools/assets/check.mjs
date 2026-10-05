@@ -5,6 +5,9 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { isMain } from '../is-main.mjs';
 
+// The exporter's sampling step: the recipes key and export their clips at 30 fps (blender/lib/anim.py FPS), so a clip
+// lasts a whole number of frames and its duration and strike can miss a contract that falls between two frames by up
+// to one. Pip's and Bulwark's attacks are timed 0.85 s, 25.5 frames, and export as 25 frames, 0.8333 s.
 const FRAME = 1 / 30;
 // How far a placeable's lowest point may sit from its placement origin, or from its declared sink under it, on either
 // side, and still stand on the ground as designed: far above the manifest's 0.1 mm rounding and the few millimetres an
@@ -68,6 +71,12 @@ export function evaluateAsset(entry, budgets, timings) {
     }
   }
   if (budget.ink && !entry.hasInk) failures.push('missing _INK attribute');
+  // A model may carry only the morph targets its family names (the commanders' five face morphs, which the labs' face
+  // driver sets), and a family that names none takes none: a stray shape key costs every vertex of its mesh a morph
+  // fetch in both the painted and the hull shader, and nothing would drive it.
+  const allowed = budget.morphs ?? [];
+  const stray = (entry.morphs ?? []).filter((name) => !allowed.includes(name));
+  if (stray.length) failures.push(`morph targets ${stray.join(', ')} not in the ${entry.family} budget's list (${allowed.join(', ') || 'none'})`);
   // Blender exports any material without backface culling as double-sided, and the runtime would then draw and
   // shadow both faces of every mesh using it; a mesh that needs both faces says so in its own extras.
   if (entry.doubleSided) failures.push('double-sided material');
@@ -92,6 +101,17 @@ export function evaluateAsset(entry, budgets, timings) {
     }
   }
   return failures;
+}
+
+/**
+ * The clips of a model that src/shared/timings.json times, as the check held them ("attack 0.85 s, strike 0.34 s"), for
+ * its pass line: a timed clip that passed shows there, so a reader sees which contracts the check enforced.
+ */
+export function timedClips(entry, timings) {
+  if (entry.kind !== 'model') return [];
+  return Object.entries(timings[entry.family]?.[entry.name] ?? {})
+    .filter(([name]) => entry.animations.some((a) => a.name === name))
+    .map(([name, timing]) => `${name} ${timing.duration} s, strike ${timing.strike} s`);
 }
 
 /**
@@ -137,7 +157,9 @@ function main() {
       console.log(`ASSET ${entry.name} FAIL: ${failures.join('; ')}`);
     } else {
       pass += 1;
-      console.log(`ASSET ${entry.name} ok (${entry.tris} tris, ${Math.round(entry.bytes / 1024)} KB)`);
+      const timed = timedClips(entry, timings);
+      const note = timed.length ? `; ${timed.join(', ')} as timings.json sets` : '';
+      console.log(`ASSET ${entry.name} ok (${entry.tris} tris, ${Math.round(entry.bytes / 1024)} KB${note})`);
     }
   }
   console.log(`assets:check pass=${pass} fail=${fail}`);

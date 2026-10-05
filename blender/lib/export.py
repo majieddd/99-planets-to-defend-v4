@@ -1,5 +1,7 @@
 """GLB export and Workbench previews."""
+import json
 import math
+import struct
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -9,7 +11,47 @@ from mathutils import Vector
 from . import anim, scene
 
 
-def export_glb(objs, path, animations=False):
+def _morph_options(morphs):
+    """The exporter's shape key options. Off, the default, every recipe exports exactly as it always has.
+
+    On, the shape keys (a commander's face morphs) export as morph targets of positions only: morph normals and tangents
+    stay off, because the runtime's hull ink pushes along its own averaged normals (src/render/ink/hull.ts), a blink
+    bends a lid's normals too little to change the painted light, and each would add a delta per vertex to the file."""
+    if not morphs:
+        return {'export_morph': False}
+    return {'export_morph': True, 'export_morph_normal': False, 'export_morph_tangent': False}
+
+
+def _glb_json(path):
+    data = Path(path).read_bytes()
+    length = struct.unpack('<I', data[12:16])[0]
+    return json.loads(data[20:20 + length])
+
+
+def _check_morphs_shipped(objs, path):
+    """Fails the export when a shape key the recipe made is missing from the GLB. Modifiers are applied on every export,
+    and the exporter keeps shape keys through the armature modifier and deforming ones, but an applied modifier that
+    changes the topology (triangulate, bevel, subdivision, measured in Blender 5.2.1) drops every key of its mesh without
+    a word, which would ship a face that never blinks. Apply such modifiers before adding the shape keys."""
+    shipped = {name for mesh in _glb_json(path).get('meshes', []) for name in mesh.get('extras', {}).get('targetNames', [])}
+    for ob in objs:
+        if ob.type != 'MESH' or ob.data.shape_keys is None:
+            continue
+        blocks = ob.data.shape_keys.key_blocks
+        # The keys the exporter writes: not the basis, not muted, not relative to themselves (io_scene_gltf2 skip_sk).
+        keys = [k.name for i, k in enumerate(blocks) if i > 0 and not k.mute and k.relative_key != k]
+        missing = [name for name in keys if name not in shipped]
+        if missing:
+            topology = [f'{m.name} ({m.type})' for m in ob.modifiers if m.type != 'ARMATURE']
+            raise RuntimeError(
+                f"export_glb: {ob.name}'s shape keys {missing} are missing from {Path(path).name}; the exporter drops "
+                f"a mesh's shape keys when it applies a modifier that changes the topology ({', '.join(topology) or 'none'}), "
+                'so apply those before adding the shape keys')
+
+
+def export_glb(objs, path, animations=False, morphs=False):
+    """`morphs` exports the objects' shape keys as morph targets (see _morph_options); a recipe that names nothing
+    exports without them, exactly as before the option existed."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     scene.select_only(objs)
@@ -26,7 +68,6 @@ def export_glb(objs, path, animations=False):
         # and a looping clip does not hold its first frame for one frame.
         export_anim_slide_to_zero=True,
         export_skins=True,
-        export_morph=False,
         export_lights=False,
         export_cameras=False,
         export_attributes=True,
@@ -34,7 +75,10 @@ def export_glb(objs, path, animations=False):
         export_image_format='AUTO',
         export_optimize_animation_size=True,
         export_def_bones=False,
+        **_morph_options(morphs),
     )
+    if morphs:
+        _check_morphs_shipped(objs, path)
     return path
 
 
