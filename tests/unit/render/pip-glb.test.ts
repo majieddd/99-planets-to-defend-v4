@@ -118,9 +118,17 @@ describe('the shipped Pip-A through GLTFLoader', () => {
       return jaw.localToWorld(new Vector3(0, 0.1, 0));
     };
     const rest = chin();
-    const face = createCommanderFace(scene, 1)!;
+    const made = createCommanderFace(scene, 1);
+    // The shipped rig carries the face morphs, so it gets a face; a null here would pass every check below unread.
+    expect(made).not.toBeNull();
+    const face = made!;
     // The driver sets the morphs on the head, where the eyes and mouth are, as well as on the body.
     expect(face.meshes.map((m) => m.name)).toEqual(expect.arrayContaining(BODY_PARTS));
+    // And it writes to the shipped asset's own influences, not a copy: with the lids held shut, every body primitive's
+    // blink_L reads 1, the head's included.
+    face.setBlinkHold(1);
+    for (const part of bodyParts()) expect(part.morphTargetInfluences![part.morphTargetDictionary!['blink_L']!], part.name).toBe(1);
+    face.setBlinkHold(null);
     face.setJaw(1);
     const open = chin();
     face.setJaw(0);

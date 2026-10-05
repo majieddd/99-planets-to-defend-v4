@@ -192,9 +192,10 @@ test.describe('the style lab test handle', () => {
       expect(differences[`${key} back`], `${key}: ${line}`).toBe(0);
     }
 
-    // Unfrozen, the scene moves (the Husk walks, the commander cycles), which shows the freeze held it. The grain is off at the
-    // defaults, so the difference is the scene's motion alone: 0.26 to 0.29 in five runs under SwiftShader at renderer
-    // v1's dials and 0.29 and 0.30 in two at the locked ones. The grain's re-seeding at its old default of 0.04 had made
+    // Unfrozen, the scene moves (the Husk walks, the commander cycles), which shows the freeze held it. The grain is off at
+    // the defaults, so the difference is the scene's motion alone: with Bulwark, 0.26 to 0.29 in five runs under
+    // SwiftShader at renderer v1's dials and 0.29 and 0.30 in two at the locked ones; with Pip, the default commander since
+    // 2026-10-04, 0.43 and 0.72 on the two projects of one run. The grain's re-seeding at its old default of 0.04 had made
     // the difference about 2.8, which would have hidden a scene that never moved.
     await page.evaluate(() => (window.__P99__!['freeze'] as (on: boolean) => void)(false));
     await page.waitForTimeout(600);

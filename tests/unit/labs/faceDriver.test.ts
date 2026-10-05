@@ -1,5 +1,6 @@
-import { BoxGeometry, Float32BufferAttribute, Group, Mesh, MeshBasicMaterial, Object3D, Vector3 } from 'three';
+import { Bone, BoxGeometry, Float32BufferAttribute, Group, Mesh, MeshBasicMaterial, Object3D, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
+import { createCommanderFace } from '../../../src/labs/shared/commanderFace';
 import {
   BLINK_CLOSE_SECONDS,
   BLINK_INTERVAL_MAX_SECONDS,
@@ -194,5 +195,12 @@ describe('the face driver', () => {
     driver.update(2.5 + BLINK_CLOSE_SECONDS);
     expect(hull.morphTargetInfluences).toBe(body.morphTargetInfluences);
     expect(weight(hull, 'blink_L')).toBeCloseTo(1, 6);
+  });
+
+  it('gives no face to a rig with a bone named jaw and no face morphs, so a creature clip keeps its own jaw keys', () => {
+    // A face driver here would write the jaw's rest pose over the clip's jaw keys every frame.
+    const rig = new Group().add(Object.assign(new Bone(), { name: 'jaw' }));
+    expect(rig.getObjectByName('jaw')).toBeDefined();
+    expect(createCommanderFace(rig, 1)).toBeNull();
   });
 });
