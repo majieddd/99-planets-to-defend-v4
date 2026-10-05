@@ -81,4 +81,36 @@ describe('the play prototype controls', () => {
     key(true);
     expect(input.takeAttack()).toBe(false);
   });
+
+  it("asks for the combat arena's reset on R, once a press, under F's rules, and only on a page that asked for the key", () => {
+    const keyR = (fields: Partial<{ repeat: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean }> = {}) => {
+      const event = Object.assign(new Event('keydown', { cancelable: true }), { code: 'KeyR', key: 'r', repeat: false, ctrlKey: false, metaKey: false, altKey: false, ...fields });
+      window.dispatchEvent(event);
+      return event;
+    };
+    // The Asset World's input has no reset key, and leaves R to the browser.
+    const world = keyR();
+    expect(input.takeReset()).toBe(false);
+    expect(world.defaultPrevented).toBe(false);
+    input.setActive(false);
+    const element = () => Object.assign(new EventTarget(), { style: {} }) as unknown as HTMLElement;
+    const arena = createPlayInput(element(), element(), new EventTarget() as unknown as HTMLElement, element(), { resetKey: true });
+    arena.setActive(true);
+    expect(keyR().defaultPrevented).toBe(true);
+    expect(arena.takeReset()).toBe(true);
+    expect(arena.takeReset()).toBe(false);
+    // Held, its repeats ask nothing more; with a modifier it is the browser's (Ctrl+R reloads), not a reset.
+    keyR({ repeat: true });
+    expect(arena.takeReset()).toBe(false);
+    for (const modifier of ['ctrlKey', 'metaKey', 'altKey'] as const) {
+      keyR({ [modifier]: true });
+      expect(arena.takeReset(), modifier).toBe(false);
+    }
+    // Out of play it asks nothing, and stopping drops a reset not yet taken.
+    keyR();
+    arena.setActive(false);
+    expect(arena.takeReset()).toBe(false);
+    keyR();
+    expect(arena.takeReset()).toBe(false);
+  });
 });

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- An empty icon stops the browser requesting /favicon.ico, whose 404 is logged as a console error. -->
+    <link rel="icon" href="data:," />
+    <title>Combat arena</title>
+    <link rel="stylesheet" href="/src/ui/base.css" />
+    <link rel="stylesheet" href="/src/labs/world/world.css" />
+    <link rel="stylesheet" href="/src/labs/combat/combat.css" />
+  </head>
+  <body>
+    <div id="stage"></div>
+    <section id="controls" class="play-hint controls-card" aria-label="Controls">
+      <h1 class="controls-title">Combat arena</h1>
+      <dl class="controls-keys controls-keyboard">
+        <dt>Move</dt>
+        <dd>WASD or the arrow keys; Shift sprints</dd>
+        <dt>Attack</dt>
+        <dd>F or a click; press again in rhythm to chain three hits</dd>
+        <dt>Camera</dt>
+        <dd>drag to orbit, wheel to zoom</dd>
+        <dt>Reset</dt>
+        <dd>R puts the dummies and Pip back</dd>
+      </dl>
+      <dl class="controls-keys controls-touch">
+        <dt>Move</dt>
+        <dd>the pad; at its rim he sprints</dd>
+        <dt>Attack</dt>
+        <dd>the button; tap again in rhythm to chain three hits</dd>
+        <dt>Camera</dt>
+        <dd>drag to orbit, pinch to zoom</dd>
+        <dt>Reset</dt>
+        <dd>the panel's reset button</dd>
+      </dl>
+    </section>
+    <div id="pad" class="pad" hidden aria-hidden="true"><div class="pad-knob"></div></div>
+    <button id="attack" class="attack-button" type="button" hidden>Attack</button>
+    <div id="fps" class="fps"></div>
+    <div id="banner" class="banner" hidden></div>
+    <script type="module" src="/src/labs/combat/main.ts"></script>
+  </body>
+</html>

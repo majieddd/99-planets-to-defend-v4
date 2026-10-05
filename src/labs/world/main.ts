@@ -21,7 +21,7 @@ import { combatFeelJson, defaultCombatFeel, feelAddressValue, parseCombatFeel } 
 import { WorldLabels, type LabelSpec } from './labels';
 import { buildAssetWorld, type AssetWorld } from './layout';
 import { createWorldPanel, type WorldPanelState } from './panel';
-import { createPipPlay } from './play';
+import { createPipPlay, memberObstacles } from './play';
 import { createPlayInput } from './playInput';
 import { coverageGaps, MEMBERS, showableMembers } from './registry';
 import { createWorldSun } from './sun';
@@ -351,7 +351,7 @@ async function start(): Promise<void> {
         turntableBeforePlay = state.turntable;
         state.turntable = false;
         // Each face on the page blinks on its own seed, and his follows the world's (FACE_SEED).
-        pipPlay.enter(camera, controls, world.members, FACE_SEED + world.faces().length, frozen);
+        pipPlay.enter(camera, controls, memberObstacles(world.members), FACE_SEED + world.faces().length, frozen);
       } else {
         pipPlay.exit(controls);
         // The panel's refresh below shows the restored value.
@@ -380,7 +380,7 @@ async function start(): Promise<void> {
     state.heartLevel = world.heartLevel();
     // He walks round the reaches read when he came out, so a heart grown while he played let him walk into its new
     // crystal, and one shrunk kept him off ground it had given up.
-    if (pipPlay.active) pipPlay.refreshObstacles(world.members);
+    if (pipPlay.active) pipPlay.refreshObstacles(memberObstacles(world.members));
     if (!liveHeart) return;
     labels.setText(liveHeart.member.name, liveHeartText(state.heartLevel));
     labels.setAnchor(liveHeart.member.name, memberLabelAnchor(liveHeart));
@@ -443,6 +443,13 @@ async function start(): Promise<void> {
       openStyleLab: () => {
         const url = new URL('style.html', location.href);
         url.search = styleLabQuery(encodeDials(dials), state.member);
+        location.assign(url.toString());
+      },
+      // The combat feel tuned here goes with him, in the arena's own `?feel=`.
+      openArena: () => {
+        const url = new URL('combat.html', location.href);
+        const feelValue = feelAddressValue(feel);
+        url.search = feelValue ? `?${new URLSearchParams({ feel: feelValue }).toString()}` : '';
         location.assign(url.toString());
       },
       onFeel: syncAddress,

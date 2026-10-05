@@ -411,6 +411,7 @@ async function start(): Promise<void> {
       url.search = `?dials=${encodeDials(dials)}`;
       location.assign(url.toString());
     },
+    openArena: () => location.assign(new URL('combat.html', location.href).toString()),
   });
   mountReferenceBoard(document.getElementById('board') as HTMLElement, theme);
 

@@ -38,6 +38,7 @@ export default defineConfig({
         main: resolve(import.meta.dirname, 'index.html'),
         style: resolve(import.meta.dirname, 'labs/style.html'),
         world: resolve(import.meta.dirname, 'labs/world.html'),
+        combat: resolve(import.meta.dirname, 'labs/combat.html'),
       },
       output: {
         // The Style Lab shipped as one 828 kB chunk of three, postprocessing, lil-gui and lab code, so every lab edit

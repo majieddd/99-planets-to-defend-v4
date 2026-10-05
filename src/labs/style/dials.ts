@@ -29,6 +29,7 @@ export interface LabHandlers {
   reset(): void;
   screenshot(): void;
   openWorld(): void;
+  openArena(): void;
 }
 
 type ColorDial = (typeof COLOR_DIALS)[number];
@@ -119,5 +120,7 @@ export function createDialsPanel(dials: RenderDials, state: LabState, handlers: 
   actions.add({ reset }, 'reset').name('Reset dials');
   // The Asset World shows every generated asset in the look these dials make, through the same dials link.
   actions.add({ world: () => handlers.openWorld() }, 'world').name('Open the Asset World with these dials');
+  // The combat arena is for the feel, in the locked look, so it takes no dials.
+  actions.add({ arena: () => handlers.openArena() }, 'arena').name('Open the combat arena');
   return gui;
 }

@@ -1,0 +1,71 @@
+/* The combat arena's chrome, over the Asset World's (labs/world/world.css), whose canvas, chips, thumb pad, Attack button
+   and phone layout it shares. The controls card takes the play hint's place in the top left and its phone rules, and
+   always shows; the panel's open height stops above the pad and the button on a touch screen, so both stay usable
+   while the feel is tuned. */
+
+.controls-title {
+  margin: 0 0 3px;
+  font: 700 13px/1.2 var(--font-display);
+  letter-spacing: 0.04em;
+  color: var(--paper);
+}
+
+.controls-keys {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 8px;
+  margin: 0;
+}
+
+.controls-keys dt {
+  font-weight: 600;
+  color: var(--paper);
+}
+
+.controls-keys dd {
+  margin: 0;
+  color: var(--paper-muted);
+}
+
+/* The keys on a mouse and keyboard, the pad and the button on a touch screen, as the page shows the pad (main.ts). */
+.controls-touch {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .controls-keyboard {
+    display: none;
+  }
+
+  .controls-touch {
+    display: grid;
+  }
+}
+
+@media (min-width: 768px) {
+  .controls-card {
+    max-width: min(320px, calc(100vw - 24px));
+    padding: 6px 10px;
+  }
+}
+
+/* With the pad shown, the open panel in the top right stops 12 px above the Attack button, whose top stands 170 px up
+   (56 px plus half the pad's 140 px less half its own 88 px, plus its 88 px; world.css). At 844 x 390 the panel's 326 px
+   reached down over the button. */
+.pad-shown .lil-gui.lil-root.lil-auto-place {
+  max-height: calc(100vh - 170px - 12px);
+  /* The visible height where the browser knows it, since a phone's toolbars can make 100vh taller than the screen. */
+  max-height: calc(100dvh - 170px - 12px);
+}
+
+@media (max-width: 767px) {
+  /* On a phone the open panel spans the top, so it stops 8 px above the pad, the higher of the two, whose top stands
+     8 px, a chip line, 10 px, 16 px and its 140 px up (world.css). Down to the chips' strip, it covered both. */
+  .pad-shown .lil-gui.lil-root.lil-auto-place {
+    max-height: calc(var(--view-h) - 8px - (8px + var(--chip-line) + 10px + 16px + 140px) - 8px);
+  }
+
+  .controls-title {
+    font-size: 12px;
+  }
+}

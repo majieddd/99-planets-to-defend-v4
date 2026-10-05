@@ -40,6 +40,7 @@ export interface WorldPanelHandlers extends CombatFeelHandlers {
   onHeartLevel(level: number): void;
   onTier(tier: TierName): void;
   openStyleLab(): void;
+  openArena(): void;
 }
 
 /** What the combat feel folder tells its page. */
@@ -227,6 +228,8 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
   gui.add(state, 'paused').name('pause animation');
   gui.add(state, 'tier', ['high', 'medium', 'low']).name('quality tier').onChange((tier: TierName) => handlers.onTier(tier));
   gui.add({ open: () => handlers.openStyleLab() }, 'open').name('Open this look in the Style Lab');
+  // The combat arena tries the same Play Pip with three training dummies and only two models to load.
+  gui.add({ open: () => handlers.openArena() }, 'open').name('Open the combat arena');
 
   // Play Pip's combat feel. On a phone the folder starts closed, as the panel does, so it does not fill the small
   // screen when the panel opens.

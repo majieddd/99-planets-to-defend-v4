@@ -9,12 +9,16 @@ const SPRINT = ['ShiftLeft', 'ShiftRight'];
 const HANDLED = new Set([...FORWARD, ...BACK, ...LEFT, ...RIGHT, ...SPRINT]);
 /** The key that swings his sword, beside the movement keys under the left hand. */
 const ATTACK = 'KeyF';
+/** The combat arena's reset key, beside F under the left hand (createPlayInput's `resetKey`). */
+const RESET = 'KeyR';
 
 export interface PlayInput {
   /** The keys and the thumb pad together, as one move input. */
   read(): MoveInput;
   /** True once for each attack asked since the last call (F, a left click on the canvas, or the attack button). */
   takeAttack(): boolean;
+  /** True once for each R pressed since the last call, on a page that asked for the reset key; always false otherwise. */
+  takeReset(): boolean;
   /** Starts or stops listening; stopping lets go of every held key and the pad, and drops an attack not yet taken. */
   setActive(on: boolean): void;
 }
@@ -25,11 +29,13 @@ export interface PlayInput {
  * the page shows only while playing; the button also answers Enter, Space and a screen reader's activation. A
  * one-finger drag anywhere else still reaches the canvas and orbits, because a touch that starts on the pad or the
  * button never reaches OrbitControls, and a left drag on the canvas still orbits, because only a press that stays put
- * and lifts quickly counts as a click (isAttackClick).
+ * and lifts quickly counts as a click (isAttackClick). With `resetKey`, R asks for the combat arena's reset
+ * (takeReset); the Asset World leaves R to the browser.
  */
-export function createPlayInput(pad: HTMLElement, knob: HTMLElement, attackButton: HTMLElement, canvas: HTMLElement): PlayInput {
+export function createPlayInput(pad: HTMLElement, knob: HTMLElement, attackButton: HTMLElement, canvas: HTMLElement, options: { resetKey?: boolean } = {}): PlayInput {
   const held = new Set<string>();
   let active = false;
+  let resetAsked = false;
   let stick: MoveInput = { right: 0, forward: 0, sprint: false };
   let finger: number | null = null;
   let attackAsked = false;
@@ -50,6 +56,12 @@ export function createPlayInput(pad: HTMLElement, knob: HTMLElement, attackButto
     if (event.code === ATTACK) {
       // A held F repeats its keydown; one swing per press, so holding it does not chain swings.
       if (!event.repeat) attackAsked = true;
+      event.preventDefault();
+      return;
+    }
+    // The arena's R follows F's rules: no shortcut, nothing typed into a field, one reset per press however long held.
+    if (options.resetKey && event.code === RESET) {
+      if (!event.repeat) resetAsked = true;
       event.preventDefault();
       return;
     }
@@ -143,12 +155,18 @@ export function createPlayInput(pad: HTMLElement, knob: HTMLElement, attackButto
       attackAsked = false;
       return asked;
     },
+    takeReset() {
+      const asked = resetAsked;
+      resetAsked = false;
+      return asked;
+    },
     setActive(on) {
       active = on;
       if (!on) {
         held.clear();
         release();
         attackAsked = false;
+        resetAsked = false;
         buttonPressed = false;
         press = null;
       }

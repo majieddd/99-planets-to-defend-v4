@@ -1,4 +1,4 @@
-import { AnimationMixer, LoopRepeat, Quaternion, Vector3, type AnimationAction, type AnimationClip, type Mesh, type Object3D, type PerspectiveCamera, type SkinnedMesh } from 'three';
+import { AnimationMixer, LoopRepeat, Quaternion, Vector3, type AnimationAction, type AnimationClip, type Box3, type Mesh, type Object3D, type PerspectiveCamera, type SkinnedMesh } from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
 import type { LoadedAsset } from '../../render/assets/loadAsset';
@@ -137,12 +137,72 @@ export interface PlayClocks {
   motion: number;
 }
 
+/**
+ * Where he comes out and how the camera first frames him: his point on the plane tangent at the pole and his yaw, the
+ * way from him toward the camera on that plane (any length), and the camera's distance from his chest and its pitch
+ * above his horizon. The Asset World and the combat arena each have their own.
+ */
+export interface PlayStart {
+  x: number;
+  z: number;
+  yaw: number;
+  cameraBearing: { x: number; z: number };
+  cameraDistance: number;
+  cameraPitchDeg: number;
+}
+
+/**
+ * The Asset World's start: PLAY_SPAWN, facing the cameras' bearing turned toward the key as the placed characters are
+ * (THREE_QUARTER_TURN_DEG), with the camera opening on the world cameras' bearing from him, so he stands three-quarters
+ * on with the world behind him.
+ */
+export function worldPlayStart(): PlayStart {
+  const { x, z } = toTangent(PLAY_SPAWN.s, PLAY_SPAWN.d);
+  return {
+    x,
+    z,
+    yaw: Math.atan2(TOWARD_CAMERAS.x, TOWARD_CAMERAS.z) - (THREE_QUARTER_TURN_DEG * Math.PI) / 180,
+    cameraBearing: { x: TOWARD_CAMERAS.x, z: TOWARD_CAMERAS.z },
+    cameraDistance: PLAY_CAMERA_DISTANCE,
+    cameraPitchDeg: PLAY_CAMERA_PITCH_DEG,
+  };
+}
+
+/**
+ * A body's reach across the ground from its root at `at`, from its drawn bounds: their farthest face from the root, and
+ * never less than PLAY_MIN_MEMBER_REACH. The patch lies within 7 degrees of level where the members and the arena's
+ * dummies stand, so world x and z stand in for the ground's own two directions. Every obstacle he walks round, a member
+ * of the Asset World or a training dummy, is read this way and widened by his own PLAY_BODY_RADIUS.
+ */
+export function groundReach(at: Vector3, bounds: Box3): number {
+  const { min, max } = bounds;
+  return Math.max(at.x - min.x, max.x - at.x, at.z - min.z, max.z - at.z, PLAY_MIN_MEMBER_REACH);
+}
+
+/** Every placed member of the Asset World as an obstacle: its root on the tangent plane and its reach widened by his. */
+export function memberObstacles(members: readonly PlacedMember[]): Obstacle[] {
+  return members.map((entry) => {
+    const { x, z } = toTangent(entry.member.s, entry.member.d);
+    return { x, z, radius: groundReach(entry.root.getWorldPosition(new Vector3()), entry.bounds) + PLAY_BODY_RADIUS };
+  });
+}
+
 export interface PipPlay {
   /** False when the page has no Pip to play (a build without the assets). */
   readonly available: boolean;
   readonly active: boolean;
-  enter(camera: PerspectiveCamera, controls: OrbitControls, members: readonly PlacedMember[], seed: number, frozen: boolean): void;
+  /**
+   * Puts him out at `start` (the Asset World's, worldPlayStart, by default) among `obstacles`, the reaches he walks
+   * round, his face blinking on `seed` and held while `frozen`.
+   */
+  enter(camera: PerspectiveCamera, controls: OrbitControls, obstacles: readonly Obstacle[], seed: number, frozen: boolean, start?: PlayStart): void;
   exit(controls: OrbitControls): void;
+  /**
+   * Stands him back at the start, still and out of any hit, with the camera framing him as it first did, or as `start`
+   * frames him when given (the arena reads its framing again for a screen turned since the load); the reading's counts
+   * (strikes, dropped presses) run on, since he has not left play.
+   */
+  respawn(camera: PerspectiveCamera, controls: OrbitControls, start?: PlayStart): void;
   /**
    * One frame: takes the frame's attack press into the combo (combo.ts says what a press does when), moves him by the
    * input as the playing hit allows, poses him, and carries the camera with him. A press while the lab is frozen is
@@ -151,8 +211,11 @@ export interface PipPlay {
    */
   update(clocks: PlayClocks, input: MoveInput, attack: boolean, camera: PerspectiveCamera, controls: OrbitControls): void;
   setFrozen(on: boolean): void;
-  /** Re-reads every member's reach, for a member whose drawn size changed while he plays: the slider heart. */
-  refreshObstacles(members: readonly PlacedMember[]): void;
+  /**
+   * Takes new obstacles while he plays: the Asset World's after the slider heart's drawn size changed, the arena's after
+   * a dummy moved or went home.
+   */
+  refreshObstacles(obstacles: readonly Obstacle[]): void;
   reading(): PlayReading;
 }
 
@@ -260,18 +323,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
   const desired = new Vector3();
   const shift = new Vector3();
 
-  /** Every placed member's root on the tangent plane, with its drawn reach from the root widened by his body's. */
-  function obstaclesOf(members: readonly PlacedMember[]): Obstacle[] {
-    return members.map((entry) => {
-      const { x, z } = toTangent(entry.member.s, entry.member.d);
-      const at = entry.root.getWorldPosition(new Vector3());
-      const { min, max } = entry.bounds;
-      // The bounds' farthest face from the root across the ground: the patch lies within 7 degrees of level where the
-      // members stand, so world x and z stand in for the ground's own two directions.
-      const reach = Math.max(at.x - min.x, max.x - at.x, at.z - min.z, max.z - at.z, PLAY_MIN_MEMBER_REACH);
-      return { x, z, radius: reach + PLAY_BODY_RADIUS };
-    });
-  }
+  let start: PlayStart = worldPlayStart();
 
   function pose(): void {
     if (!root) return;
@@ -304,14 +356,37 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
   /** Whether a hit plays on his whole body: a planted hit always, and every hit on a rig the mask could not split. */
   const planted = (step: ComboStep): boolean => !upperNames || contractOf(step).planted;
 
+  /**
+   * Stands him at the start, still and out of any hit, and frames him there: the orbit's centre on his chest and the
+   * camera on the start's bearing from him, at its distance and pitch. The next update weighs his clips from this.
+   */
+  function toStart(camera: PerspectiveCamera, controls: OrbitControls): void {
+    motion = { x: start.x, z: start.z, yaw: start.yaw, speed: 0, drive: 0 };
+    combo = COMBO_READY;
+    runShare = 0;
+    weights = { current: 0, outgoing: 0 };
+    body = bodyWeights(0, 0, false, 0, false);
+    swing = FREE_MOTION;
+    timeScale = 0;
+    pose();
+    chest(follow);
+    const surface = ground.surfaceAt(motion.x, motion.z);
+    const pitch = (start.cameraPitchDeg * Math.PI) / 180;
+    const away = new Vector3(start.cameraBearing.x, 0, start.cameraBearing.z).projectOnPlane(surface.up).normalize();
+    controls.target.copy(follow);
+    camera.position.copy(follow).addScaledVector(away, start.cameraDistance * Math.cos(pitch)).addScaledVector(surface.up, start.cameraDistance * Math.sin(pitch));
+    camera.lookAt(follow);
+  }
+
   return {
     available: template !== null && idleClip !== null && runClip !== null,
     get active() {
       return root !== null;
     },
-    enter(camera, controls, members, seed, frozenNow) {
+    enter(camera, controls, obstaclesNow, seed, frozenNow, startNow) {
       if (!template || !idleHalves || !runHalves || !runClip || root) return;
       frozen = frozenNow;
+      start = startNow ?? worldPlayStart();
       stride ??= measureRunLoop(template, runClip);
       if (!stride) console.warn('Play Pip: the run clip gave no stride to read, so it plays at its authored rate');
       root = cloneRig(template);
@@ -339,23 +414,11 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
         for (const action of [actions.upper, actions.lower]) if (action) action.timeScale = 0;
         return actions;
       });
-      runShare = 0;
-      weights = { current: 0, outgoing: 0 };
-      body = bodyWeights(0, 0, false, 0, false);
-      swing = FREE_MOTION;
-      timeScale = 0;
-      combo = COMBO_READY;
       strikes = 0;
       strikesByStep = [0, 0, 0];
       lastStrikeStep = null;
       dropped = 0;
-      obstacles = obstaclesOf(members);
-      const { x, z } = toTangent(PLAY_SPAWN.s, PLAY_SPAWN.d);
-      // He faces the cameras' bearing, turned toward the key as the placed characters are (THREE_QUARTER_TURN_DEG).
-      motion = { x, z, yaw: Math.atan2(TOWARD_CAMERAS.x, TOWARD_CAMERAS.z) - (THREE_QUARTER_TURN_DEG * Math.PI) / 180, speed: 0, drive: 0 };
-      pose();
-      on.update(0);
-      parent.add(root);
+      obstacles = [...obstaclesNow];
 
       saved = { minDistance: controls.minDistance, maxDistance: controls.maxDistance, maxPolarAngle: controls.maxPolarAngle, enablePan: controls.enablePan };
       controls.minDistance = PLAY_CAMERA_MIN_DISTANCE;
@@ -363,14 +426,14 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       controls.maxPolarAngle = (PLAY_CAMERA_MAX_POLAR_DEG * Math.PI) / 180;
       // A pan would move the orbit's centre off him, and the follow would then carry that offset for good.
       controls.enablePan = false;
-      // The camera opens on the world cameras' bearing from him, so he stands three-quarters on with the world behind.
-      chest(follow);
-      const surface = ground.surfaceAt(motion.x, motion.z);
-      const pitch = (PLAY_CAMERA_PITCH_DEG * Math.PI) / 180;
-      const away = new Vector3(TOWARD_CAMERAS.x, 0, TOWARD_CAMERAS.z).projectOnPlane(surface.up).normalize();
-      controls.target.copy(follow);
-      camera.position.copy(follow).addScaledVector(away, PLAY_CAMERA_DISTANCE * Math.cos(pitch)).addScaledVector(surface.up, PLAY_CAMERA_DISTANCE * Math.sin(pitch));
-      camera.lookAt(follow);
+      toStart(camera, controls);
+      on.update(0);
+      parent.add(root);
+    },
+    respawn(camera, controls, startNow) {
+      if (!root) return;
+      if (startNow) start = startNow;
+      toStart(camera, controls);
     },
     exit(controls) {
       if (!root || !mixer) return;
@@ -454,8 +517,8 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       frozen = on;
       face?.setFrozen(on);
     },
-    refreshObstacles(members) {
-      if (root) obstacles = obstaclesOf(members);
+    refreshObstacles(obstaclesNow) {
+      if (root) obstacles = [...obstaclesNow];
     },
     reading() {
       const at = root ? root.getWorldPosition(new Vector3()).toArray() : null;
