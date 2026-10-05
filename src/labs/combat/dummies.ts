@@ -11,11 +11,26 @@ import type { GroundPose } from './arena';
 
 /** The clip a training dummy loops while it waits to be hit. */
 export const DUMMY_IDLE = 'idle';
+/**
+ * A dummy's body as the blade meets it (labs/combat/hitShape.ts): a vertical cylinder about its root, this share of its
+ * reach across (0.6 m of a 1.2 m reach, the Husk's hump and thorax inside it and its splayed legs and claws outside),
+ * from DUMMY_HIT_LOW to DUMMY_HIT_TOP up. Half the reach is also the body the arena's layout test takes for how far a
+ * blade must reach to touch one.
+ *
+ * The band reaches past the Husk's 1.21 m top to 2 m, a commander's height and a little more, so a hit's shape is its
+ * blade's sweep across the ground, as the game's attack shapes are shapes on the ground (Mechanics, Commander combat),
+ * and not the blade's height over a hunched creature: cut to the Husk's own top, the backhand, whose flat cut crosses
+ * in front of Pip 1.5 to 1.7 m up (attack_2 at 0.15 to 0.175 s, his GLB), passed over the middle dummy's back and
+ * missed every time, though it reads as a blow to the body from the play camera. The sparks still go on the body: a
+ * contact above its top is brought down to it (impact.ts).
+ */
+export const DUMMY_HIT_SHARE = 0.5;
+export const DUMMY_HIT_LOW = 0.15;
+export const DUMMY_HIT_TOP = 2;
 
 /**
- * A hit landing on a dummy, as phase B's hit detection will report it: the combo's hit that landed and how far into its
- * clip, Pip's place when it landed, and the dummy it landed on. Phase A has no hit detection, so nothing reports one
- * yet; the shape is here so phase B's hit-stop, sparks and flinch can hang off the hook below.
+ * A hit landing on a dummy, as the arena's hit detection reports it (labs/combat/impact.ts): the combo's hit that
+ * landed and how far into its clip, and Pip's place when it landed, which the reaction pushes the dummy away from.
  */
 export interface DummyHit {
   step: ComboStep;
@@ -42,6 +57,8 @@ export interface TrainingDummy {
   readonly home: Readonly<GroundPose>;
   /** Its body's reach across the ground from its root, from its drawn bounds at home (play.ts, groundReach). */
   readonly reach: number;
+  /** The top of its drawn bounds above its root at home, in metres: the hit body's top (DUMMY_HIT_SHARE). */
+  readonly height: number;
   /** Where it stands now. */
   pose(): GroundPose;
   /**
@@ -83,8 +100,12 @@ export interface TrainingDummies {
    * same list every call, kept up to date as the dummies move, so Pip can read it every frame without a list being built.
    */
   obstacles(): readonly Obstacle[];
-  /** Advances the idles by the frame's step; a step of 0, the lab frozen, holds them. */
-  update(dt: number): void;
+  /**
+   * Advances the idles by the frame's step; a step of 0, the lab frozen, holds them. The dummies a hit-stop holds
+   * (`held`, by index) advance by `heldStep` instead, the part of the frame the stop leaves, so the struck dummy holds
+   * with Pip while the others breathe on.
+   */
+  update(dt: number, held?: readonly boolean[], heldStep?: number): void;
   /** Puts every dummy back home, then tells the reset listeners. */
   reset(): void;
 }
@@ -153,7 +174,10 @@ export function createTrainingDummies(
     toHomeMoment();
     parent.add(root);
     mixers.push(mixer);
-    const reach = groundReach(root.getWorldPosition(new Vector3()), drawnBounds(root, hullMaterial));
+    const bounds = drawnBounds(root, hullMaterial);
+    const rootAt = root.getWorldPosition(new Vector3());
+    const reach = groundReach(rootAt, bounds);
+    const height = bounds.max.y - rootAt.y;
     const obstacle: Obstacle = { x: home.x, z: home.z, radius: reach + PLAY_BODY_RADIUS };
     obstacleList.push(obstacle);
     const dummy: TrainingDummy = {
@@ -163,6 +187,7 @@ export function createTrainingDummies(
       mixer,
       home: Object.freeze({ ...home }),
       reach,
+      height,
       pose: () => ({ ...pose }),
       moveTo(next) {
         pose = { ...next };
@@ -225,8 +250,8 @@ export function createTrainingDummies(
       return dummy.pose();
     },
     obstacles: () => obstacleList,
-    update(dt) {
-      for (const mixer of mixers) mixer.update(dt);
+    update(dt, held, heldStep = dt) {
+      for (let i = 0; i < mixers.length; i++) mixers[i]!.update(held?.[i] ? heldStep : dt);
     },
     reset() {
       for (const dummy of list) dummy.reset();

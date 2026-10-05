@@ -70,3 +70,31 @@
     font-size: 12px;
   }
 }
+
+/* The placeholder hit numbers (labs/combat/hitNumbers.ts): a layer over the canvas that takes no pointer, each number
+   placed by its transform. Painted, not printed: the display face in a pale cyan with a dark ink edge, as the Style
+   Lab's chips ink their type, so it reads over the bright meadow and the dark Husk alike; the finisher's is larger. */
+.hit-numbers {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.hit-number {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font: 700 26px/1 var(--font-display);
+  letter-spacing: 0.02em;
+  color: #c9fbff;
+  -webkit-text-stroke: 1.5px var(--ink);
+  paint-order: stroke fill;
+  text-shadow: 0 2px 0 rgba(14, 15, 20, 0.55);
+  will-change: transform, opacity;
+}
+
+.hit-number.finisher {
+  font-size: 36px;
+  color: #f2feff;
+}

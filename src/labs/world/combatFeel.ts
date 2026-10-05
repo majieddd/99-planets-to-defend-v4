@@ -5,10 +5,11 @@
  * strike and cancel point) are not here: they belong to the clips, in combo.ts, whose lengths and strikes come from
  * src/shared/timings.json.
  *
- * Phase B of the combat feel research adds its impact numbers as further keys of CombatFeel, DEFAULT_COMBAT_FEEL and
- * COMBAT_FEEL_RANGES (the lunges and their target assist and the sword trail so far, lab numbers with rows of their own
- * in Numbers, Asset World layout); the folder, the readout, the copy button and the address parameter follow those
- * three tables, so nothing else changes for them.
+ * Phase B of the combat feel research added its impact numbers (the hit-stops, the lunges and their target assist, the
+ * sword trail, the camera shake and the knockbacks) as further keys of CombatFeel, DEFAULT_COMBAT_FEEL and
+ * COMBAT_FEEL_RANGES; the folder, the readout, the copy button and the address parameter follow those three tables, so
+ * nothing else changed for them. The hit-stops' defaults are the blueprint's (Numbers, Combat feel: 55 ms and 90 ms);
+ * the rest are lab numbers with rows of their own (Numbers, Combat arena).
  */
 
 export interface CombatFeel {
@@ -26,6 +27,10 @@ export interface CombatFeel {
   moveScale: number;
   /** The share of his turn rate he keeps during a light hit's wind-up. */
   windupTurn: number;
+  /** Seconds a light hit's contact holds his clips, his movement and the struck dummy, while the view goes on. */
+  hitStopLight: number;
+  /** Seconds the finisher's contact holds them. */
+  hitStopFinisher: number;
   /** Metres a light hit's lunge carries him forward around its strike. */
   lungeLight: number;
   /** Metres the finisher's lunge carries him. */
@@ -36,6 +41,12 @@ export interface CombatFeel {
   trailLength: number;
   /** Seconds the sword trail takes to fade once the active frames end. */
   trailFade: number;
+  /** The camera shake's strength on contact, as a multiple of its authored amplitude (0 turns it off). */
+  shake: number;
+  /** Metres a light hit knocks a dummy back. */
+  knockbackLight: number;
+  /** Metres the finisher knocks a dummy back. */
+  knockbackFinisher: number;
 }
 
 /** The defaults, the one place they are set. Frozen so a slider writes a copy, never these. */
@@ -47,11 +58,16 @@ export const DEFAULT_COMBAT_FEEL: Readonly<CombatFeel> = Object.freeze({
   reset: 0.3,
   moveScale: 0.4,
   windupTurn: 0.5,
+  hitStopLight: 0.055,
+  hitStopFinisher: 0.09,
   lungeLight: 0.35,
   lungeFinisher: 0.55,
   assistTurn: 15,
   trailLength: 0.09,
   trailFade: 0.12,
+  shake: 1,
+  knockbackLight: 0.25,
+  knockbackFinisher: 0.6,
 });
 
 /** A setting's slider: its least and greatest value, its step and its name in the panel. */
@@ -75,11 +91,16 @@ export const COMBAT_FEEL_RANGES: { readonly [K in keyof CombatFeel]: FeelRange }
   reset: { min: 0, max: 1, step: 0.05, label: 'chain reset after a hit (s)' },
   moveScale: { min: 0, max: 1, step: 0.05, label: 'pace kept in a light hit' },
   windupTurn: { min: 0, max: 1, step: 0.05, label: 'turn rate kept in the wind-up' },
+  hitStopLight: { min: 0, max: 0.15, step: 0.005, label: 'hit-stop on a light hit (s)' },
+  hitStopFinisher: { min: 0, max: 0.2, step: 0.005, label: 'hit-stop on the finisher (s)' },
   lungeLight: { min: 0, max: 0.8, step: 0.05, label: 'lunge on a light hit (m)' },
   lungeFinisher: { min: 0, max: 1.2, step: 0.05, label: 'lunge on the finisher (m)' },
   assistTurn: { min: 0, max: 45, step: 1, label: 'lunge turn toward a target (degrees)' },
   trailLength: { min: 0.02, max: 0.2, step: 0.01, label: 'sword trail length (s)' },
   trailFade: { min: 0.03, max: 0.3, step: 0.01, label: 'sword trail fade (s)' },
+  shake: { min: 0, max: 2, step: 0.05, label: 'camera shake strength' },
+  knockbackLight: { min: 0, max: 1, step: 0.05, label: 'knockback on a light hit (m)' },
+  knockbackFinisher: { min: 0, max: 1.5, step: 0.05, label: 'knockback on the finisher (m)' },
 };
 
 /**

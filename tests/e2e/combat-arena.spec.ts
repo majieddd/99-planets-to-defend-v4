@@ -36,6 +36,19 @@ interface DummyReading {
   reach: number;
   hits: number;
   fromPip: { distance: number; angleDeg: number } | null;
+  flinch: number;
+  knockback: number;
+}
+
+/** What `__P99__.impact()` reads of the arena's impact (labs/combat/impact.ts), as far as these tests read it. */
+interface ImpactReading {
+  swings: { step: number; connected: boolean; dummies: number[]; at: number | null }[];
+  connects: number;
+  lastConnect: { step: number; dummy: number; at: number; contact: number[] } | null;
+  hitStop: { active: boolean; remaining: number; lengths: number[]; held: boolean[] };
+  sparks: { alive: number; lastCount: number; lastPosition: number[] | null; bursts: number };
+  shake: { offset: number; active: boolean; enabled: boolean };
+  numbers: { live: number; last: number | null };
 }
 
 interface CameraReading {
@@ -285,6 +298,139 @@ test.describe('the combat arena', () => {
       expect(stepOut, line).toBeLessThan(0.3);
       expect(atEnd, line).toBeLessThanOrEqual(Math.max(...lateMoves) + 1e-6);
       for (const move of afterMoves) expect(move, line).toBeLessThan(0.002);
+      expect(log.errors, line).toEqual([]);
+    });
+
+    test('lands all three hits on the middle dummy with a hit-stop, sparks and a reaction, and gives a whiff none of them', async ({ page }) => {
+      test.setTimeout(240_000);
+      const log = collectConsole(page);
+      await open(page);
+      // Every frame from a press until a while after the hits end is read in the page, as the chain test does, with the
+      // frame's clocks (a hit-stop shows as a combo step under the frame's), the impact and the middle dummy.
+      type Frame = { step: number; time: number | null; clocks: PlayReading['clocks']; impact: ImpactReading; middle: DummyReading; trail: PlayReading['trail'] };
+      const record = (presses: 'one' | 'chain') =>
+        page.evaluate(async (mode) => {
+          const p99 = window.__P99__!;
+          const play = () => (p99['play'] as () => PlayReading)();
+          const frames: Frame[] = [];
+          const pressedIn = new Set<number>();
+          const press = (): void => {
+            window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF', key: 'f' }));
+            window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyF', key: 'f' }));
+          };
+          press();
+          await new Promise<void>((done) => {
+            let after = 0;
+            const tick = (): void => {
+              const sample = play();
+              frames.push({
+                step: sample.comboStep,
+                time: sample.attackTime,
+                clocks: sample.clocks,
+                impact: (p99['impact'] as () => ImpactReading)(),
+                middle: (p99['dummies'] as () => DummyReading[])()[1]!,
+                trail: sample.trail,
+              });
+              if (sample.comboStep === 0 && frames.length > 3) after += 1;
+              if (after >= 12) return done();
+              const open = sample.attackTime !== null && sample.bufferOpensAt !== null && sample.attackTime >= sample.bufferOpensAt;
+              if (mode === 'chain' && sample.comboStep > 0 && sample.comboStep < 3 && open && !pressedIn.has(sample.comboStep)) {
+                pressedIn.add(sample.comboStep);
+                press();
+              }
+              requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          });
+          return frames;
+        }, presses);
+      /** Each run of frames whose combo clock took less than the frame's: a hit-stop, with the time it held. */
+      const stops = (frames: Frame[]) => {
+        const out: { step: number; ms: number; frames: number }[] = [];
+        let run: { step: number; ms: number; frames: number } | null = null;
+        for (const frame of frames) {
+          const held = frame.clocks.frame - frame.clocks.combo;
+          if (held > 1e-9) {
+            run ??= { step: frame.step, ms: 0, frames: 0 };
+            run.ms += held * 1000;
+            run.frames += 1;
+          } else if (run) {
+            out.push(run);
+            run = null;
+          }
+        }
+        if (run) out.push(run);
+        return out;
+      };
+
+      // A swing at the air from the spawn, the dummies 3 m off: the blade meets nothing, so nothing marks it.
+      const whiff = await record('one');
+      const whiffEnd = whiff.at(-1)!.impact;
+      // Then W walks him straight at the middle dummy until its reach holds him, and the chain is pressed from the page.
+      await page.keyboard.down('KeyW');
+      await page.waitForFunction(() => ((window.__P99__!['play'] as () => PlayReading)().clearance ?? 1) < 0.02, undefined, { timeout: 60_000 });
+      await page.keyboard.up('KeyW');
+      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().speed === 0, undefined, { timeout: 60_000 });
+      const chain = await record('chain');
+      const end = chain.at(-1)!.impact;
+      const measured = stops(chain);
+      // Each contact as the frame it landed on read it: which hit, the sparks then, and where they went.
+      const contacts = chain
+        .map((frame, i) => ({ frame, before: chain[i - 1] }))
+        .filter(({ frame, before }) => before && frame.impact.connects > before.impact.connects)
+        .map(({ frame }) => ({
+          step: frame.impact.lastConnect!.step,
+          dummy: frame.impact.lastConnect!.dummy,
+          bursts: frame.impact.sparks.bursts,
+          alive: frame.impact.sparks.alive,
+          sparksAt: frame.impact.sparks.lastPosition,
+          contact: frame.impact.lastConnect!.contact,
+          hits: frame.middle.hits,
+        }));
+      // The middle dummy's reaction between one contact and the next: its most flinch and its knockback.
+      const connectAt = chain.map((frame, i) => (i > 0 && frame.impact.connects > chain[i - 1]!.impact.connects ? i : -1)).filter((i) => i >= 0);
+      const reactions = connectAt.map((from, k) => {
+        const span = chain.slice(from, connectAt[k + 1] ?? chain.length);
+        return { flinch: Math.max(...span.map((frame) => frame.middle.flinch)), knockback: Math.max(...span.map((frame) => frame.middle.knockback)) };
+      });
+      const line =
+        `combat arena impact [${test.info().project.name}]: whiff ${whiff.length} frames, swings ${JSON.stringify(whiffEnd.swings)}, ` +
+        `stops ${JSON.stringify(stops(whiff))}, sparks ${whiffEnd.sparks.bursts}, trail up to ${Math.max(...whiff.map((frame) => frame.trail.points))} samples; ` +
+        `chain ${chain.length} frames, swings ${JSON.stringify(end.swings.slice(-3))}; hit-stops from the clocks ${measured.map((run) => `attack_${run.step} ${run.ms.toFixed(1)} ms over ${run.frames} frames`).join(', ')} ` +
+        `(the impact's own ${end.hitStop.lengths.slice(-3).map((value) => (value * 1000).toFixed(1)).join(', ')} ms); ` +
+        `contacts ${contacts.map((c) => `attack_${c.step} on dummy ${c.dummy}: sparks burst ${c.bursts} (${c.alive} alive) at ${c.sparksAt?.map((v) => v.toFixed(2)).join(',')}, hits ${c.hits}`).join('; ')}; ` +
+        `reactions ${reactions.map((r) => `flinch ${r.flinch.toFixed(2)}, knockback ${r.knockback.toFixed(3)} m`).join('; ')}; ` +
+        `the middle dummy's hits ${chain.at(-1)!.middle.hits}, numbers last ${end.numbers.last}; console errors ${JSON.stringify(log.errors)}`;
+      console.log(line);
+      // The whiff: a swing, but no contact, no stop, no sparks; its trail still drew.
+      expect(whiffEnd.swings.at(-1), line).toMatchObject({ step: 1, connected: false });
+      expect(whiffEnd.connects, line).toBe(0);
+      expect(stops(whiff), line).toEqual([]);
+      expect(whiffEnd.hitStop.lengths, line).toEqual([]);
+      expect(whiffEnd.sparks.bursts, line).toBe(0);
+      expect(Math.max(...whiff.map((frame) => frame.trail.points)), line).toBeGreaterThan(1);
+      // The chain: three swings, each connected with the middle dummy alone.
+      expect(end.swings.slice(-3), line).toEqual([
+        expect.objectContaining({ step: 1, connected: true, dummies: [1] }),
+        expect.objectContaining({ step: 2, connected: true, dummies: [1] }),
+        expect.objectContaining({ step: 3, connected: true, dummies: [1] }),
+      ]);
+      // A stop of time at each contact, measured on the frames' clocks: 55, 55 and 90 ms (the blueprint's light and heavy).
+      expect(measured.map((run) => run.step), line).toEqual([1, 2, 3]);
+      measured.forEach((run, i) => expect(run.ms, line).toBeCloseTo([55, 55, 90][i]!, 3));
+      // Sparks thrown at every contact, from the contact.
+      expect(contacts.map((c) => c.bursts), line).toEqual([1, 2, 3]);
+      for (const c of contacts) {
+        expect(c.alive, line).toBeGreaterThan(0);
+        expect(c.sparksAt, line).toEqual(c.contact);
+      }
+      // The middle dummy counted all three, flinched and was knocked back after each.
+      expect(contacts.map((c) => c.hits), line).toEqual([1, 2, 3]);
+      expect(chain.at(-1)!.middle.hits, line).toBe(3);
+      for (const r of reactions) {
+        expect(r.flinch, line).toBeGreaterThan(0.5);
+        expect(r.knockback, line).toBeGreaterThan(0.05);
+      }
       expect(log.errors, line).toEqual([]);
     });
 

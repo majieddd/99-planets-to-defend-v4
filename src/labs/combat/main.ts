@@ -10,12 +10,14 @@ import { FACE_SEED } from '../shared/commanderFace';
 import { loadNamedAsset } from '../shared/labAssets';
 import { createPaintedStage, frameStep, pickTier, WORLD_FOV_DEG } from '../shared/paintedStage';
 import { feelAddressValue, feelFromAddress } from '../world/combatFeel';
+import type { ComboFrame } from '../world/combo';
 import { createPipPlay, PLAY_CAMERA_DISTANCE, PLAY_CAMERA_MAX_DISTANCE, type PlayClocks, type PlayStart } from '../world/play';
 import { createPlayInput } from '../world/playInput';
 import type { Obstacle } from '../world/playMotion';
 import { FIT_NDC } from '../world/views';
 import { ARENA_CAMERA_PITCH_DEG, ARENA_DUMMY_NAMES, arenaCameraBearing, arenaCameraDistance, arenaSpawn, dummyFrame, dummyHomes, fromBody } from './arena';
 import { createTrainingDummies, type TrainingDummies } from './dummies';
+import { createCombatImpact, type CombatImpact } from './impact';
 import { createArenaPanel } from './panel';
 
 const BASE = import.meta.env.BASE_URL;
@@ -94,8 +96,19 @@ async function start(): Promise<void> {
   const dummies: TrainingDummies | null = husk ? createTrainingDummies(husk, patch, scene, ctx.hullMaterial, homes, ARENA_DUMMY_NAMES, pipAt) : null;
   if (husk && !dummies) showBanner('The combat arena needs the Husk\'s idle clip for its training dummies, which this build does not have.');
 
-  window.addEventListener('resize', painted.resize);
-  painted.resize();
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // The impact feel on the dummies: hit detection, the hit-stop, the sparks, the shake, the numbers and the reactions.
+  const impact: CombatImpact | null =
+    dummies && pipPlay.available
+      ? createCombatImpact({ parent: scene, camera, ground: patch, pip: pipPlay, dummies, feel, reducedMotion, brush: ctx.paint.uBrush, numbers: document.getElementById('hits') })
+      : null;
+
+  function resize(): void {
+    painted.resize();
+    impact?.layout(stage.clientWidth, stage.clientHeight);
+  }
+  window.addEventListener('resize', resize);
+  resize();
 
   /**
    * Pip's start: the spawn, facing the middle dummy, with the camera straight behind him and looking down at
@@ -156,9 +169,9 @@ async function start(): Promise<void> {
 
   /**
    * The reset, from R or the panel's button: every dummy home on its idle with no hits, and Pip back at the start with
-   * the camera behind him, so one key starts a test afresh from the opening view; his respawn drops his trail and his
-   * lunge. With the dummies standing still, a reset of them alone would change nothing on screen; the impact's
-   * knockback will move them, and its reactions hear of the reset through TrainingDummies.onReset.
+   * the camera behind him, so one key starts a test afresh from the opening view. The impact hears of it through
+   * TrainingDummies.onReset and drops its stop, its sparks, its shake, its numbers and every dummy's reaction; Pip's
+   * respawn drops his trail and his lunge.
    */
   function reset(): void {
     dummies?.reset();
@@ -182,12 +195,18 @@ async function start(): Promise<void> {
   let last = performance.now();
   let frames = 0;
   let frameMs = 16.7;
-  /** Each dummy as the handle reads it: where it stands and its home, its reach and hits, and where it stands from Pip. */
+  /**
+   * Each dummy as the handle reads it: where it stands and its home, its reach and hits, where it stands from Pip, and
+   * its flinch now (0 to 1 of its peak) and the metres its last knockback carried it.
+   */
   const dummyReading = () => {
     const play = pipPlay.reading();
-    return (dummies?.list ?? []).map((dummy) => {
+    const reacted = impact?.reading().dummies;
+    return (dummies?.list ?? []).map((dummy, index) => {
       const pose = dummy.pose();
       return {
+        flinch: reacted?.[index]?.flinch ?? 0,
+        knockback: reacted?.[index]?.knockback ?? 0,
         name: dummy.name,
         position: dummy.root.getWorldPosition(new Vector3()).toArray(),
         tangent: [pose.x, pose.z],
@@ -214,6 +233,7 @@ async function start(): Promise<void> {
     },
     play: () => pipPlay.reading(),
     dummies: dummyReading,
+    impact: () => impact?.reading() ?? null,
     reset,
     camera: () => {
       camera.updateMatrixWorld();
@@ -259,21 +279,34 @@ async function start(): Promise<void> {
       }
     },
   };
-  // The frame's clocks, one object rewritten each frame: all three on the frame's step until the impact's hit-stop
-  // holds the combo's and the movement's (PlayClocks).
+  // The clocks of a frame without the impact (a build without the dummies): all three on the frame's step.
   const plainClocks: PlayClocks = { combo: 0, motion: 0, frame: 0 };
 
-  /** One frame of the lab on a scene step of `dt` seconds (0 while frozen), `intervalMs` the real interval it stands for. */
+  /**
+   * One frame of the lab on a scene step of `dt` seconds (0 while frozen), `intervalMs` the real interval it stands
+   * for. The impact hands out the frame's clocks first, so a hit-stop holds Pip's combo and movement and the struck
+   * dummy while the frame's clock runs on for the camera, the sparks, the shake and the numbers (PlayClocks).
+   */
   function tick(dt: number, intervalMs: number): void {
     frameMs = frameMs * 0.95 + intervalMs * 0.05;
     // A reset asked since the last frame goes first, so this frame already draws everything home.
     if (input.takeReset()) reset();
-    plainClocks.combo = plainClocks.motion = plainClocks.frame = dt;
-    dummies?.update(dt);
-    if (pipPlay.active) pipPlay.update(plainClocks, input.read(), input.takeAttack(), camera, controls);
+    let clocks: PlayClocks = plainClocks;
+    if (impact) clocks = impact.clocks(dt);
+    else plainClocks.combo = plainClocks.motion = plainClocks.frame = dt;
+    dummies?.update(dt, impact?.held, impact?.heldStep());
+    let frame: ComboFrame | null = null;
+    if (pipPlay.active) frame = pipPlay.update(clocks, input.read(), input.takeAttack(), camera, controls);
+    impact?.afterPlay(frame, dt);
     controls.update(dt);
     painted.sky.follow(camera);
-    painted.pipeline.render(dt);
+    // The shake is laid on the camera for the draw alone and taken off straight after, so the orbit never sees it.
+    impact?.beforeRender(camera);
+    try {
+      painted.pipeline.render(dt);
+    } finally {
+      impact?.afterRender(camera);
+    }
     frames += 1;
     if (frames % 30 === 0) fpsBox.textContent = `${painted.tier.name} tier, frame interval ${frameMs.toFixed(1)} ms`;
     if (frames === 3 && window.__P99__) {

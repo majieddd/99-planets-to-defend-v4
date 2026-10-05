@@ -38,8 +38,22 @@ describe("the training dummies' knockback seam", () => {
     // The same list, moved with the dummy, so Pip reads it every frame with nothing built for him.
     expect(dummies.obstacles()).toBe(list);
     expect([list[1]!.x, list[1]!.z]).toEqual([pushed.x, pushed.z]);
-    // Each dummy has a mixer of its own, which phase B's flinch plays on.
+    // Each dummy has a mixer of its own, which the flinch plays over.
     expect(new Set(dummies.list.map((dummy) => dummy.mixer)).size).toBe(3);
+    // Its hit body reaches its drawn top, the stand-in's 1 m.
+    for (const dummy of dummies.list) expect(dummy.height).toBeCloseTo(1, 6);
+  });
+
+  it('holds the dummies a hit-stop holds while the others breathe on', () => {
+    const dummies = arena();
+    const before = dummies.list.map((dummy) => dummy.mixer.time);
+    // The middle one struck, the stop holding all but 4 ms of this 16 ms frame.
+    dummies.update(0.016, [false, true, false], 0.004);
+    const moved = dummies.list.map((dummy, i) => dummy.mixer.time - before[i]!);
+    expect(moved).toEqual([expect.closeTo(0.016, 12), expect.closeTo(0.004, 12), expect.closeTo(0.016, 12)]);
+    // With nothing held, every one takes the frame's step.
+    dummies.update(0.01);
+    expect(dummies.list.map((dummy, i) => dummy.mixer.time - before[i]! - moved[i]!)).toEqual([expect.closeTo(0.01, 12), expect.closeTo(0.01, 12), expect.closeTo(0.01, 12)]);
   });
 
   it("stops a knocked-back dummy at Pip's body, at its neighbour's and inside his play area", () => {
