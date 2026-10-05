@@ -1,4 +1,4 @@
-import { stickInput, type MoveInput } from './playMotion';
+import { isAttackClick, stickInput, type MoveInput } from './playMotion';
 
 /** The keys that move him, by KeyboardEvent.code, so WASD sits under the same fingers on any keyboard layout. */
 const FORWARD = ['KeyW', 'ArrowUp'];
@@ -7,24 +7,32 @@ const LEFT = ['KeyA', 'ArrowLeft'];
 const RIGHT = ['KeyD', 'ArrowRight'];
 const SPRINT = ['ShiftLeft', 'ShiftRight'];
 const HANDLED = new Set([...FORWARD, ...BACK, ...LEFT, ...RIGHT, ...SPRINT]);
+/** The key that swings his sword, beside the movement keys under the left hand. */
+const ATTACK = 'KeyF';
 
 export interface PlayInput {
   /** The keys and the thumb pad together, as one move input. */
   read(): MoveInput;
-  /** Starts or stops listening; stopping lets go of every held key and the pad. */
+  /** True once for each attack asked since the last call (F, a left click on the canvas, or the attack button). */
+  takeAttack(): boolean;
+  /** Starts or stops listening; stopping lets go of every held key and the pad, and drops an attack not yet taken. */
   setActive(on: boolean): void;
 }
 
 /**
- * The play prototype's controls: WASD or the arrow keys, Shift to sprint, and on a touch screen a thumb pad in the
- * bottom left (world.css), whose element the page shows only while playing. A one-finger drag anywhere else still
- * reaches the canvas and orbits, because a touch that starts on the pad never reaches OrbitControls.
+ * The play prototype's controls: WASD or the arrow keys, Shift to sprint, F or a left click on the canvas to attack, and
+ * on a touch screen a thumb pad in the bottom left and an attack button in the bottom right (world.css), whose elements
+ * the page shows only while playing. A one-finger drag anywhere else still reaches the canvas and orbits, because a
+ * touch that starts on the pad or the button never reaches OrbitControls, and a left drag on the canvas still orbits,
+ * because only a press that stays put and lifts quickly counts as a click (isAttackClick).
  */
-export function createPlayInput(pad: HTMLElement, knob: HTMLElement): PlayInput {
+export function createPlayInput(pad: HTMLElement, knob: HTMLElement, attackButton: HTMLElement, canvas: HTMLElement): PlayInput {
   const held = new Set<string>();
   let active = false;
   let stick: MoveInput = { right: 0, forward: 0, sprint: false };
   let finger: number | null = null;
+  let attackAsked = false;
+  let press: { id: number; x: number; y: number; at: number } | null = null;
 
   // A key typed into one of the panel's fields is the field's, not a step.
   const typing = (target: EventTarget | null): boolean =>
@@ -35,9 +43,35 @@ export function createPlayInput(pad: HTMLElement, knob: HTMLElement): PlayInput 
     if (event.key === 'Meta') held.clear();
     // A shortcut is the browser's, not a step: taken as one, Ctrl+S walked him back and never reached the browser.
     if (event.ctrlKey || event.metaKey || event.altKey) return;
-    if (!active || !HANDLED.has(event.code) || typing(event.target)) return;
+    if (!active || typing(event.target)) return;
+    if (event.code === ATTACK) {
+      // A held F repeats its keydown; one swing per press, so holding it does not chain swings.
+      if (!event.repeat) attackAsked = true;
+      event.preventDefault();
+      return;
+    }
+    if (!HANDLED.has(event.code)) return;
     held.add(event.code);
     // The arrows would otherwise scroll the panel or the page under him.
+    event.preventDefault();
+  });
+
+  // A left mouse click on the canvas attacks; OrbitControls takes the same press as the start of a drag, so the press is
+  // read on its way up and counts only if it stayed within PLAY_CLICK_SLOP_PX and lifted inside PLAY_CLICK_MAX_SECONDS.
+  // A touch on the canvas orbits and never attacks; the attack button is the touch screen's trigger.
+  canvas.addEventListener('pointerdown', (event) => {
+    press = active && event.button === 0 && event.pointerType === 'mouse' ? { id: event.pointerId, x: event.clientX, y: event.clientY, at: event.timeStamp } : null;
+  });
+  canvas.addEventListener('pointerup', (event) => {
+    if (!press || event.pointerId !== press.id) return;
+    const moved = Math.hypot(event.clientX - press.x, event.clientY - press.y);
+    if (active && isAttackClick(moved, (event.timeStamp - press.at) / 1000)) attackAsked = true;
+    press = null;
+  });
+  canvas.addEventListener('pointercancel', () => (press = null));
+  attackButton.addEventListener('pointerdown', (event) => {
+    if (active) attackAsked = true;
+    // The press is the button's alone: no focus ring, no text selection and no orbit start underneath.
     event.preventDefault();
   });
   window.addEventListener('keyup', (event) => held.delete(event.code));
@@ -85,11 +119,18 @@ export function createPlayInput(pad: HTMLElement, knob: HTMLElement): PlayInput 
       const forward = Math.max(-1, Math.min(1, has(FORWARD) - has(BACK) + stick.forward));
       return { right, forward, sprint: has(SPRINT) === 1 || stick.sprint };
     },
+    takeAttack() {
+      const asked = attackAsked;
+      attackAsked = false;
+      return asked;
+    },
     setActive(on) {
       active = on;
       if (!on) {
         held.clear();
         release();
+        attackAsked = false;
+        press = null;
       }
     },
   };

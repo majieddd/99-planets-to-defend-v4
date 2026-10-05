@@ -40,6 +40,68 @@ export const PLAY_CONTACT_TOLERANCE = 0.03;
 /** A thumb pad pushed less than this share of its reach moves nothing, and pushed past the second share sprints. */
 export const PLAY_STICK_DEAD_ZONE = 0.15;
 export const PLAY_STICK_SPRINT = 0.9;
+/**
+ * The share of the pace asked that he keeps while he swings: none. The cleave plants both boots (the recipe holds them
+ * by IK on every frame), so any pace under it would slide them across the ground; he stops instead, shedding a run at
+ * the PLAY_SECONDS_TO_STOP rate, and a direction asked mid-swing neither moves nor turns him. The cleave is committed
+ * (Pillar 4): he keeps the facing he had when the swing began.
+ */
+export const PLAY_ATTACK_MOVE_SCALE = 0;
+/**
+ * Seconds the attack clip takes to take over from the idle and run, and to hand back to them at its end. The fade in
+ * is short, a fifth of the 0.34 s wind-up, so the wind-up reads from its first frames; the fade out spans the clip's last
+ * stretch, where the recovery returns to the guard, so he settles into the idle or the run without a pop.
+ */
+export const PLAY_ATTACK_FADE_IN = 0.07;
+export const PLAY_ATTACK_FADE_OUT = 0.2;
+/**
+ * A left press on the canvas counts as an attack only if it moves less than this many CSS pixels and lifts within this
+ * many seconds; anything longer or further is OrbitControls' drag. 5 px turns the orbit by 1.7 degrees on a 1080 px
+ * tall canvas, too little to read as a drag, and 0.25 s holds an ordinary click (about 0.1 s) with room to spare.
+ */
+export const PLAY_CLICK_SLOP_PX = 5;
+export const PLAY_CLICK_MAX_SECONDS = 0.25;
+
+/** Whether a left press that moved `movedPx` CSS pixels and lifted after `seconds` was a click rather than a drag. */
+export function isAttackClick(movedPx: number, seconds: number): boolean {
+  return movedPx < PLAY_CLICK_SLOP_PX && seconds >= 0 && seconds < PLAY_CLICK_MAX_SECONDS;
+}
+
+/** His swing: seconds into the attack clip, or null when he is not swinging. */
+export interface AttackState {
+  time: number | null;
+}
+
+export const NOT_SWINGING: AttackState = { time: null };
+
+/**
+ * A trigger starts the swing from its first frame, once per trigger. A trigger during a swing is ignored, not buffered:
+ * the cleave is committed and the prototype has no input buffer (the M1 controller's buffers are Decided), so a second
+ * press lands only once he is out of the swing.
+ */
+export function triggerAttack(state: AttackState): AttackState {
+  return state.time === null ? { time: 0 } : state;
+}
+
+/**
+ * Advances the swing by dt over a clip of `duration` seconds, and says whether the strike moment, `strikeAt` seconds in,
+ * passed in this step: once per swing, on the step that reaches it. The swing ends, and he is free to move, on the step
+ * that reaches the clip's end.
+ */
+export function stepAttack(state: AttackState, dt: number, duration: number, strikeAt: number): { state: AttackState; struck: boolean } {
+  if (state.time === null || dt <= 0) return { state, struck: false };
+  const next = state.time + dt;
+  const struck = state.time < strikeAt && next >= strikeAt;
+  return { state: next >= duration ? NOT_SWINGING : { time: next }, struck };
+}
+
+/** The attack clip's weight over the idle and run at a time into the swing: faded in, held, faded out by its end. */
+export function attackWeight(time: number | null, duration: number): number {
+  if (time === null || duration <= 0) return 0;
+  const fadeIn = time / PLAY_ATTACK_FADE_IN;
+  const fadeOut = (duration - time) / PLAY_ATTACK_FADE_OUT;
+  return Math.min(1, Math.max(0, Math.min(fadeIn, fadeOut)));
+}
 
 export interface MoveInput {
   /** From -1 (left) to 1 (right), as the camera sees it. */
@@ -211,17 +273,26 @@ export function clampToArea(x: number, z: number, radius = PLAY_AREA_RADIUS): { 
  * toward the pace asked at the Commander table's rates. Blocked by a member or the area's edge, his speed is the ground
  * he actually covered, so the run clip idles when he is held head on instead of running on the spot, while his drive
  * carries on. Fed back into the drive, the held-back speed restarted every frame's ease from it, so a slide along a
- * wall settled far below its share of the pace asked along the wall.
+ * wall settled far below its share of the pace asked along the wall. `moveScale` is the share of the pace asked that
+ * he keeps, PLAY_ATTACK_MOVE_SCALE while he swings; at 0 the direction asked neither moves nor turns him.
  */
-export function stepMotion(state: MotionState, direction: MoveDirection | null, sprint: boolean, dt: number, obstacles: readonly Obstacle[], planetRadius: number): MotionState {
+export function stepMotion(
+  state: MotionState,
+  direction: MoveDirection | null,
+  sprint: boolean,
+  dt: number,
+  obstacles: readonly Obstacle[],
+  planetRadius: number,
+  moveScale = 1,
+): MotionState {
   if (dt <= 0) return { ...state };
   let yaw = state.yaw;
   let target = 0;
-  if (direction) {
+  if (direction && moveScale > 0) {
     const desired = yawOf(direction.x, direction.z);
     yaw = turnToward(yaw, desired, ((PLAY_TURN_RATE_DEG * Math.PI) / 180) * dt);
     const facing = Math.max(0, Math.cos(wrapAngle(desired - yaw)));
-    target = direction.amount * (sprint ? PLAY_SPRINT_SPEED : PLAY_WALK_SPEED) * facing;
+    target = direction.amount * (sprint ? PLAY_SPRINT_SPEED : PLAY_WALK_SPEED) * facing * Math.min(1, moveScale);
   }
   const speedUp = PLAY_WALK_SPEED / PLAY_SECONDS_TO_WALK;
   const slowDown = PLAY_WALK_SPEED / PLAY_SECONDS_TO_STOP;

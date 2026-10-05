@@ -1,14 +1,23 @@
 import { Group, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import {
+  attackWeight,
   clampToArea,
   clearance,
   groundDistance,
   groundForward,
   groundToTangent,
+  isAttackClick,
   moveDirection,
+  NOT_SWINGING,
   PLAY_AREA_RADIUS,
+  PLAY_ATTACK_FADE_IN,
+  PLAY_ATTACK_FADE_OUT,
+  PLAY_ATTACK_MOVE_SCALE,
   PLAY_BODY_RADIUS,
+  PLAY_CLICK_MAX_SECONDS,
+  PLAY_CLICK_SLOP_PX,
+  PLAY_SECONDS_TO_STOP,
   PLAY_SPAWN,
   PLAY_SPRINT_SPEED,
   PLAY_STICK_DEAD_ZONE,
@@ -16,11 +25,14 @@ import {
   PLAY_WALK_SPEED,
   resolveObstacles,
   runLoopDistance,
+  stepAttack,
   stepMotion,
   stickInput,
+  triggerAttack,
   turnToward,
   wrapAngle,
   yawOf,
+  type AttackState,
   type FootSample,
   type MotionState,
   type Obstacle,
@@ -293,5 +305,103 @@ describe('camera-relative steering on the curve', () => {
       expect([f.x, f.y, f.z].every(Number.isFinite)).toBe(true);
       expect(Math.hypot(f.x, f.y, f.z)).toBeCloseTo(1, 12);
     }
+  });
+});
+
+describe('the play prototype attack', () => {
+  // Pip's exported clip: 0.85 s by contract (timings.json), 25 frames at 30 fps as the export writes it.
+  const DURATION = 25 / 30;
+  const STRIKE = 0.34;
+
+  /** Frames of the page's loop with the swing in it: a trigger on the first frame, the move input held throughout. */
+  function swing(state: MotionState, input: typeof forward, camera: [number, number], seconds: number, triggerAt = 0) {
+    let motion = state;
+    let attack: AttackState = NOT_SWINGING;
+    let strikes = 0;
+    const frames: { motion: MotionState; attack: AttackState; weight: number }[] = [];
+    for (let frame = 0; frame * DT < seconds; frame++) {
+      if (frame === triggerAt) attack = triggerAttack(attack);
+      const moveScale = attack.time !== null ? PLAY_ATTACK_MOVE_SCALE : 1;
+      motion = stepMotion(motion, moveDirection(input, camera[0], camera[1]), input.sprint, DT, [], R, moveScale);
+      const stepped = stepAttack(attack, DT, DURATION, STRIKE);
+      attack = stepped.state;
+      if (stepped.struck) strikes += 1;
+      frames.push({ motion, attack, weight: attackWeight(attack.time, DURATION) });
+    }
+    return { frames, strikes, motion, attack };
+  }
+
+  it('plays the clip once per trigger, crossing the strike moment once, and ignores a trigger mid-swing', () => {
+    expect(triggerAttack(NOT_SWINGING)).toEqual({ time: 0 });
+    // Mid-swing a trigger is ignored, not buffered: the swing carries on from where it was.
+    expect(triggerAttack({ time: 0.2 })).toEqual({ time: 0.2 });
+    const struck: number[] = [];
+    let attack = triggerAttack(NOT_SWINGING);
+    let frames = 0;
+    while (attack.time !== null) {
+      const before = attack.time;
+      const stepped = stepAttack(attack, DT, DURATION, STRIKE);
+      if (stepped.struck) struck.push(before);
+      attack = frames === 10 ? triggerAttack(stepped.state) : stepped.state;
+      frames += 1;
+    }
+    // The swing lasts the clip, to the frame, and the strike lands on the frame that reaches 0.34 s.
+    expect(frames).toBe(Math.ceil(DURATION / DT - 1e-9));
+    expect(struck).toHaveLength(1);
+    expect(struck[0]!).toBeLessThan(STRIKE);
+    expect(struck[0]! + DT).toBeGreaterThanOrEqual(STRIKE);
+    // A frozen frame (dt 0) holds the swing where it is.
+    expect(stepAttack({ time: 0.3 }, 0, DURATION, STRIKE)).toEqual({ state: { time: 0.3 }, struck: false });
+  });
+
+  it('fades the clip in over the idle or run, holds it through the strike, and hands back to them by its end', () => {
+    expect(attackWeight(null, DURATION)).toBe(0);
+    expect(attackWeight(0, DURATION)).toBe(0);
+    expect(attackWeight(PLAY_ATTACK_FADE_IN / 2, DURATION)).toBeCloseTo(0.5, 9);
+    for (const t of [PLAY_ATTACK_FADE_IN, STRIKE, DURATION - PLAY_ATTACK_FADE_OUT]) expect(attackWeight(t, DURATION), `${t} s`).toBeCloseTo(1, 9);
+    expect(attackWeight(DURATION - PLAY_ATTACK_FADE_OUT / 2, DURATION)).toBeCloseTo(0.5, 9);
+    expect(attackWeight(DURATION, DURATION)).toBe(0);
+    // The fade in is over well before the strike, so the wind-up reads at full weight.
+    expect(PLAY_ATTACK_FADE_IN).toBeLessThan(STRIKE / 3);
+  });
+
+  it('stops him through the swing without turning him, then lets him run again the way the key asks', () => {
+    // Sprinting along +z, he is asked to keep going toward +x as the swing starts.
+    const sprint = { right: 0, forward: 1, sprint: true };
+    const running = run({ x: 0, z: 0, yaw: 0, speed: 0, drive: 0 }, sprint, [0, 1], 1.5);
+    expect(running.speed).toBeCloseTo(PLAY_SPRINT_SPEED, 9);
+    const { frames, strikes, attack } = swing(running, sprint, [1, 0], DURATION + 1);
+    const during = frames.filter((frame) => frame.attack.time !== null);
+    expect(during.length).toBeGreaterThan(0);
+    // His facing holds through the whole swing, though the key asks for a quarter turn.
+    for (const frame of during) expect(frame.motion.yaw).toBe(running.yaw);
+    // He sheds the sprint at the stop rate (5.6 m/s in 0.21 s), and stands still from then until the swing ends.
+    const stopAfter = (PLAY_SPRINT_SPEED / PLAY_WALK_SPEED) * PLAY_SECONDS_TO_STOP;
+    const still = during.filter((_, index) => (index + 1) * DT > stopAfter + DT);
+    expect(still.length).toBeGreaterThan(during.length / 2);
+    for (const frame of still) expect(frame.motion.speed).toBe(0);
+    // He is not moved while still: his position holds from the stop to the end of the swing.
+    expect(Math.hypot(still.at(-1)!.motion.x - still[0]!.motion.x, still.at(-1)!.motion.z - still[0]!.motion.z)).toBe(0);
+    expect(strikes).toBe(1);
+    // Out of the swing he turns toward the key and runs again, and the clip has handed back completely.
+    expect(attack).toEqual(NOT_SWINGING);
+    const after = frames.at(-1)!;
+    expect(after.weight).toBe(0);
+    expect(wrapAngle(after.motion.yaw - yawOf(1, 0))).toBeCloseTo(0, 6);
+    expect(after.motion.speed).toBeCloseTo(PLAY_SPRINT_SPEED, 6);
+    // Standing still with no key held, the swing ends where it began, and he stays put.
+    const standing = swing({ x: 1, z: 2, yaw: 0.3, speed: 0, drive: 0 }, { right: 0, forward: 0, sprint: false }, [0, 1], DURATION + 0.5);
+    expect(standing.motion).toEqual({ x: 1, z: 2, yaw: 0.3, speed: 0, drive: 0 });
+    expect(PLAY_ATTACK_MOVE_SCALE).toBe(0);
+  });
+
+  it('tells a click from an orbit drag by how far the press moved and how soon it lifted', () => {
+    expect(isAttackClick(0, 0.1)).toBe(true);
+    expect(isAttackClick(PLAY_CLICK_SLOP_PX - 0.5, PLAY_CLICK_MAX_SECONDS - 0.01)).toBe(true);
+    // A drag that went a few pixels, or a press held while the camera was being lined up, is the orbit's.
+    expect(isAttackClick(PLAY_CLICK_SLOP_PX, 0.1)).toBe(false);
+    expect(isAttackClick(40, 0.1)).toBe(false);
+    expect(isAttackClick(0, PLAY_CLICK_MAX_SECONDS)).toBe(false);
+    expect(isAttackClick(0, -0.01)).toBe(false);
   });
 });

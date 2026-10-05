@@ -172,8 +172,35 @@
 }
 
 .play-hint[hidden],
-.pad[hidden] {
+.pad[hidden],
+.attack-button[hidden] {
   display: none;
+}
+
+/* The attack button shows with the pad, on a touch screen while playing, in the bottom right under the other thumb and
+   level with the pad's centre. 88 px across is twice the 44 px least target and about a thumb pad's width, so the
+   thumb finds it without looking; the frame interval chip below it ends 45 px up, under the button's 82 px. */
+.attack-button {
+  position: fixed;
+  right: 24px;
+  bottom: calc(56px + (140px - 88px) / 2);
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline);
+  background: rgba(20, 22, 29, 0.6);
+  color: var(--paper);
+  font: 700 15px/1 var(--font-display);
+  letter-spacing: 0.04em;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.attack-button:active {
+  background: rgba(236, 232, 220, 0.75);
+  color: #14161d;
 }
 
 .pad {
@@ -336,5 +363,11 @@
   .pad {
     left: 16px;
     bottom: calc(8px + var(--chip-line) + 10px + 16px);
+  }
+
+  /* Level with the pad's centre, in the corner the frame interval chip leaves free on a phone. */
+  .attack-button {
+    right: 16px;
+    bottom: calc(8px + var(--chip-line) + 10px + 16px + (140px - 88px) / 2);
   }
 }

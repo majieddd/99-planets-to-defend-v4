@@ -47,9 +47,10 @@ const TURNTABLE_SECONDS = 40;
 const TRANSITION_SECONDS = 0.8;
 /** The one value `?play=` takes: Pip under the keys (the play prototype). */
 const PLAY_PIP = 'pip';
-/** The play hint's words, mechanics first: the keys on a keyboard, the thumb pad on a touch screen. */
-const PLAY_HINT_KEYS = 'Play Pip (prototype): WASD or the arrow keys move him, Shift sprints, drag to orbit, wheel to zoom.';
-const PLAY_HINT_TOUCH = 'Play Pip (prototype): the pad moves him, pushed to its rim he sprints; drag elsewhere to orbit, pinch to zoom.';
+/** The play hint's words, mechanics first: the keys and a click on a keyboard, the pad and the button on a touch screen. */
+const PLAY_HINT_KEYS = 'Play Pip (prototype): WASD or the arrow keys move him, Shift sprints, F or a click swings his sword, drag to orbit, wheel to zoom.';
+const PLAY_HINT_TOUCH =
+  'Play Pip (prototype): the pad moves him, pushed to its rim he sprints; Attack swings his sword; drag elsewhere to orbit, pinch to zoom.';
 
 // start() fills these in, so a failure at any point can stop the loop and word the banner for when it happened.
 let activeRenderer: WebGLRenderer | null = null;
@@ -298,13 +299,16 @@ async function start(): Promise<void> {
   // The play prototype: Pip out on the patch under the keys or the thumb pad, the camera following him.
   const playHint = document.getElementById('play-hint') as HTMLElement;
   const pad = document.getElementById('pad') as HTMLElement;
-  const input = createPlayInput(pad, pad.querySelector('.pad-knob') as HTMLElement);
+  const attackButton = document.getElementById('attack') as HTMLElement;
+  const input = createPlayInput(pad, pad.querySelector('.pad-knob') as HTMLElement, attackButton, renderer.domElement);
   const coarse = matchMedia('(pointer: coarse)');
   function syncPlayUi(): void {
     const touch = coarse.matches;
     playHint.hidden = !state.play;
     playHint.textContent = touch ? PLAY_HINT_TOUCH : PLAY_HINT_KEYS;
+    // The attack button rides with the pad: shown only while playing on a coarse pointer, where F and a click are not.
     pad.hidden = !(state.play && touch);
+    attackButton.hidden = pad.hidden;
     document.body.classList.toggle('pad-shown', !pad.hidden);
   }
   coarse.addEventListener('change', syncPlayUi);
@@ -554,7 +558,7 @@ async function start(): Promise<void> {
       }
       // Pip moves on the frame's own step, which the freeze stops, and not on the animation speed dial, which is the
       // world's clips'; the camera then follows him before the controls apply a drag or the wheel.
-      if (pipPlay.active) pipPlay.update(dt, input.read(), camera, controls);
+      if (pipPlay.active) pipPlay.update(dt, input.read(), input.takeAttack(), camera, controls);
       // The turntable turns around the open view, and waits while a view glides in or Pip plays.
       controls.autoRotate = state.turntable && transition === null && !pipPlay.active;
       controls.update(frozen ? 0 : Math.min(interval / 1000, 1 / 20));

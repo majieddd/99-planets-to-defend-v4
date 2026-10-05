@@ -55,6 +55,14 @@ interface PlayReading {
   stride: { loopMetres: number; loopSeconds: number; clipSpeed: number } | null;
   /** How far he stands outside the nearest member's reach, in metres (negative inside one). */
   clearance: number | null;
+  yaw: number;
+  /** His swing: whether he is in one, the attack clip's time and weight, the clip's length, its strike, and strikes so far. */
+  attacking: boolean;
+  attackTime: number | null;
+  attackWeight: number;
+  attackSeconds: number | null;
+  strikeAt: number | null;
+  strikes: number;
 }
 
 const manifest = JSON.parse(readFileSync('public/assets/manifest.json', 'utf8')) as { assets: ManifestEntry[] };
@@ -422,6 +430,54 @@ test.describe('the Asset World', () => {
       expect(offGround, line).toBeLessThan(0.001);
       expect(followed, line).toBeGreaterThan(0.1);
       expect(held.play.stride, line).not.toBeNull();
+
+      // The attack: F with W held. He swings once, stops for the swing and keeps his facing, the clip reaches its
+      // strike, and once it ends he runs on under the held key.
+      const playing = () => page.evaluate(() => (window.__P99__!['play'] as () => PlayReading)());
+      await page.keyboard.down('KeyW');
+      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().runWeight > 0.5, undefined, { timeout: 60_000 });
+      const before = await playing();
+      await page.keyboard.press('KeyF');
+      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().attacking, undefined, { timeout: 60_000 });
+      const swingStart = await playing();
+      await page.waitForFunction(
+        () => {
+          const play = (window.__P99__!['play'] as () => PlayReading)();
+          return !play.attacking || (play.attackTime ?? 0) >= (play.strikeAt ?? Infinity);
+        },
+        undefined,
+        { timeout: 60_000 },
+      );
+      const atStrike = await playing();
+      await page.waitForFunction(() => !(window.__P99__!['play'] as () => PlayReading)().attacking, undefined, { timeout: 60_000 });
+      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().runWeight > 0.5, undefined, { timeout: 60_000 });
+      const after = await playing();
+      await page.keyboard.up('KeyW');
+      const turned = Math.abs(Math.atan2(Math.sin(atStrike.yaw - swingStart.yaw), Math.cos(atStrike.yaw - swingStart.yaw)));
+      const attackLine =
+        `asset world play attack [${test.info().project.name}]: running at ${before.speed.toFixed(2)} m/s (run weight ${before.runWeight.toFixed(2)}), ` +
+        `F started the swing at clip time ${swingStart.attackTime?.toFixed(3)} s of ${swingStart.attackSeconds?.toFixed(3)} s; ` +
+        `at the strike reading clip time ${atStrike.attackTime?.toFixed(3)} s (strike ${atStrike.strikeAt} s), weight ${atStrike.attackWeight.toFixed(2)}, ` +
+        `speed ${atStrike.speed.toFixed(2)} m/s, turned ${((turned * 180) / Math.PI).toFixed(2)} degrees, strikes ${atStrike.strikes}; ` +
+        `after the swing attacking ${after.attacking}, weight ${after.attackWeight.toFixed(2)}, run weight ${after.runWeight.toFixed(2)} at ${after.speed.toFixed(2)} m/s, ` +
+        `strikes ${after.strikes}`;
+      console.log(attackLine);
+      expect(before.attacking, attackLine).toBe(false);
+      expect(swingStart.attackSeconds, attackLine).toBeCloseTo(0.85, 1);
+      expect(swingStart.strikeAt, attackLine).toBe(0.34);
+      // The strike reading is inside the swing, at or past the strike, at full weight, standing still and facing as he did.
+      expect(atStrike.attacking, attackLine).toBe(true);
+      expect(atStrike.attackTime!, attackLine).toBeGreaterThanOrEqual(0.34);
+      expect(atStrike.attackWeight, attackLine).toBe(1);
+      expect(atStrike.speed, attackLine).toBe(0);
+      expect(turned, attackLine).toBe(0);
+      expect(atStrike.strikes, attackLine).toBe(1);
+      // One swing for one press, and the run back under the held key once it ended.
+      expect(after.attacking, attackLine).toBe(false);
+      expect(after.attackWeight, attackLine).toBe(0);
+      expect(after.strikes, attackLine).toBe(1);
+      expect(after.runWeight, attackLine).toBeGreaterThan(0.5);
+      expect(after.speed, attackLine).toBeGreaterThan(0);
       expect(log.errors, line).toEqual([]);
     });
 

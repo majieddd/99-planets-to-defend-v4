@@ -1,23 +1,30 @@
-import { AnimationMixer, LoopRepeat, Quaternion, Vector3, type AnimationAction, type AnimationClip, type Mesh, type Object3D, type PerspectiveCamera, type SkinnedMesh } from 'three';
+import { AnimationMixer, LoopOnce, LoopRepeat, Quaternion, Vector3, type AnimationAction, type AnimationClip, type Mesh, type Object3D, type PerspectiveCamera, type SkinnedMesh } from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
 import type { LoadedAsset } from '../../render/assets/loadAsset';
 import { syncHullMorphs } from '../../render/ink/hull';
 import { place, type Ground } from '../../render/terrain/place';
+import timings from '../../shared/timings.json';
 import { createCommanderFace } from '../shared/commanderFace';
 import type { FaceDriver } from '../shared/faceDriver';
 import type { PlacedMember } from './layout';
 import {
+  attackWeight,
   clearance,
   groundForward,
   moveDirection,
+  NOT_SWINGING,
+  PLAY_ATTACK_MOVE_SCALE,
   PLAY_BODY_RADIUS,
   PLAY_MIN_MEMBER_REACH,
   PLAY_SPAWN,
   runLoopDistance,
   runTimeScale,
   runWeight,
+  stepAttack,
   stepMotion,
+  triggerAttack,
+  type AttackState,
   type FootSample,
   type MotionState,
   type MoveInput,
@@ -42,6 +49,11 @@ export const PLAY_STRIDE_SAMPLES = 64;
 
 const UP = new Vector3(0, 1, 0);
 const ASSET = 'commander_pip';
+/**
+ * His attack's strike moment, in seconds into the clip, from the shared contract (src/shared/timings.json) that
+ * assets:check holds the exported clip to, so the reading's strike is the one the simulation will use.
+ */
+const STRIKE_AT = timings.commanders.commander_pip.attack.strike;
 
 /** What the test handle and the evidence read of the play mode. */
 export interface PlayReading {
@@ -56,6 +68,16 @@ export interface PlayReading {
   stride: { loopMetres: number; loopSeconds: number; clipSpeed: number } | null;
   /** How far he stands outside the nearest member's reach, in metres on the tangent plane (negative inside one). */
   clearance: number | null;
+  /** Whether he is in a swing, and the attack clip's time into it, in seconds (null out of a swing). */
+  attacking: boolean;
+  attackTime: number | null;
+  /** The attack clip's weight over the idle and run, from 0 to 1. */
+  attackWeight: number;
+  /** The attack clip's length and its strike moment, in seconds (null when the model has no attack clip). */
+  attackSeconds: number | null;
+  strikeAt: number | null;
+  /** The swings that have reached their strike moment since he came out to play. */
+  strikes: number;
 }
 
 export interface PipPlay {
@@ -64,8 +86,11 @@ export interface PipPlay {
   readonly active: boolean;
   enter(camera: PerspectiveCamera, controls: OrbitControls, members: readonly PlacedMember[], seed: number, frozen: boolean): void;
   exit(controls: OrbitControls): void;
-  /** One frame: moves him by the input, poses him, and carries the camera with him; dt is 0 while the lab is frozen. */
-  update(dt: number, input: MoveInput, camera: PerspectiveCamera, controls: OrbitControls): void;
+  /**
+   * One frame: starts a swing when `attack` asks for one and he is not in one already, moves him by the input (not at
+   * all while he swings), poses him, and carries the camera with him; dt is 0 while the lab is frozen.
+   */
+  update(dt: number, input: MoveInput, attack: boolean, camera: PerspectiveCamera, controls: OrbitControls): void;
   setFrozen(on: boolean): void;
   /** Re-reads every member's reach, for a member whose drawn size changed while he plays: the slider heart. */
   refreshObstacles(members: readonly PlacedMember[]): void;
@@ -114,24 +139,31 @@ function measureRunLoop(template: Object3D, clip: AnimationClip): PlayReading['s
 
 /**
  * The play prototype's Pip: an instance of his rig of its own, not one of the placed members, which the keys or the
- * thumb pad walk about the patch while the camera follows. Call it before buildAssetWorld: it keeps a copy of his rig in
- * the bind pose, before the world's mixers pose the loaded one, because the face driver reads the jaw's axis from it.
+ * thumb pad walk about the patch while the camera follows, and F, a click or the attack button swing his sword (the
+ * swing's rules are playMotion.ts's: he stops and keeps his facing, a second trigger mid-swing is ignored, and the clip
+ * fades back to the idle or the run by his speed). Call it before buildAssetWorld: it keeps a copy of his rig in the
+ * bind pose, before the world's mixers pose the loaded one, because the face driver reads the jaw's axis from it.
  */
 export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: Ground, parent: Object3D, hullMaterial: unknown, planetRadius: number): PipPlay {
   const asset = assets.get(ASSET);
   const template = asset ? cloneRig(asset.root) : null;
   const idleClip = asset?.animations.find((clip) => clip.name === 'idle') ?? null;
   const runClip = asset?.animations.find((clip) => clip.name === 'run') ?? null;
+  const attackClip = asset?.animations.find((clip) => clip.name === 'attack') ?? null;
   let stride: PlayReading['stride'] | undefined;
 
   let root: Object3D | null = null;
   let mixer: AnimationMixer | null = null;
   let idle: AnimationAction | null = null;
   let run: AnimationAction | null = null;
+  let swing: AnimationAction | null = null;
   let face: FaceDriver | null = null;
   let obstacles: Obstacle[] = [];
   let motion: MotionState = { x: 0, z: 0, yaw: 0, speed: 0, drive: 0 };
+  let attack: AttackState = NOT_SWINGING;
+  let strikes = 0;
   let weight = 0;
+  let swingWeight = 0;
   let timeScale = 0;
   const follow = new Vector3();
   let saved: { minDistance: number; maxDistance: number; maxPolarAngle: number; enablePan: boolean } | null = null;
@@ -190,8 +222,19 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       run = mixer.clipAction(runClip).setLoop(LoopRepeat, Infinity).play();
       run.setEffectiveWeight(0);
       run.timeScale = 0;
+      // The swing's clip time is set from the attack state every frame rather than advanced by the mixer, so the pose,
+      // the reading and the strike moment all come from the one clock in playMotion.ts.
+      if (attackClip) {
+        swing = mixer.clipAction(attackClip).setLoop(LoopOnce, 1).play();
+        swing.clampWhenFinished = true;
+        swing.timeScale = 0;
+        swing.setEffectiveWeight(0);
+      }
       weight = 0;
+      swingWeight = 0;
       timeScale = 0;
+      attack = NOT_SWINGING;
+      strikes = 0;
       obstacles = obstaclesOf(members);
       const { x, z } = toTangent(PLAY_SPAWN.s, PLAY_SPAWN.d);
       // He faces the cameras' bearing, turned toward the key as the placed characters are (THREE_QUARTER_TURN_DEG).
@@ -223,13 +266,17 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       // The copy shares the loaded geometry and materials, which the world still draws; only its skeletons are its own.
       root.traverse((child) => (child as SkinnedMesh).isSkinnedMesh && (child as SkinnedMesh).skeleton.dispose());
       root = null;
-      mixer = idle = run = null;
+      mixer = idle = run = swing = null;
       face = null;
+      attack = NOT_SWINGING;
       if (saved) Object.assign(controls, saved);
       saved = null;
     },
-    update(dt, input, camera, controls) {
+    update(dt, input, attackAsked, camera, controls) {
       if (!root || !mixer || !idle || !run) return;
+      // A trigger starts the swing on this frame, so the frame that takes it already stops him; mid-swing it is ignored.
+      if (attackAsked && swing && attackClip) attack = triggerAttack(attack);
+      const swinging = attack.time !== null;
       // The camera's facing, laid on the ground at his feet from the camera's level right (groundForward, which says why
       // the view ray is not used) and read in the frame place() turns him in, so W runs up the screen wherever he stands
       // on the curve and however high the camera is.
@@ -240,16 +287,27 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       else forward.set(0, 0, 0);
       turn.setFromUnitVectors(UP, surfaceUp).invert();
       forward.applyQuaternion(turn);
-      motion = stepMotion(motion, moveDirection(input, forward.x, forward.z), input.sprint, dt, obstacles, planetRadius);
+      motion = stepMotion(motion, moveDirection(input, forward.x, forward.z), input.sprint, dt, obstacles, planetRadius, swinging ? PLAY_ATTACK_MOVE_SCALE : 1);
       pose();
 
+      if (swing && attackClip) {
+        const stepped = stepAttack(attack, dt, attackClip.duration, STRIKE_AT);
+        attack = stepped.state;
+        if (stepped.struck) strikes += 1;
+        swingWeight = attackWeight(attack.time, attackClip.duration);
+        swing.time = attack.time ?? 0;
+        swing.setEffectiveWeight(swingWeight);
+      }
       weight = runWeight(motion.speed);
       timeScale = stride ? runTimeScale(motion.speed, stride.clipSpeed) : 1;
-      idle.setEffectiveWeight(1 - weight);
-      run.setEffectiveWeight(weight);
+      // The swing takes its weight from the idle and the run alike, so the three always sum to 1 and, as it fades out,
+      // he settles into whichever of them his speed asks for.
+      idle.setEffectiveWeight((1 - weight) * (1 - swingWeight));
+      run.setEffectiveWeight(weight * (1 - swingWeight));
       run.timeScale = timeScale;
       mixer.update(dt);
-      // After the mixer, which would otherwise write any morph or jaw track a clip carries over the face.
+      // After the mixer, which would otherwise write any morph or jaw track a clip carries over the face; the blinks run
+      // through the swing.
       face?.update(dt);
 
       // The orbit's centre closes on his chest, and the camera moves with it, so a drag still orbits and the wheel
@@ -278,6 +336,12 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
         runTimeScale: timeScale,
         stride: stride ?? null,
         clearance: root ? clearance(motion.x, motion.z, obstacles) : null,
+        attacking: attack.time !== null,
+        attackTime: attack.time,
+        attackWeight: swingWeight,
+        attackSeconds: attackClip ? attackClip.duration : null,
+        strikeAt: attackClip ? STRIKE_AT : null,
+        strikes,
       };
     },
   };
