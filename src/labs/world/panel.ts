@@ -92,12 +92,24 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
   };
   gui.onOpenClose(syncOpenClass);
   syncOpenClass();
+  // lil-gui stops every key event that starts inside a controller from reaching the window, so that typing in a field
+  // fires no page shortcut. A checkbox or a button keeps the focus after a click, though, so it swallowed Play Pip's
+  // keys: after ticking Play Pip itself, or after the copy button, WASD and F did nothing until a click elsewhere
+  // (measured: S held for 0.7 s after the copy button moved him 0.00 m). The controls Play Pip's keys follow hand the
+  // focus back to the page once they have acted.
+  const releaseFocus = (): void => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && gui.domElement.contains(active)) active.blur();
+  };
 
   // First, so the owner finds it without scrolling the panel on a phone.
   gui
     .add(state, 'play')
     .name('Play Pip (prototype)')
-    .onChange((on: boolean) => handlers.onPlay(on));
+    .onChange((on: boolean) => {
+      handlers.onPlay(on);
+      releaseFocus();
+    });
   const viewControl: Controller = gui
     .add(state, 'view', viewOptions())
     .name('view')
@@ -148,6 +160,7 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
     .add(
       {
         copy: () => {
+          releaseFocus();
           const json = combatFeelJson(feel);
           // The clipboard may be missing (an insecure address) or refuse (no permission, the page not focused), and it
           // may throw at once or reject later; either way the settings go to the banner, where the owner can copy them.
@@ -169,6 +182,7 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
     .add(
       {
         reset: () => {
+          releaseFocus();
           Object.assign(feel, defaultCombatFeel());
           for (const controller of feelFolder.controllers) controller.updateDisplay();
           syncReadout();
