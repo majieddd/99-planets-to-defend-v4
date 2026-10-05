@@ -135,6 +135,35 @@ describe('the Style Lab commander switch', () => {
     expect(loads).toBe(1);
   });
 
+  it('writes no note for a superseded switch whose load fails, reports the failure once, and names it on the next switch to Pip', async () => {
+    const stage = stageOn('bulwark');
+    const load = deferred<LoadedAsset | null>();
+    const notes: string[] = [];
+    const reports: unknown[] = [];
+    const show = createCommanderSwitch(
+      stage,
+      loadPipOnce(
+        () => load.promise,
+        (error) => reports.push(error),
+      ),
+      (text) => notes.push(text),
+    );
+    // Pip, then Bulwark before his load is in, then the load rejects: the switch to Pip is superseded, so it says nothing
+    // and changes nothing, and the failure is reported once.
+    const toPip = show('pip');
+    await expect(show('bulwark')).resolves.toBe('bulwark');
+    load.reject(new Error('asset commander_pip failed to load from assets/commanders/commander_pip.glb: 404'));
+    await expect(toPip).resolves.toBe('bulwark');
+    await settle();
+    expect(notes).toEqual([]);
+    expect(reports).toHaveLength(1);
+    expect(stage.switches.map(([kind]) => kind)).toEqual(['bulwark']);
+    // A later switch to Pip finds the failed load, falls back to Bulwark and names the failure, without a second report.
+    await expect(show('pip')).resolves.toBe('bulwark');
+    expect(notes).toEqual([PIP_FAILED]);
+    expect(reports).toHaveLength(1);
+  });
+
   it('shows Pip when he is chosen again before his load is in', async () => {
     const stage = stageOn('bulwark');
     const load = deferred<LoadedAsset | null>();

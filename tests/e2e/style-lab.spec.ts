@@ -217,19 +217,20 @@ test.describe('the style lab commander toggle', () => {
   test.use({ viewport: { width: 480, height: 270 } });
 
   test('opens on Pip by default and by name, on Bulwark by name, switches, names an unknown commander, and falls back without Pip or when he fails to load', async ({ page }) => {
-    // Seven loads, each up to about 15 s under SwiftShader; it was 240 s for five.
+    // Seven loads at about 48 s a load, the allowance the five-load test had in its 240 s.
     test.setTimeout(330_000);
-    // Each console error keeps the load it came in, so the two loads in which Pip's GLB answers 404 can expect their own
-    // errors explicitly while every other load must log none.
+    // Each error keeps the load it came in and where it came from, a console error or an uncaught page error, so the two
+    // loads in which Pip's GLB answers 404 can expect their own console errors explicitly while every other load, and
+    // every page error in any load, must be absent.
     let loadName = '';
-    const errors: { load: string; text: string; url: string }[] = [];
+    const errors: { load: string; source: 'console' | 'pageerror'; text: string; url: string }[] = [];
     const warnings: string[] = [];
     let requests: string[] = [];
     page.on('console', (message) => {
-      if (message.type() === 'error') errors.push({ load: loadName, text: message.text(), url: message.location().url });
+      if (message.type() === 'error') errors.push({ load: loadName, source: 'console', text: message.text(), url: message.location().url });
       if (message.type() === 'warning') warnings.push(message.text());
     });
-    page.on('pageerror', (error) => errors.push({ load: loadName, text: String(error), url: '' }));
+    page.on('pageerror', (error) => errors.push({ load: loadName, source: 'pageerror', text: String(error), url: '' }));
     page.on('request', (request) => requests.push(request.url()));
     // One reading per load: the commander shown, the panel's choice and its options, whether Pip's model was requested,
     // whether a face pose holds, the banner and the dials; then, when asked, a switch to another commander and the
@@ -297,14 +298,16 @@ test.describe('the style lab commander toggle', () => {
       (r.switched
         ? `, switched to ${r.switched} (panel "${r.switchedPanel}", face ${r.switchedFace}, Pip requested by then ${r.pipRequestedAfter}, banner "${r.switchedBanner}")`
         : '');
-    // The failed loads' own errors, and only those, are expected: the browser's 404 for the GLB and the lab's one
-    // console.error naming the model, once at the start and once on the switch.
+    // The failed loads' own console errors, and only those, are expected: the browser's 404 for Pip's GLB, by its URL,
+    // and the lab's one console.error naming the model, once at the start and once on the switch. A page error is never
+    // expected, and a 404 for any other file is not Pip's. Any 404 used to pass in those loads, whatever file it named.
     const failedLoads = ['failed at start', 'failed on switch'];
-    const expected = (error: (typeof errors)[number]) =>
-      failedLoads.includes(error.load) &&
-      (error.text.includes('commander_pip') || error.url.includes('commander_pip') || error.text.startsWith('Failed to load resource: the server responded with a status of 404'));
+    const labError = (error: (typeof errors)[number]) => error.source === 'console' && error.text.includes('asset commander_pip failed to load');
+    const pip404 = (error: (typeof errors)[number]) =>
+      error.source === 'console' && error.url.includes('commander_pip') && error.text.startsWith('Failed to load resource: the server responded with a status of 404');
+    const expected = (error: (typeof errors)[number]) => failedLoads.includes(error.load) && (labError(error) || pip404(error));
     const unexpected = errors.filter((error) => !expected(error));
-    const labErrors = errors.filter((error) => expected(error) && error.text.includes('asset commander_pip failed to load'));
+    const labErrors = errors.filter((error) => expected(error) && labError(error));
     const line =
       `style lab commander [${test.info().project.name}]: ${summary('default', byDefault)}; ${summary('?commander=bulwark', bulwark)}; ` +
       `${summary('?commander=pip', pip)}; ${summary('?commander=nope', unknown)}; ${summary('a manifest without Pip', missing)}; ` +

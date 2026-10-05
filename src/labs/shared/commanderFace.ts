@@ -15,11 +15,11 @@ export const FACE_SEED = 1;
 
 /**
  * The axis a commander's jaw opens about, in the jaw bone's own frame: the character's left-right axis, a glTF
- * character's +X, as the rig holds it. Pip-A's jaw bone, from the CharForge rig, is turned about 130 degrees from its head
+ * character's +X, as the rig holds it. Pip's jaw bone, from the CharForge rig, is turned about 130 degrees from his head
  * and its own x runs 15.7 degrees off the character's, so the driver's default, the bone's own x, would swing the chin
  * sideways as it dropped; about this axis the chin drops and draws back straight. Read it in the bind pose, before a clip
- * moves the rig: the jaw's turn from the head is what matters, and no clip moves it (Pip-A's idle and run key the jaw at
- * its rest). Null when the rig has no jaw bone.
+ * moves the rig: the jaw's turn from the head is what matters, and no clip moves it (Pip's idle, run and attack key the
+ * jaw at its rest). Null when the rig has no jaw bone.
  */
 export function jawAxisOf(root: Object3D): Vector3 | null {
   const jaw = root.getObjectByName(JAW_BONE_NAME);

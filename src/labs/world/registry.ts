@@ -377,7 +377,7 @@ export function showableMembers(
     unnamed.push(
       clips
         ? `member "${m.name}" loops a clip "${m.clip}" that the loaded "${m.entry}" model does not carry, though the manifest lists it; rebuild the assets (npm run assets)`
-        : `member "${m.name}" is left out because its model "${m.entry}" did not load`,
+        : `member "${m.name}" is left out because its model "${m.entry}" is not among the loaded models`,
     );
   }
   return { shown, unnamed };

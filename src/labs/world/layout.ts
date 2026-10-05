@@ -248,7 +248,7 @@ export function buildAssetWorld(ground: Ground, assets: ReadonlyMap<string, Load
       mixers.push(mixer);
     }
     // A SkeletonUtils copy's hulls hold sliced copies of its body's morph influences until their first draw re-points
-    // them (syncHullMorphs), so a copy the camera had not yet drawn, Pip-A's run and face members from the towers' view,
+    // them (syncHullMorphs), so a copy the camera had not yet drawn, Pip's run and face members from the towers' view,
     // read as unshared. Pointing them now makes every instance's ink share its lids from the start.
     object.traverse((child) => {
       if ((child as Mesh).isMesh && (child as Mesh).material === ctx.hullMaterial) syncHullMorphs(child);

@@ -98,7 +98,7 @@ const TOWER_SIZE: readonly (readonly [number, number])[] = [
 ];
 const CHARACTER_SIZE: Readonly<Record<string, readonly [number, number]>> = { husk: [1.9, 1.2], bulwark: [1.3, 2.3], commander_pip: [1, 1.8] };
 /**
- * The value Pip-A's stand-in idle clip keys on blink_L, as a clip that carried a face track would: the face driver runs
+ * The value Pip's stand-in idle clip keys on blink_L, as a clip that carried a face track would: the face driver runs
  * after the mixer, so the lids it draws must be its own, never this.
  */
 const CLIP_BLINK = 0.7;
@@ -164,7 +164,7 @@ function standIns(): Map<string, LoadedAsset> {
         root.add(sword);
       }
       // The face morphs the manifest lists, which three names from the morph attributes (Mesh.updateMorphTargets), so the
-      // world gives the stand-in a face driver as it does the shipped Pip-A.
+      // world gives the stand-in a face driver as it does the shipped Pip.
       if (entry.morphs?.length) {
         const count = part.geometry.getAttribute('position').count;
         part.geometry.morphAttributes['position'] = entry.morphs.map((name) => {

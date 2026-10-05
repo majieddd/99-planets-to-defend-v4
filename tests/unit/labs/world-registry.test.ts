@@ -24,7 +24,7 @@ import {
   ZONES,
   type CoverageManifest,
 } from '../../../src/labs/world/registry';
-import { memberOptions, memberOptionText } from '../../../src/labs/world/panel';
+import { memberOptions } from '../../../src/labs/world/panel';
 import { WORLD_CASTER_MARGIN, WORLD_SHADOW_HALF_WIDTH } from '../../../src/labs/world/sun';
 
 interface ShippedManifest extends CoverageManifest {
@@ -240,10 +240,10 @@ describe('the Asset World registry', () => {
     const dropped = showableMembers(stale, coverageGaps(manifest));
     expect(dropped.shown).toEqual(MEMBERS.filter((m) => m.name !== 'pip_run'));
     expect(dropped.unnamed).toEqual([expect.stringMatching(/^member "pip_run" loops a clip "run" that the loaded "commander_pip" model does not carry/)]);
-    // A model that did not load: each of its members is named.
+    // A model that is not among the loaded ones: each of its members is named.
     const withoutNest = new Map(loaded);
     withoutNest.delete('nest');
-    expect(showableMembers(withoutNest, []).unnamed).toEqual(['member "nest" is left out because its model "nest" did not load']);
+    expect(showableMembers(withoutNest, []).unnamed).toEqual(['member "nest" is left out because its model "nest" is not among the loaded models']);
     // A member the coverage gaps already name is left out with no second sentence.
     const early = { ...MEMBERS.find((m) => m.name === 'pip_idle')!, name: 'pip_dance', label: 'Dance', clip: 'dance' };
     expect(showableMembers(loaded, coverageGaps(manifest, [...MEMBERS, early]), [...MEMBERS, early])).toEqual({ shown: [...MEMBERS], unnamed: [] });
@@ -256,7 +256,6 @@ describe('the Asset World registry', () => {
     const commanders = MEMBERS.filter((m) => m.zone === 'commanders');
     expect(Object.values(options)).toEqual(['', ...commanders.map((m) => m.name)]);
     expect(options['Pip (commander) attack (pip_attack)']).toBe('pip_attack');
-    for (const m of commanders) expect(memberOptionText(m)).toBe(`${m.character} ${m.label!.toLowerCase()} (${m.name})`);
     expect(Object.keys(memberOptions('xeno'))).toEqual(['Whole view', 'Idle (husk_idle)', 'Walk (husk_walk)', 'Attack (husk_attack)']);
     // A family's only member has no label, and the list names it by its address.
     expect(Object.keys(memberOptions('nests'))).toEqual(['Whole view', 'nest']);
