@@ -7,8 +7,10 @@ import {
   defaultCombatFeel,
   feelAddressValue,
   feelFromAddress,
+  isFeelToggle,
   parseCombatFeel,
   snapFeel,
+  type NumericFeelKey,
 } from '../../../src/labs/world/combatFeel';
 import { frameStep, MAX_FRAME_STEP, WORLD_FOV_DEG } from '../../../src/labs/shared/paintedStage';
 import { createPointerMark } from '../../../src/labs/world/panel';
@@ -18,10 +20,15 @@ describe('the combat feel settings', () => {
     expect(COMBAT_FEEL_KEYS).toEqual(Object.keys(COMBAT_FEEL_RANGES));
     expect([...COMBAT_FEEL_KEYS].sort()).toEqual(Object.keys(DEFAULT_COMBAT_FEEL).sort());
     for (const key of COMBAT_FEEL_KEYS) {
-      const range = COMBAT_FEEL_RANGES[key];
-      expect(DEFAULT_COMBAT_FEEL[key], key).toBeGreaterThanOrEqual(range.min);
-      expect(DEFAULT_COMBAT_FEEL[key], key).toBeLessThanOrEqual(range.max);
-      expect(snapFeel(key, DEFAULT_COMBAT_FEEL[key]), key).toBe(DEFAULT_COMBAT_FEEL[key]);
+      const control = COMBAT_FEEL_RANGES[key];
+      if (isFeelToggle(control)) {
+        expect(typeof DEFAULT_COMBAT_FEEL[key], key).toBe('boolean');
+        continue;
+      }
+      const value = DEFAULT_COMBAT_FEEL[key] as number;
+      expect(value, key).toBeGreaterThanOrEqual(control.min);
+      expect(value, key).toBeLessThanOrEqual(control.max);
+      expect(snapFeel(key as NumericFeelKey, value), key).toBe(value);
     }
     // The copied JSON names the settings in the same order.
     expect(Object.keys(JSON.parse(combatFeelJson(defaultCombatFeel())) as object)).toEqual(COMBAT_FEEL_KEYS);
@@ -34,6 +41,20 @@ describe('the combat feel settings', () => {
     // Out of range, not a setting, or not a number: named and skipped, as before.
     expect(parseCombatFeel('{"crossfade":0.9,"lunge":1,"fadeIn":"0.05"}')).toEqual({ feel: {}, rejected: ['crossfade', 'lunge', 'fadeIn'] });
     expect(parseCombatFeel('not json').rejected).toEqual(['the settings (not JSON)']);
+  });
+
+  it("carries the sounds' mute as true or false and their volume on its step, in the copy and the address alike", () => {
+    expect(DEFAULT_COMBAT_FEEL.mute).toBe(false);
+    expect(DEFAULT_COMBAT_FEEL.volume).toBe(0.7);
+    const muted = { ...defaultCombatFeel(), mute: true, volume: 0.45 };
+    const json = combatFeelJson(muted);
+    expect(JSON.parse(json)).toMatchObject({ mute: true, volume: 0.45 });
+    expect(parseCombatFeel(json)).toEqual({ feel: muted, rejected: [] });
+    // A pasted volume between steps goes on its step, as every slider's does.
+    expect(parseCombatFeel('{"volume":0.42}').feel).toEqual({ volume: 0.4 });
+    // A toggle takes a boolean only, and a slider a number only.
+    expect(parseCombatFeel('{"mute":1,"volume":true}')).toEqual({ feel: {}, rejected: ['mute', 'volume'] });
+    expect(feelAddressValue({ ...defaultCombatFeel(), mute: true })).toBe(combatFeelJson({ ...defaultCombatFeel(), mute: true }));
   });
 
   it('writes the address parameter only for a changed feel, as the compact JSON the copy button copies', () => {

@@ -47,6 +47,22 @@ export interface ImpactReading {
   dummies: { flinch: number; knockback: number; blocked: boolean }[];
 }
 
+/** A hit that connected, as the impact's listeners hear of it (onConnect): its hit, the dummy, the contact, the weight. */
+export interface ConnectEvent {
+  step: ComboStep;
+  /** The dummy's index in the set. */
+  dummy: number;
+  /** Where the blade met it, in world space. */
+  contact: readonly number[];
+  finisher: boolean;
+}
+
+/** A swing whose active frames are over, as the impact's listeners hear of it (onSwingEnd), and whether it connected. */
+export interface SwingEndEvent {
+  step: ComboStep;
+  connected: boolean;
+}
+
 export interface CombatImpact {
   /**
    * This frame's clocks for a frame step of `dt` (written into one object, reused): the frame's own, and the combo's and
@@ -64,6 +80,16 @@ export interface CombatImpact {
   afterRender(camera: PerspectiveCamera): void;
   /** Places the hit numbers for the canvas's size. */
   layout(widthPx: number, heightPx: number): void;
+  /**
+   * Adds a listener told of every hit that connects, on its contact frame (in connect(), as the stop, the sparks and the
+   * number start): the combat sounds' impact. Returns the call that removes it.
+   */
+  onConnect(listener: (event: ConnectEvent) => void): () => void;
+  /**
+   * Adds a listener told of each swing once its active frames are over, or once it is cut off before that (the next hit
+   * begins, or the hit ends), with whether it connected: the combat sounds' whiff. Returns the call that removes it.
+   */
+  onSwingEnd(listener: (event: SwingEndEvent) => void): () => void;
   reset(): void;
   reading(): ImpactReading;
 }
@@ -105,6 +131,10 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
   const out: PlayClocks = { combo: 0, motion: 0, frame: 0 };
   const stop = new HitStop(SWINGS_KEPT);
   const swings: SwingRecord[] = [];
+  const connectListeners = new Set<(event: ConnectEvent) => void>();
+  const swingEndListeners = new Set<(event: SwingEndEvent) => void>();
+  // The swing whose end its listeners have not yet heard, or null.
+  let open: SwingRecord | null = null;
   let connects = 0;
   let lastConnect: ImpactReading['lastConnect'] = null;
   let widthPx = 1;
@@ -174,6 +204,18 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
       swing.dummies.push(index);
       swing.at ??= time;
     }
+    if (connectListeners.size) {
+      const event: ConnectEvent = { step, dummy: index, contact: contact.toArray(), finisher };
+      for (const listener of connectListeners) listener(event);
+    }
+  }
+
+  /** Tells the swing-end listeners the open swing is over, once. */
+  function endSwing(): void {
+    const swing = open;
+    open = null;
+    if (!swing) return;
+    for (const listener of swingEndListeners) listener({ step: swing.step, connected: swing.connected });
   }
 
   /**
@@ -190,12 +232,17 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
   function detect(frame: ComboFrame): void {
     const hit = frame.state.hit;
     if (frame.started !== null && hit) {
+      // A swing cut off before its active frames were over (a press past a cancel point) ends here.
+      endSwing();
       swingHits.begin();
       pending.fill(false);
-      swings.push({ step: hit.step, connected: false, dummies: [], at: null });
+      const swing: SwingRecord = { step: hit.step, connected: false, dummies: [], at: null };
+      swings.push(swing);
       if (swings.length > SWINGS_KEPT) swings.shift();
+      open = swing;
       havePrevious = false;
     }
+    if (!hit) endSwing();
     if (!hit || !pip.blade(base1, tip1, pivot1)) {
       havePrevious = false;
       previousStep = 0;
@@ -239,6 +286,8 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
           connect(i, hit.step, t1);
         }
       }
+      // Past the active frames nothing more can connect, so the swing's end is heard now, a whiff if it met nothing.
+      if (t1 >= contract.activeTo) endSwing();
     }
     base0.copy(base1);
     tip0.copy(tip1);
@@ -298,6 +347,14 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
       widthPx = width;
       heightPx = height;
     },
+    onConnect(listener) {
+      connectListeners.add(listener);
+      return () => connectListeners.delete(listener);
+    },
+    onSwingEnd(listener) {
+      swingEndListeners.add(listener);
+      return () => swingEndListeners.delete(listener);
+    },
     reset() {
       stop.reset();
       held.fill(false);
@@ -310,6 +367,8 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
       swingHits.begin();
       havePrevious = false;
       previousStep = 0;
+      // A reset drops the open swing unheard: the dummies and Pip go home, and no whiff follows them.
+      open = null;
     },
     reading() {
       const shakeNow = shake.reading();

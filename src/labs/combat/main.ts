@@ -7,10 +7,11 @@ import type { TierName } from '../../render/quality';
 import { STYLE_PLANET_RADIUS } from '../../render/terrain/stylePatch';
 import { VERDANT } from '../../render/themes';
 import { FACE_SEED } from '../shared/commanderFace';
+import { createCombatSound, encodeWav, renderSound, type SoundKind } from '../shared/combatSound';
 import { fetchModelNotes, loadNamedAsset } from '../shared/labAssets';
 import { createPaintedStage, frameStep, pickTier, WORLD_FOV_DEG } from '../shared/paintedStage';
 import { feelAddressValue, feelFromAddress } from '../world/combatFeel';
-import type { ComboFrame } from '../world/combo';
+import { contractOf, type ComboFrame, type ComboStep } from '../world/combo';
 import { createPipPlay, PLAY_CAMERA_DISTANCE, PLAY_CAMERA_MAX_DISTANCE, type PlayClocks, type PlayStart } from '../world/play';
 import { createPlayInput } from '../world/playInput';
 import type { Obstacle } from '../world/playMotion';
@@ -114,6 +115,14 @@ async function start(): Promise<void> {
     dummies && pipPlay.available
       ? createCombatImpact({ energy: painted.energy, camera, ground: patch, pip: pipPlay, dummies, feel, reducedMotion, brush: ctx.paint.uBrush, numbers: document.getElementById('hits') })
       : null;
+
+  // The combat sounds (labs/shared/combatSound.ts): a whoosh as each swing begins, an impact on each contact, a whiff when
+  // a swing's active frames end having met nothing. Silent until a real gesture on the page unlocks them.
+  const sound = createCombatSound({ feel, target: window });
+  impact?.onConnect((event) => sound.impact(event.finisher));
+  impact?.onSwingEnd((event) => {
+    if (!event.connected) sound.whiff(event.step);
+  });
 
   function resize(): void {
     painted.resize();
@@ -247,6 +256,19 @@ async function start(): Promise<void> {
     play: () => pipPlay.reading(),
     dummies: dummyReading,
     impact: () => impact?.reading() ?? null,
+    sound: () => sound.reading(),
+    /**
+     * An evidence hook: one sound rendered offline at full volume (renderSound) as a 16-bit mono WAV, base64. Nothing
+     * on the page calls it.
+     */
+    soundWav: async (kind: SoundKind, step: ComboStep) => {
+      const rate = 22050;
+      const samples = await renderSound(kind, step, contractOf(step, pipPlay.contracts), rate);
+      const bytes = new Uint8Array(encodeWav(samples, rate));
+      let text = '';
+      for (const byte of bytes) text += String.fromCharCode(byte);
+      return btoa(text);
+    },
     /**
      * The energy pass (render/post/energyPass.ts): the frames it drew energy in since the load, and whether the last
      * frame did, so a reading can tell a frame with energy on screen from one the pass left untouched.
@@ -316,6 +338,9 @@ async function start(): Promise<void> {
     let frame: ComboFrame | null = null;
     if (pipPlay.active) frame = pipPlay.update(clocks, input.read(), input.takeAttack(), camera, controls);
     impact?.afterPlay(frame, dt);
+    // The whoosh starts with the hit's wind-up, timed on the audio clock from this frame.
+    if (frame?.started) sound.whoosh(frame.started, contractOf(frame.started, pipPlay.contracts));
+    sound.sync();
     controls.update(dt);
     painted.sky.follow(camera);
     // The shake is laid on the camera for the draw alone and taken off straight after, so the orbit never sees it.

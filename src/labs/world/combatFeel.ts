@@ -51,6 +51,10 @@ export interface CombatFeel {
   knockbackLight: number;
   /** Metres the finisher knocks a dummy back. */
   knockbackFinisher: number;
+  /** Whether the combat sounds are off: their gain at 0 and the audio context suspended (labs/shared/combatSound.ts). */
+  mute: boolean;
+  /** The combat sounds' master volume, from 0 to 1. */
+  volume: number;
 }
 
 /** The defaults, the one place they are set. Frozen so a slider writes a copy, never these. */
@@ -74,6 +78,8 @@ export const DEFAULT_COMBAT_FEEL: Readonly<CombatFeel> = Object.freeze({
   shake: 1,
   knockbackLight: 0.25,
   knockbackFinisher: 0.6,
+  mute: false,
+  volume: 0.7,
 });
 
 /** A setting's slider: its least and greatest value, its step and its name in the panel. */
@@ -84,12 +90,26 @@ export interface FeelRange {
   label: string;
 }
 
+/** A setting's checkbox: its name in the panel. A toggle takes true or false, in the panel and in `?feel=` alike. */
+export interface FeelToggle {
+  toggle: true;
+  label: string;
+}
+
+/** The settings that are numbers, each with a slider. */
+export type NumericFeelKey = { [K in keyof CombatFeel]: CombatFeel[K] extends number ? K : never }[keyof CombatFeel];
+
+/** Whether a setting is a toggle (a checkbox) rather than a number on a slider. */
+export function isFeelToggle(control: FeelRange | FeelToggle): control is FeelToggle {
+  return 'toggle' in control;
+}
+
 /**
  * Each setting's slider, in the order the folder shows them. The ranges also bound what `?feel=` may set. The crossfade
  * stops at 0.25 s, under the light hits' 0.30 s cancel point, so a hit has always finished fading in by the time the next
  * one can take over from it, and no more than two hits ever show at once (combo.ts, startHit).
  */
-export const COMBAT_FEEL_RANGES: { readonly [K in keyof CombatFeel]: FeelRange } = {
+export const COMBAT_FEEL_RANGES: { readonly [K in keyof CombatFeel]: CombatFeel[K] extends boolean ? FeelToggle : FeelRange } = {
   crossfade: { min: 0.02, max: 0.25, step: 0.01, label: 'crossfade between hits (s)' },
   fadeIn: { min: 0.02, max: 0.15, step: 0.01, label: 'first hit fade in (s)' },
   fadeOut: { min: 0.05, max: 0.4, step: 0.01, label: 'last hit fade out (s)' },
@@ -109,6 +129,8 @@ export const COMBAT_FEEL_RANGES: { readonly [K in keyof CombatFeel]: FeelRange }
   shake: { min: 0, max: 2, step: 0.05, label: 'camera shake strength' },
   knockbackLight: { min: 0, max: 1, step: 0.05, label: 'knockback on a light hit (m)' },
   knockbackFinisher: { min: 0, max: 1.5, step: 0.05, label: 'knockback on the finisher (m)' },
+  mute: { toggle: true, label: 'mute the combat sounds' },
+  volume: { min: 0, max: 1, step: 0.05, label: 'combat sound volume' },
 };
 
 /**
@@ -135,20 +157,25 @@ function decimals(step: number): number {
  * panel and pastes back to us, and which `?feel=` takes in return.
  */
 export function combatFeelJson(feel: CombatFeel): string {
-  const out: Record<string, number> = {};
-  for (const key of COMBAT_FEEL_KEYS) out[key] = Number(feel[key].toFixed(decimals(COMBAT_FEEL_RANGES[key].step)));
+  const out: Record<string, number | boolean> = {};
+  for (const key of COMBAT_FEEL_KEYS) {
+    const control = COMBAT_FEEL_RANGES[key];
+    const value = feel[key];
+    out[key] = isFeelToggle(control) ? Boolean(value) : Number((value as number).toFixed(decimals(control.step)));
+  }
   return JSON.stringify(out);
 }
 
-/** Whether a value may be given to a setting: a finite number within its slider's range. */
+/** Whether a value may be given to a setting: true or false for a toggle, a finite number within range for a slider. */
 export function acceptFeel(key: string, value: unknown): key is keyof CombatFeel {
   if (!Object.prototype.hasOwnProperty.call(COMBAT_FEEL_RANGES, key)) return false;
-  const range = COMBAT_FEEL_RANGES[key as keyof CombatFeel];
-  return typeof value === 'number' && Number.isFinite(value) && value >= range.min && value <= range.max;
+  const control = COMBAT_FEEL_RANGES[key as keyof CombatFeel];
+  if (isFeelToggle(control)) return typeof value === 'boolean';
+  return typeof value === 'number' && Number.isFinite(value) && value >= control.min && value <= control.max;
 }
 
 /** A value put on its slider's nearest step, from the slider's least value, written to the step's decimals. */
-export function snapFeel(key: keyof CombatFeel, value: number): number {
+export function snapFeel(key: NumericFeelKey, value: number): number {
   const range = COMBAT_FEEL_RANGES[key];
   const snapped = range.min + Math.round((value - range.min) / range.step) * range.step;
   return Number(Math.min(range.max, Math.max(range.min, snapped)).toFixed(decimals(range.step)));
@@ -173,8 +200,9 @@ export function parseCombatFeel(text: string): { feel: Partial<CombatFeel>; reje
   const feel: Partial<CombatFeel> = {};
   const rejected: string[] = [];
   for (const [key, value] of Object.entries(parsed)) {
-    if (acceptFeel(key, value)) feel[key] = snapFeel(key, value as number);
-    else rejected.push(key);
+    if (!acceptFeel(key, value)) rejected.push(key);
+    else if (typeof value === 'boolean') (feel as Record<string, boolean>)[key] = value;
+    else (feel as Record<string, number>)[key] = snapFeel(key as NumericFeelKey, value as number);
   }
   return { feel, rejected };
 }

@@ -55,6 +55,18 @@ interface ImpactReading {
   numbers: { live: number; last: number | null };
 }
 
+/** What `__P99__.sound()` reads of the combat sounds (labs/shared/combatSound.ts). */
+interface SoundReading {
+  state: string;
+  unlocked: boolean;
+  muted: boolean;
+  gain: number;
+  asked: { whoosh: number; impact: number; whiff: number };
+  played: { whoosh: number; impact: number; whiff: number };
+  skipped: { whoosh: number; impact: number; whiff: number };
+  deviceErrors: number;
+}
+
 interface CameraReading {
   position: number[];
   target: number[];
@@ -95,11 +107,23 @@ const PAGES_BASE = '/99-planets-to-defend-v4/';
  */
 const BROWSER_GPU_MESSAGE = /^\[\.WebGL-0x[0-9a-f]+\]GL Driver Message \(OpenGL, Performance, [^)]*\): GPU stall due to ReadPixels( \(this message will no longer repeat\))?$/;
 
+/**
+ * Chromium's own report that the audio device or its WebAudio renderer failed, exactly as it prints it. The combat
+ * sounds (labs/shared/combatSound.ts) open an AudioContext on the first real key or click, and on this machine headless
+ * Chromium raises this in some of several browsers running at once, as the suite's workers do: of six arenas playing
+ * sounds at once, 3 launched plainly, 3 with --audio-buffer-size=4096, and 0, 3 and 1 in three runs with the audio
+ * service in process, and the suite itself with --disable-audio-output still raised it (2026-10-05). It is the
+ * browser's report of its device, not the page's: the context suspends itself, the sounds count it (`deviceErrors`)
+ * and resume it, and a browser on its own never raised it.
+ * Only that message is left out; every other error must still be none.
+ */
+const AUDIO_DEVICE_MESSAGE = 'The AudioContext encountered an error from the audio device or the WebAudio renderer.';
+
 function collectConsole(page: Page): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
   page.on('console', (message) => {
-    if (message.type() === 'error') errors.push(message.text());
+    if (message.type() === 'error' && message.text() !== AUDIO_DEVICE_MESSAGE) errors.push(message.text());
     if (message.type() === 'warning' && !BROWSER_GPU_MESSAGE.test(message.text())) warnings.push(message.text());
   });
   page.on('pageerror', (error) => errors.push(String(error)));
@@ -327,6 +351,12 @@ test.describe('the combat arena', () => {
       test.setTimeout(240_000);
       const log = collectConsole(page);
       await open(page);
+      const sound = () => page.evaluate(() => (window.__P99__!['sound'] as () => SoundReading)());
+      // The sounds stay locked, and make no audio context, until a real gesture: Shift, which only sprints, is one.
+      const locked = await sound();
+      await page.keyboard.press('ShiftLeft');
+      await page.waitForFunction(() => (window.__P99__!['sound'] as () => SoundReading)().state === 'running', undefined, { timeout: 30_000 });
+      const unlocked = await sound();
       // Every frame from a press until a while after the hits end is read in the page, as the chain test does, with the
       // frame's clocks (a hit-stop shows as a combo step under the frame's), the impact and the middle dummy.
       type Frame = { step: number; time: number | null; clocks: PlayReading['clocks']; impact: ImpactReading; middle: DummyReading; trail: PlayReading['trail'] };
@@ -388,6 +418,7 @@ test.describe('the combat arena', () => {
       // A swing at the air from the spawn, the dummies 3 m off: the blade meets nothing, so nothing marks it.
       const whiff = await record('one');
       const whiffEnd = whiff.at(-1)!.impact;
+      const afterWhiff = await sound();
       // Then W walks him straight at the middle dummy until its reach holds him, and the chain is pressed from the page.
       await page.keyboard.down('KeyW');
       await page.waitForFunction(() => ((window.__P99__!['play'] as () => PlayReading)().clearance ?? 1) < 0.02, undefined, { timeout: 60_000 });
@@ -395,6 +426,7 @@ test.describe('the combat arena', () => {
       await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().speed === 0, undefined, { timeout: 60_000 });
       const chain = await record('chain');
       const end = chain.at(-1)!.impact;
+      const afterChain = await sound();
       const measured = stops(chain);
       // Each contact as the frame it landed on read it: which hit, the sparks then, and where they went.
       const contacts = chain
@@ -422,8 +454,16 @@ test.describe('the combat arena', () => {
         `(the impact's own ${end.hitStop.lengths.slice(-3).map((value) => (value * 1000).toFixed(1)).join(', ')} ms); ` +
         `contacts ${contacts.map((c) => `attack_${c.step} on dummy ${c.dummy}: sparks burst ${c.bursts} (${c.alive} alive) at ${c.sparksAt?.map((v) => v.toFixed(2)).join(',')}, hits ${c.hits}`).join('; ')}; ` +
         `reactions ${reactions.map((r) => `flinch ${r.flinch.toFixed(2)}, knockback ${r.knockback.toFixed(3)} m`).join('; ')}; ` +
-        `the middle dummy's hits ${chain.at(-1)!.middle.hits}, numbers last ${end.numbers.last}; console errors ${JSON.stringify(log.errors)}`;
+        `the middle dummy's hits ${chain.at(-1)!.middle.hits}, numbers last ${end.numbers.last}; ` +
+        `sounds: ${locked.state} before a gesture (${locked.unlocked ? 'unlocked' : 'locked'}), ${unlocked.state} after Shift at gain ${unlocked.gain}; ` +
+        `the whiff asked ${JSON.stringify(afterWhiff.asked)}, the chain to ${JSON.stringify(afterChain.asked)} (played ${JSON.stringify(afterChain.played)}, skipped ${JSON.stringify(afterChain.skipped)}, device errors ${afterChain.deviceErrors}); console errors ${JSON.stringify(log.errors)}`;
       console.log(line);
+      // The sounds: locked until the gesture, then a whoosh for the whiff swing and a whiff at its end, no impact; then a
+      // whoosh for each hit of the chain and an impact for each contact, and no further whiff.
+      expect(locked.state, line).toBe('locked');
+      expect(unlocked.state, line).toBe('running');
+      expect(afterWhiff.asked, line).toEqual({ whoosh: 1, impact: 0, whiff: 1 });
+      expect(afterChain.asked, line).toEqual({ whoosh: 4, impact: 3, whiff: 1 });
       // The whiff: a swing, but no contact, no stop, no sparks; its trail still drew.
       expect(whiffEnd.swings.at(-1), line).toMatchObject({ step: 1, connected: false });
       expect(whiffEnd.connects, line).toBe(0);
@@ -454,6 +494,45 @@ test.describe('the combat arena', () => {
         expect(r.knockback, line).toBeGreaterThan(0.05);
       }
       expect(log.errors, line).toEqual([]);
+    });
+
+    test("mutes the combat sounds from the feel folder's checkbox, zeroing their gain and suspending the context", async ({ page }) => {
+      test.setTimeout(240_000);
+      const log = collectConsole(page);
+      await open(page);
+      const sound = () => page.evaluate(() => (window.__P99__!['sound'] as () => SoundReading)());
+      await page.keyboard.press('ShiftLeft');
+      await page.waitForFunction(() => (window.__P99__!['sound'] as () => SoundReading)().state === 'running', undefined, { timeout: 30_000 });
+      const before = await sound();
+      // The panel starts closed under the phone layout's 768 px line, as this 480 px canvas is.
+      await page.locator('.lil-gui.lil-root > .lil-title').click();
+      const mute = page.locator('.lil-gui .lil-controller', { hasText: 'mute the combat sounds' }).locator('input[type=checkbox]');
+      await mute.check();
+      await page.waitForFunction(() => (window.__P99__!['sound'] as () => SoundReading)().state === 'suspended', undefined, { timeout: 30_000 });
+      const muted = await sound();
+      const address = new URL(page.url()).searchParams.get('feel');
+      await mute.uncheck();
+      // Unmuted, the gain comes back at once and the context is resumed, tried again about every second while it stays
+      // suspended (RESUME_RETRY_FRAMES). Whether it runs again is the audio device's to say: alone this test reads it
+      // running within a second or two, but among the suite's parallel headless browsers the device raised errors and
+      // refused it for a minute (AUDIO_DEVICE_MESSAGE), so its resumption is read and printed, not held.
+      await page.waitForFunction(() => !(window.__P99__!['sound'] as () => SoundReading)().muted, undefined, { timeout: 30_000 });
+      const resumed = await page
+        .waitForFunction(() => (window.__P99__!['sound'] as () => SoundReading)().state === 'running', undefined, { timeout: 10_000 })
+        .then(() => true, () => false);
+      const unmuted = await sound();
+      const line =
+        `combat arena mute [${test.info().project.name}]: before ${before.state} at gain ${before.gain}; muted ${muted.state} at gain ${muted.gain} (the address's feel ${address}); ` +
+        `unmuted ${unmuted.state} (resumed ${resumed}) at gain ${unmuted.gain}, device errors ${unmuted.deviceErrors}; console errors ${JSON.stringify(log.errors)}, warnings ${JSON.stringify(log.warnings)}`;
+      console.log(line);
+      expect(before.gain, line).toBeGreaterThan(0);
+      expect(muted.gain, line).toBe(0);
+      expect(muted.muted, line).toBe(true);
+      expect(JSON.parse(address ?? '{}'), line).toMatchObject({ mute: true });
+      expect(unmuted.gain, line).toBe(before.gain);
+      expect(unmuted.muted, line).toBe(false);
+      expect(log.errors, line).toEqual([]);
+      expect(log.warnings, line).toEqual([]);
     });
 
     test('puts the dummies and Pip back on R and on the panel\'s button, and the button hands the keys back to him', async ({ page }) => {

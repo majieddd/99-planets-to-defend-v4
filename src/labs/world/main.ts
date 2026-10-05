@@ -17,6 +17,8 @@ import { feelAddressValue, feelFromAddress } from './combatFeel';
 import { WorldLabels, type LabelSpec } from './labels';
 import { buildAssetWorld, type AssetWorld } from './layout';
 import { createWorldPanel, type WorldPanelState } from './panel';
+import { createCombatSound } from '../shared/combatSound';
+import { contractOf } from './combo';
 import { createPipPlay, memberObstacles } from './play';
 import { createPlayInput } from './playInput';
 import type { Obstacle } from './playMotion';
@@ -182,6 +184,8 @@ async function start(): Promise<void> {
     brush: ctx.paint.uBrush,
     sidecarNotes: pipNotes,
   });
+  // His swing's whoosh (labs/shared/combatSound.ts), silent until a real gesture on the page unlocks it.
+  const sound = createCombatSound({ feel, target: window });
   // A member whose model or clip this build lacks is left out rather than built, where a member put in ahead of its clip
   // would stop the page with "has no clip". The coverage gaps above, read from the manifest, name most such members;
   // one the loaded GLBs drop that the manifest does not (a GLB rebuilt without a clip the manifest lists) is named here.
@@ -510,6 +514,7 @@ async function start(): Promise<void> {
     // The play prototype: puts Pip out or brings him in (false when the page has none), and reads where he is.
     setPlay: (on: boolean) => setPlay(on),
     play: () => pipPlay.reading(),
+    sound: () => sound.reading(),
     // A face pose held on a member for an evidence frame, or null to hand it back to its blink and demo.
     setFace: (name: string, pose: FacePose | null) => world.setFace(name, pose),
     faces: () => world.faces(),
@@ -544,7 +549,12 @@ async function start(): Promise<void> {
       // world's clips'; the camera then follows him before the controls apply a drag or the wheel. His combo and his
       // movement share the step here, and the camera's follow too; phase B's hit-stop will hold the combo's and the
       // movement's and leave the frame's running (PlayClocks).
-      if (pipPlay.active) pipPlay.update({ combo: dt, motion: dt, frame: dt }, input.read(), input.takeAttack(), camera, controls);
+      if (pipPlay.active) {
+        const frame = pipPlay.update({ combo: dt, motion: dt, frame: dt }, input.read(), input.takeAttack(), camera, controls);
+        // His swings whoosh here too; the impacts and whiffs belong to the arena, where the dummies take the hits.
+        if (frame?.started) sound.whoosh(frame.started, contractOf(frame.started, pipPlay.contracts));
+      }
+      sound.sync();
       // The turntable turns around the open view, and waits while a view glides in or Pip plays.
       controls.autoRotate = state.turntable && transition === null && !pipPlay.active;
       controls.update(frameStep(interval, frozen));

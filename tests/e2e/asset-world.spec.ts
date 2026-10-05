@@ -136,11 +136,23 @@ function groundAllowance(member: (typeof MEMBERS)[number]): { float: number; sin
   return { float: stray, sink: stray };
 }
 
+/**
+ * Chromium's own report that the audio device or its WebAudio renderer failed, exactly as it prints it. The combat
+ * sounds (labs/shared/combatSound.ts) open an AudioContext on the first real key or click, and on this machine headless
+ * Chromium raises this in some of several browsers running at once, as the suite's workers do: of six arenas playing
+ * sounds at once, 3 launched plainly, 3 with --audio-buffer-size=4096, and 0, 3 and 1 in three runs with the audio
+ * service in process, and the suite itself with --disable-audio-output still raised it (2026-10-05). It is the
+ * browser's report of its device, not the page's: the context suspends itself, the sounds count it (`deviceErrors`)
+ * and resume it, and a browser on its own never raised it.
+ * Only that message is left out; every other error must still be none.
+ */
+const AUDIO_DEVICE_MESSAGE = 'The AudioContext encountered an error from the audio device or the WebAudio renderer.';
+
 function collectConsole(page: Page): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
   page.on('console', (message) => {
-    if (message.type() === 'error') errors.push(message.text());
+    if (message.type() === 'error' && message.text() !== AUDIO_DEVICE_MESSAGE) errors.push(message.text());
     if (message.type() === 'warning') warnings.push(message.text());
   });
   page.on('pageerror', (error) => errors.push(String(error)));
