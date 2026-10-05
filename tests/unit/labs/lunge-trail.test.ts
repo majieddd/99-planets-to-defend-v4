@@ -1,6 +1,6 @@
 import { Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_COMBAT_FEEL } from '../../../src/labs/world/combatFeel';
+import { COMBAT_FEEL_RANGES, DEFAULT_COMBAT_FEEL } from '../../../src/labs/world/combatFeel';
 import { COMBO_HITS } from '../../../src/labs/world/combo';
 import {
   ASSIST_CONE_DEG,
@@ -22,7 +22,19 @@ import {
   type LungeCurve,
 } from '../../../src/labs/world/lunge';
 import { holdingRadius, PLAY_AREA_RADIUS, resolveObstacles, stepMotion, sweepMove, type Obstacle } from '../../../src/labs/world/playMotion';
-import { TRAIL_CAPACITY, TRAIL_SUBSAMPLES_MAX, TrailBuffer, TrailStroke } from '../../../src/labs/world/swordTrail';
+import {
+  crescentWidth,
+  TRAIL_CAPACITY,
+  TRAIL_EMIT_LEAD,
+  TRAIL_EMIT_TAIL,
+  TRAIL_LENGTH_MAX,
+  TRAIL_SUBSAMPLES_MAX,
+  TRAIL_TIP_SPEED_MAX,
+  trailAgeShare,
+  TrailBuffer,
+  trailEmitting,
+  TrailStroke,
+} from '../../../src/labs/world/swordTrail';
 
 // Play Pip's lunge and sword trail, which run on both pages (labs/world): the lunge's window, its curve (scripted or a
 // clip's root motion) and assist, its sweep against the bodies' cores and the area's edge, and the trail's ring,
@@ -286,5 +298,57 @@ describe('the sword trail (labs/world/swordTrail.ts)', () => {
     expect(nb.count).toBeLessThanOrEqual(1 + TRAIL_SUBSAMPLES_MAX);
     next.clear();
     expect(next.buffer.count).toBe(0);
+  });
+});
+
+describe("the sword trail's crescent (labs/world/swordTrail.ts)", () => {
+  it('takes samples from the late wind-up through the early recovery, never past a cancel point', () => {
+    // The light hits: active 0.15 to 0.28 s, so from 0.11 s to their 0.30 s cancel; the finisher from 0.29 s to 0.50 s.
+    expect(trailEmitting(HIT1, HIT1.activeFrom - TRAIL_EMIT_LEAD - 1e-6)).toBe(false);
+    expect(trailEmitting(HIT1, HIT1.activeFrom - TRAIL_EMIT_LEAD)).toBe(true);
+    expect(trailEmitting(HIT1, 0.299)).toBe(true);
+    expect(trailEmitting(HIT1, HIT1.cancel!)).toBe(false);
+    expect(trailEmitting(HIT3, 0.29 + 1e-9)).toBe(true);
+    expect(trailEmitting(HIT3, HIT3.activeTo + TRAIL_EMIT_TAIL - 1e-6)).toBe(true);
+    expect(trailEmitting(HIT3, HIT3.activeTo + TRAIL_EMIT_TAIL)).toBe(false);
+  });
+
+  it('is widest at the blade and comes to a point at its tail, bright along its body and falling away at the tail', () => {
+    expect(crescentWidth(0, 0.85)).toBe(0.85);
+    expect(crescentWidth(0.5, 0.85)).toBeCloseTo(0.425, 12);
+    expect(crescentWidth(1, 0.85)).toBe(0);
+    expect(crescentWidth(0, 1.5)).toBe(1);
+    expect(trailAgeShare(0.08, 0.16)).toBeCloseTo(0.5, 12);
+    expect(trailAgeShare(1, 0.16)).toBe(1);
+    const stroke = new TrailStroke();
+    stroke.fade = 1;
+    // An ease out: three quarters bright half way along, where the square of what was left gave a quarter.
+    expect(stroke.shade(0, 0.16)).toBe(1);
+    expect(stroke.shade(0.08, 0.16)).toBeCloseTo(0.75, 12);
+    expect(stroke.shade(0.16, 0.16)).toBe(0);
+    // The defaults keep 0.16 s of arc, inside the 0.15 to 0.2 s the crescent wants, and the slider's top is the ring's.
+    expect(DEFAULT_COMBAT_FEEL.trailLength).toBe(0.16);
+    expect(TRAIL_LENGTH_MAX).toBe(COMBAT_FEEL_RANGES.trailLength.max);
+  });
+
+  it("holds a whole stroke of the slider's longest at the tip's fastest at 144 and 240 frames a second", () => {
+    for (const fps of [60, 144, 240]) {
+      const dt = 1 / fps;
+      const stroke = new TrailStroke();
+      const base = new Vector3();
+      const tip = new Vector3();
+      // The tip on a 1.05 m circle at the fastest speed the ring is sized for, for longer than the stroke keeps.
+      const rate = TRAIL_TIP_SPEED_MAX / 1.05;
+      for (let t = 0; t < 0.3; t += dt) {
+        base.set(Math.sin(rate * t) * 0.35, 1, Math.cos(rate * t) * 0.35);
+        tip.set(Math.sin(rate * t) * 1.05, 1, Math.cos(rate * t) * 1.05);
+        stroke.step(dt, base, tip, true, TRAIL_LENGTH_MAX, 0.12);
+      }
+      // Its oldest sample is as old as the stroke's length, less a frame: the ring dropped none it should have kept.
+      const b = stroke.buffer;
+      expect(stroke.time - b.time[b.slot(0)]!, `${fps} fps`).toBeGreaterThan(TRAIL_LENGTH_MAX - dt - 1e-9);
+      expect(b.count, `${fps} fps`).toBeLessThanOrEqual(TRAIL_CAPACITY);
+    }
+    expect(TRAIL_CAPACITY).toBe(179);
   });
 });

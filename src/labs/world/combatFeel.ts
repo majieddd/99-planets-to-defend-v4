@@ -39,8 +39,12 @@ export interface CombatFeel {
   assistTurn: number;
   /** Seconds of the blade's arc the sword trail keeps behind the blade. */
   trailLength: number;
-  /** Seconds the sword trail takes to fade once the active frames end. */
+  /** Seconds the sword trail takes to fade once it stops taking samples, in the early recovery. */
   trailFade: number;
+  /** The share of the blade, from its tip inward, the sword trail's crescent covers where the blade is. */
+  trailWidth: number;
+  /** The sword trail's brightness, a multiple of its emissive keys. */
+  trailBrightness: number;
   /** The camera shake's strength on contact, as a multiple of its authored amplitude (0 turns it off). */
   shake: number;
   /** Metres a light hit knocks a dummy back. */
@@ -63,8 +67,10 @@ export const DEFAULT_COMBAT_FEEL: Readonly<CombatFeel> = Object.freeze({
   lungeLight: 0.35,
   lungeFinisher: 0.55,
   assistTurn: 15,
-  trailLength: 0.09,
+  trailLength: 0.16,
   trailFade: 0.12,
+  trailWidth: 0.85,
+  trailBrightness: 1,
   shake: 1,
   knockbackLight: 0.25,
   knockbackFinisher: 0.6,
@@ -98,6 +104,8 @@ export const COMBAT_FEEL_RANGES: { readonly [K in keyof CombatFeel]: FeelRange }
   assistTurn: { min: 0, max: 45, step: 1, label: 'lunge turn toward a target (degrees)' },
   trailLength: { min: 0.02, max: 0.2, step: 0.01, label: 'sword trail length (s)' },
   trailFade: { min: 0.03, max: 0.3, step: 0.01, label: 'sword trail fade (s)' },
+  trailWidth: { min: 0.2, max: 1, step: 0.05, label: 'sword trail width (share of the blade)' },
+  trailBrightness: { min: 0, max: 2, step: 0.05, label: 'sword trail brightness' },
   shake: { min: 0, max: 2, step: 0.05, label: 'camera shake strength' },
   knockbackLight: { min: 0, max: 1, step: 0.05, label: 'knockback on a light hit (m)' },
   knockbackFinisher: { min: 0, max: 1.5, step: 0.05, label: 'knockback on the finisher (m)' },

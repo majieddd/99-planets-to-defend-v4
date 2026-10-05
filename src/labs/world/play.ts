@@ -66,7 +66,7 @@ import {
   type SwingMotion,
 } from './playMotion';
 import { THREE_QUARTER_TURN_DEG, toTangent, TOWARD_CAMERAS } from './registry';
-import { createSwordTrail, type SwordTrail, type TrailReading } from './swordTrail';
+import { createSwordTrail, trailEmitting, type SwordTrail, type TrailLook, type TrailReading } from './swordTrail';
 
 /** The follow camera's opening distance from his chest, and its pitch above his horizon, in metres and degrees. */
 export const PLAY_CAMERA_DISTANCE = 5.5;
@@ -437,6 +437,8 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
   const lunge = freshLunge();
   const lungeAt = { x: 0, z: 0, yaw: 0 };
   const coreBodies: Obstacle[] = [];
+  // The crescent's look as the feel has it, written into one object each frame.
+  const trailLook: TrailLook = { width: 0, brightness: 1 };
   let lungeCurve: LungeCurve | null = null;
   const lastClocks: PlayClocks = { combo: 0, motion: 0, frame: 0 };
   let motion: MotionState = { x: 0, z: 0, yaw: 0, speed: 0, drive: 0 };
@@ -704,15 +706,19 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       // through the swings and hold with the clips, on the combo's clock; so do the idle's and the run's loops, which is
       // why a hit-stop must hold his movement with it (PlayClocks): the figure holds together only while both hold.
       face?.update(clocks.combo);
-      // The blade where this frame draws it, and the trail along its arc through the active frames, on the combo's
-      // clock, so the trail holds through a hit-stop as the swing does.
+      // The blade where this frame draws it, and the trail's crescent along its arc from the hit's late wind-up through
+      // its early recovery (trailEmitting), on the combo's clock, so the trail holds through a hit-stop as the swing does.
+      // It took samples through the active frames alone, and began where the cut was half done.
       if (hand && bladeMeasure) {
         sampleBlade(hand, bladeMeasure, bladeBase, bladeTip);
         // Sampling brought his root's world matrix up to date too: his shoulders, up the root's own up.
         rootUp.setFromMatrixColumn(root.matrixWorld, 1).normalize();
         bladePivot.setFromMatrixPosition(root.matrixWorld).addScaledVector(rootUp, BLADE_SWING_PIVOT_M);
         bladeDrawn = true;
-        trail?.update(clocks.combo, bladeBase, bladeTip, comboPhase(combo, contracts) === 'active', feel.trailLength, feel.trailFade);
+        const emitting = combo.hit !== null && trailEmitting(contractOf(combo.hit.step, contracts), combo.hit.time);
+        trailLook.width = feel.trailWidth;
+        trailLook.brightness = feel.trailBrightness;
+        trail?.update(clocks.combo, bladeBase, bladeTip, emitting, feel.trailLength, feel.trailFade, trailLook);
       }
 
       // The orbit's centre closes on his chest, and the camera moves with it, so a drag still orbits and the wheel
