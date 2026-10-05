@@ -5,8 +5,12 @@
  * slows and turns him. Like the rest of Play Pip it is a lab prototype that feeds the M1 commander controller (Mechanics,
  * Commander combat), not that controller.
  *
- * Time comes in only as each frame's step, as the simulation's will: a frame whose step is 0 (the lab frozen) changes
- * nothing, and a press on it is dropped.
+ * Time comes in only as each frame's step, as the simulation's time will. A step of 0 moves no time, but a press on it
+ * still counts: it starts a hit at its first moment or is kept for the next, exactly as on a moving frame. That is the
+ * seam phase B's hit-stop needs, which holds the combo's clock at 0 for a few frames on contact while the player keeps
+ * pressing: a press made in the stop must still chain the next hit. The step used to drop every press on a zero step,
+ * so hit-stop would have eaten the very presses that chain a combo. The lab's freeze, which should take no input, drops
+ * its presses in play.ts instead, before they reach here.
  */
 import type { CombatFeel } from './combatFeel';
 import { FREE_MOTION, type SwingMotion } from './playMotion';
@@ -39,14 +43,31 @@ export interface HitContract {
  * clips to them, when the real attack_1 to attack_3 ship. The light hits are quick (0.55 s, striking at 0.20 s) and
  * cancel at 0.30 s, after the strike and its active frames; the finisher keeps the cleave's weight (0.85 s, striking at
  * 0.38 s) and has no cancel. Each hit's active frames run from 50 ms before its strike to 80 ms after it, about four
- * frames at 30 fps, where the cut moves fastest; a light hit's end 20 ms before its cancel point, so the cancel never
- * lands inside them.
+ * frames at 30 fps, where the cut moves fastest; a light hit's active frames end 20 ms before its cancel point, so the
+ * cancel never lands inside them.
  */
 export const COMBO_HITS: readonly HitContract[] = [
   { name: 'attack_1', duration: 0.55, strike: 0.2, cancel: 0.3, activeFrom: 0.15, activeTo: 0.28, planted: false },
   { name: 'attack_2', duration: 0.55, strike: 0.2, cancel: 0.3, activeFrom: 0.15, activeTo: 0.28, planted: false },
   { name: 'attack_3', duration: 0.85, strike: 0.38, cancel: null, activeFrom: 0.33, activeTo: 0.46, planted: true },
 ];
+
+/**
+ * The fades a hit plays with, copied from the combat feel settings on the frame it begins: the seconds it rises over
+ * (the crossfade from a hit still showing, or the first hit's fade in from the idle and run) and the seconds its last
+ * fade out may take. Read live from the settings instead, a slider moved mid-hit rescaled the hit already playing, so
+ * its weight jumped on the frame of the edit (a crossfade dragged from 0.10 to 0.25 s halfway through a crossfade threw
+ * the incoming hit's weight from 0.5 to 0.2 at once); copied, an edit applies from the next hit.
+ */
+export interface HitFades {
+  rise: number;
+  fadeOut: number;
+}
+
+/** The fades a hit takes on from the settings as it begins, over a hit still showing (`crossfaded`) or over the idle. */
+export function hitFades(crossfaded: boolean, feel: CombatFeel): HitFades {
+  return { rise: crossfaded ? feel.crossfade : feel.fadeIn, fadeOut: feel.fadeOut };
+}
 
 /** The hit playing now. */
 export interface HitPlay {
@@ -59,6 +80,8 @@ export interface HitPlay {
   crossfaded: boolean;
   /** The clip time the hit before it had reached when this one began, or null when none was playing. */
   chainedAt: number | null;
+  /** Its fades, fixed when it began (HitFades says why). */
+  fades: HitFades;
 }
 
 /** A hit fading out under the next: its clip time and its weight on the frame the next began. */
@@ -130,32 +153,34 @@ export function bufferOpensAt(contract: HitContract, buffer: number): number {
 }
 
 /**
- * A hit's own weight over the idle and run at a time into it: faded in over the crossfade (from a hit still showing) or
- * the first hit's fade in (from the idle and run), held, and faded out to 0 one frame before its end, `frameStep` (the
- * frame's step, the best guess at the next) short of it, since the hit ends on the frame that reaches its end and a fade
- * that reached 0 only there left that last frame up to a step's share of the fade, which then vanished in one frame
- * (a quarter at SwiftShader's 0.05 s step). A light hit keeps its full weight until its cancel point whatever the fade
- * out, so a buffered hit always takes over from a hit at full weight and no idle shows between two hits of a chain.
+ * A hit's own weight over the idle and run at a time into it: risen over its fades' rise (the crossfade from a hit still
+ * showing, or the first hit's fade in from the idle and run), held, and faded out to 0 one frame before its end,
+ * `frameStep` (the frame's real interval, the best guess at the next) short of it, since the hit ends on the frame that
+ * reaches its end and a fade that reached 0 only there left that last frame up to a step's share of the fade, which
+ * then vanished in one frame (a quarter at SwiftShader's 0.05 s step). The real interval, not the combo's step, because
+ * phase B's hit-stop will hold the combo's step at 0 while frames still draw: read at a step of 0 the fade's end jumped
+ * a frame's share each time a stop began and ended. A light hit keeps its full weight until its cancel point whatever
+ * the fade out, so a buffered hit always takes over from a hit at full weight and no idle shows between two hits.
  */
-export function ownWeight(contract: HitContract, time: number, crossfaded: boolean, feel: CombatFeel, frameStep: number): number {
-  const step = Math.max(0, frameStep);
-  const fadeIn = crossfaded ? feel.crossfade : feel.fadeIn;
-  const rise = fadeIn > 0 ? time / fadeIn : 1;
-  const room = contract.cancel === null ? feel.fadeOut : Math.min(feel.fadeOut, contract.duration - step - contract.cancel);
+export function ownWeight(contract: HitContract, time: number, fades: HitFades, frameStep: number): number {
+  const step = frameStep > 0 ? frameStep : 0;
+  const rise = fades.rise > 0 ? time / fades.rise : 1;
+  const room = contract.cancel === null ? fades.fadeOut : Math.min(fades.fadeOut, contract.duration - step - contract.cancel);
   const fall = (contract.duration - step - time) / Math.max(1e-6, room);
   return Math.min(1, Math.max(0, Math.min(rise, fall)));
 }
 
 /**
- * The weights of the hit playing and of the one fading out under it. The incoming hit rises over the crossfade while the
- * outgoing one falls from the weight it had when the next began, so the two never sum past 1 and, from a hit at full
- * weight, sum to exactly 1 through the crossfade: the idle and run take only what the two leave, and the pose never pops.
+ * The weights of the hit playing and of the one fading out under it. The incoming hit rises over its crossfade while
+ * the outgoing one falls from the weight it had when the next began, so the two never sum past 1 and, from a hit at
+ * full weight, sum to exactly 1 through the crossfade: the idle and run take only what the two leave, and the pose never
+ * pops. `frameStep` is the frame's real interval (ownWeight says why).
  */
-export function comboWeights(state: ComboState, feel: CombatFeel, frameStep: number, hits: readonly HitContract[] = COMBO_HITS): { current: number; outgoing: number } {
+export function comboWeights(state: ComboState, frameStep: number, hits: readonly HitContract[] = COMBO_HITS): { current: number; outgoing: number } {
   const { hit, outgoing } = state;
   if (!hit) return { current: 0, outgoing: 0 };
-  const current = ownWeight(contractOf(hit.step, hits), hit.time, hit.crossfaded, feel, frameStep);
-  const handed = feel.crossfade > 0 ? Math.min(1, hit.time / feel.crossfade) : 1;
+  const current = ownWeight(contractOf(hit.step, hits), hit.time, hit.fades, frameStep);
+  const handed = hit.fades.rise > 0 ? Math.min(1, hit.time / hit.fades.rise) : 1;
   return { current, outgoing: outgoing ? outgoing.weight * (1 - handed) : 0 };
 }
 
@@ -163,12 +188,25 @@ export function comboWeights(state: ComboState, feel: CombatFeel, frameStep: num
  * Begins a hit, `time` seconds in, over the hit now playing (`from`, at its clip time `fromTime`), which fades out under
  * it if it still shows. Only two hits ever show: the crossfade's 0.25 s ceiling (COMBAT_FEEL_RANGES) is under the light
  * hits' 0.30 s cancel point, so a hit has always finished fading in, and dropped the hit under it, by the time the next
- * can begin.
+ * can begin. The new hit takes its fades from the settings now and keeps them (HitFades).
  */
 function startHit(step: ComboStep, time: number, from: HitPlay | null, fromTime: number, feel: CombatFeel, frameStep: number, hits: readonly HitContract[]): { hit: HitPlay; outgoing: FadingHit | null } {
-  const weight = from ? ownWeight(contractOf(from.step, hits), fromTime, from.crossfaded, feel, frameStep) : 0;
+  const weight = from ? ownWeight(contractOf(from.step, hits), fromTime, from.fades, frameStep) : 0;
   const outgoing = from && weight > 0 ? { step: from.step, time: fromTime, weight } : null;
-  return { hit: { step, time, struck: false, crossfaded: outgoing !== null, chainedAt: from ? fromTime : null }, outgoing };
+  const crossfaded = outgoing !== null;
+  return { hit: { step, time, struck: false, crossfaded, chainedAt: from ? fromTime : null, fades: hitFades(crossfaded, feel) }, outgoing };
+}
+
+/**
+ * The longest step the combo takes at once: its earliest strike moment. A hit can begin part way into a frame (a kept
+ * press at a cancel point, or a new chain at the finisher's end), carrying the frame's time past that moment into it;
+ * carried as far as its own strike, it began already past it, the strike check (before the strike, then at or past it)
+ * never saw it cross, and the hit never struck (a light hit carried in by a 0.25 s step began 0.20 s in, on its strike).
+ * The carry is always shorter than the step, so a step no longer than the earliest strike starts every hit short of its
+ * own. The pages clamp their step to 1/20 s, so this only guards a caller that does not.
+ */
+export function longestComboStep(hits: readonly HitContract[] = COMBO_HITS): number {
+  return Math.min(...hits.map((hit) => hit.strike));
 }
 
 /**
@@ -181,15 +219,21 @@ function startHit(step: ComboStep, time: number, from: HitPlay | null, fromTime:
  *   frame rate. A press past the cancel point begins the next hit at once, on this frame.
  * - During the finisher, a press in the buffer before its end is kept and begins a new chain at its end; one before that
  *   is dropped. Three hits at most, then the finisher's recovery.
- * - A press before the buffer opens, a second press while one is kept, and any press on a frozen frame are dropped.
+ * - A press before the buffer opens and a second press while one is kept are dropped.
+ * - A press on a step of 0 counts as on any other: it starts a hit at its first moment or is kept, and the time it
+ *   would have moved waits for a step that moves it (the module's comment says why).
  * - A kept press survives the crossfade: it belongs to the hit that was playing when it was made, and that hit's own
  *   cancel point starts the next one, so nothing a crossfade does can lose it.
- * - Each hit strikes once, on the frame that reaches its strike moment.
+ * - Each hit strikes once, on the frame that reaches its strike moment; a step is cut to longestComboStep, so a hit
+ *   carried into a frame always crosses its strike on a later one.
  * - After a hit ends with no press kept, the chain waits `reset` seconds for the next press and then starts again from
  *   attack_1; after the finisher it starts again from attack_1 at once.
+ *
+ * `dt` is the combo's own step, which phase B's hit-stop holds at 0 (and a NaN step moves no time either, so it cannot
+ * leave a hit whose time never reaches its end); `frameStep` is the frame's real interval, which the weights read
+ * (ownWeight says why), the same as `dt` unless the combo's clock is held or scaled.
  */
-export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel: CombatFeel, hits: readonly HitContract[] = COMBO_HITS): ComboFrame {
-  if (dt <= 0) return { state, struck: null, started: null, press: pressed ? 'dropped' : 'none' };
+export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel: CombatFeel, frameStep: number = dt, hits: readonly HitContract[] = COMBO_HITS): ComboFrame {
   let { hit, outgoing, queued, next, sinceEnd } = state;
   let started: ComboStep | null = null;
   let struck: ComboStep | null = null;
@@ -197,14 +241,14 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
 
   if (pressed) {
     if (!hit) {
-      ({ hit, outgoing } = startHit(next, 0, null, 0, feel, dt, hits));
+      ({ hit, outgoing } = startHit(next, 0, null, 0, feel, frameStep, hits));
       started = hit.step;
       press = 'started';
       queued = false;
     } else {
       const contract = contractOf(hit.step, hits);
       if (contract.cancel !== null && hit.time >= contract.cancel) {
-        ({ hit, outgoing } = startHit(followingStep(hit.step), 0, hit, hit.time, feel, dt, hits));
+        ({ hit, outgoing } = startHit(followingStep(hit.step), 0, hit, hit.time, feel, frameStep, hits));
         started = hit.step;
         press = 'started';
         queued = false;
@@ -217,11 +261,19 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
     }
   }
 
+  // Written as "not above 0" so that a NaN step, which compares false both ways, moves no time.
+  if (!(dt > 0)) {
+    if (press === 'none' || press === 'dropped') return { state, struck: null, started: null, press };
+    if (hit) sinceEnd = 0;
+    return { state: { hit, outgoing, queued, next, sinceEnd }, struck: null, started, press };
+  }
+  const step = Math.min(dt, longestComboStep(hits));
+
   if (hit) {
     const contract = contractOf(hit.step, hits);
     const before = hit.time;
-    const after = before + dt;
-    if (outgoing) outgoing = { ...outgoing, time: Math.min(contractOf(outgoing.step, hits).duration, outgoing.time + dt) };
+    const after = before + step;
+    if (outgoing) outgoing = { ...outgoing, time: Math.min(contractOf(outgoing.step, hits).duration, outgoing.time + step) };
     let hitStruck = hit.struck;
     if (!hitStruck && before < contract.strike && after >= contract.strike) {
       hitStruck = true;
@@ -231,7 +283,7 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
     if (queued && contract.cancel !== null && after >= contract.cancel) {
       // The kept press begins the next hit exactly at the cancel point: it starts the time past the cancel point in,
       // and the hit it takes over from fades from its weight at the cancel point, full by ownWeight's rule.
-      ({ hit, outgoing } = startHit(followingStep(playing.step), after - contract.cancel, { ...playing, time: contract.cancel }, contract.cancel, feel, dt, hits));
+      ({ hit, outgoing } = startHit(followingStep(playing.step), after - contract.cancel, { ...playing, time: contract.cancel }, contract.cancel, feel, frameStep, hits));
       outgoing = outgoing ? { ...outgoing, time: after } : null;
       started = hit.step;
       queued = false;
@@ -239,7 +291,7 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
       if (queued) {
         // Only the finisher can still hold a press at its end, kept in its buffer for a new chain. Its weight has
         // already reached 0 a frame early, so the new chain fades in from the idle and run.
-        ({ hit, outgoing } = startHit(followingStep(playing.step), after - contract.duration, null, 0, feel, dt, hits));
+        ({ hit, outgoing } = startHit(followingStep(playing.step), after - contract.duration, null, 0, feel, frameStep, hits));
         hit = { ...hit, chainedAt: contract.duration };
         started = hit.step;
         queued = false;
@@ -252,10 +304,10 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
     } else {
       hit = playing;
     }
-    if (hit && outgoing && hit.time >= feel.crossfade) outgoing = null;
+    if (hit && outgoing && hit.time >= hit.fades.rise) outgoing = null;
     if (hit) sinceEnd = 0;
   } else {
-    sinceEnd += dt;
+    sinceEnd += step;
   }
   if (!hit && sinceEnd >= feel.reset) next = 1;
   return { state: { hit, outgoing, queued, next, sinceEnd }, struck, started, press };
@@ -263,8 +315,9 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
 
 /**
  * How the hit playing slows and turns him. A light hit keeps `moveScale` of his pace from its start to its cancel point:
- * through the wind-up his drive eases down to it at the stop rate, and through the active frames it is held there
- * (`cap`), so the blow lands at a steady, reduced pace while his legs keep running. Freed at the end of the active
+ * through the wind-up his drive eases down to it at the stop rate, and through the active frames it is held at or under
+ * it (`cap`, stepMotion), so the blow lands at a steady, reduced pace while his legs keep running, and a key let go
+ * there eases him down rather than stopping him dead. Freed at the end of the active
  * frames instead, he surged from 1.28 m/s to 1.6 m/s in the 20 ms before the cancel point and slowed again in the next
  * hit's wind-up, a bump in every chain; held to the cancel point, a chain runs at one even pace. His turn rate falls to
  * `windupTurn` of its cap in the wind-up, so he can still aim the blow, and his facing is locked from the active frames
@@ -291,10 +344,10 @@ export function swingMotion(state: ComboState, feel: CombatFeel, hits: readonly 
  * 60 fps). Held, with its rate at 0 at his zero speed, the run stands still until the hit covers it. A light hit eases
  * his pace down instead, so the run follows his speed and its rate keeps his feet on the ground.
  */
-export function holdsRunWeight(state: ComboState, feel: CombatFeel, hits: readonly HitContract[] = COMBO_HITS): boolean {
+export function holdsRunWeight(state: ComboState, hits: readonly HitContract[] = COMBO_HITS): boolean {
   const { hit } = state;
   if (!hit || !contractOf(hit.step, hits).planted) return false;
-  return hit.time < (hit.crossfaded ? feel.crossfade : feel.fadeIn);
+  return hit.time < hit.fades.rise;
 }
 
 /** One half of the body's weights: the idle, the run, the hit playing and the hit fading out. */
@@ -310,19 +363,28 @@ export interface LayerWeights {
  * touches, so each clip is split into an upper half (the spine and everything on it) and a lower half (the hips and
  * legs), and each half's weights sum to 1 on its own, so no bone falls back toward its bind pose. The upper body plays
  * the hits at their weights, over the idle and run by his speed (`run`, the run's weight against the idle). The lower
- * body plays a planted hit at its full weight, and a light hit at its weight times the idle's share, (1 - run): standing,
- * the whole body swings, the hips' coil and the planted stance included; moving, the legs keep the run cycle under the
- * swinging arms.
+ * body plays a planted hit at its full weight, and a light hit only in the idle's place: the run keeps its share, run
+ * times what the planted hits leave, a light hit takes its weight times the idle's share, (1 - run), and the idle the
+ * rest of that share. Standing, the whole body swings, the hips' coil and the planted stance included; moving, the legs
+ * keep the run cycle under the swinging arms. The run's share used to shrink with the light hit's on the legs too, so
+ * at full hit weight it was run squared: at half the run's weight (0.6 m/s) the legs took 0.25 run, 0.5 hit and 0.25
+ * idle, an idle stance mixed into a jog, where they now take 0.5 run and 0.5 hit. The shares still sum to 1 and move
+ * continuously with the run's weight and the hits'.
  */
 export function bodyWeights(run: number, current: number, currentPlanted: boolean, outgoing: number, outgoingPlanted: boolean): { upper: LayerWeights; lower: LayerWeights } {
   const r = Math.min(1, Math.max(0, run));
-  const attack = Math.min(1, current + outgoing);
-  const lowerCurrent = current * (currentPlanted ? 1 : 1 - r);
-  const lowerOutgoing = outgoing * (outgoingPlanted ? 1 : 1 - r);
-  const lowerAttack = Math.min(1, lowerCurrent + lowerOutgoing);
+  const total = current + outgoing;
+  const attack = Math.min(1, total);
+  // The two hits never sum past 1 (comboWeights); scaled down if rounding takes them past it, so the idle never goes
+  // negative on the legs.
+  const k = total > 1 ? 1 / total : 1;
+  const planted = k * ((currentPlanted ? current : 0) + (outgoingPlanted ? outgoing : 0));
+  const light = k * total - planted;
+  const lowerCurrent = k * current * (currentPlanted ? 1 : 1 - r);
+  const lowerOutgoing = k * outgoing * (outgoingPlanted ? 1 : 1 - r);
   return {
     upper: { idle: (1 - r) * (1 - attack), run: r * (1 - attack), current, outgoing },
-    lower: { idle: (1 - r) * (1 - lowerAttack), run: r * (1 - lowerAttack), current: lowerCurrent, outgoing: lowerOutgoing },
+    lower: { idle: (1 - r) * Math.max(0, 1 - planted - light), run: r * (1 - planted), current: lowerCurrent, outgoing: lowerOutgoing },
   };
 }
 

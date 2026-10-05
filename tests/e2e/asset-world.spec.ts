@@ -557,15 +557,26 @@ test.describe('the Asset World', () => {
       expect(followed, line).toBeGreaterThan(0.1);
       expect(held.play.stride, line).not.toBeNull();
 
+      // The moving attack starts from the spawn, play off and on, rather than wherever the walk above left him, so every
+      // run crosses the same ground.
+      const respawned = await page.evaluate(() => {
+        const p99 = window.__P99__!;
+        (p99['setPlay'] as (on: boolean) => boolean)(false);
+        (p99['setPlay'] as (on: boolean) => boolean)(true);
+        return (p99['play'] as () => PlayReading)();
+      });
+      expect(respawned.on, line).toBe(true);
+      expect(respawned.tangent, line).toEqual(start.play.tangent);
+
       // The moving attack: F with S and D held. attack_1 plays on his upper body while his legs keep the run: his pace
       // eases down through the wind-up and is held at DEFAULT_COMBAT_FEEL.moveScale of the walk through the active
       // frames, with his facing locked there, the hit reaches its strike at full weight, and once it ends he runs on
-      // under the held keys. F is pressed in the call that starts the recorder. S and D head him down and to the right,
-      // away from his row and between it and the nest, with more than 2.5 m to spare however far the walk above carried
-      // him: run on with W, toward the row, he came out of one swing 0.53 m from a member's reach, and S alone heads him
-      // at the nest, 5.5 m ahead of the spawn on the tower row (NEST_SPOT), whose reach he met at the hit's end once the
-      // hit kept him moving (clearance 0.00 m, 2026-10-05). The hit's checks on his speed need open ground, so his
-      // clearance is held above 0 through it.
+      // under the held keys. F is pressed in the call that starts the recorder. S and D head him down and to the right
+      // from the spawn, away from his row and between it and the nest, with more than 2.5 m to spare: run on with W,
+      // toward the row, he came out of one swing 0.53 m from a member's reach, and S alone heads him at the nest, 5.5 m
+      // ahead of the spawn on the tower row (NEST_SPOT), whose reach he met at the hit's end once the hit kept him moving
+      // (clearance 0.00 m, 2026-10-05). The hit's checks on his speed need open ground, so his clearance is held above 0
+      // through it.
       await page.keyboard.down('KeyS');
       await page.keyboard.down('KeyD');
       await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().runWeight > 0.5, undefined, { timeout: 60_000 });
@@ -704,11 +715,13 @@ test.describe('the Asset World', () => {
       const log = collectConsole(page);
       await open(page, '?tier=low&play=pip');
       // The presses go from inside the page, on the frames the recorder reads: one in each light hit as soon as its
-      // buffer is open, which keeps it for the next hit, and one more once the finisher has ended and the reset has run,
-      // which must start attack_1 again. Pressed from the test, each would come a round trip late, and SwiftShader's
-      // slow frames can stretch a round trip past the 0.2 s buffer.
+      // buffer is open, which keeps it for the next hit, one more once the finisher has ended and the reset has run,
+      // which must start attack_1 again, and a last one once that attack_1, a light hit, has ended and the reset has run
+      // past it, which must start attack_1 rather than attack_2. The press after the finisher alone proved nothing about
+      // the reset, since the finisher's next hit is attack_1 at once. Pressed from the test, each would come a round trip
+      // late, and SwiftShader's slow frames can stretch a round trip past the 0.2 s buffer.
       await page.evaluate((resetSeconds) => {
-        const recorder = window as unknown as Recorder & { chainPresses: string[] };
+        const recorder = window as unknown as Recorder & { chainPresses: string[]; lightEnd: PlayReading | null };
         const play = () => (window.__P99__!['play'] as () => PlayReading)();
         const press = (why: string): void => {
           recorder.chainPresses.push(why);
@@ -718,16 +731,19 @@ test.describe('the Asset World', () => {
         recorder.playSamples = [play()];
         recorder.playStop = false;
         recorder.chainPresses = [];
+        recorder.lightEnd = null;
         const pressedIn = new Set<number>();
         let sawFinisher = false;
         let pressedAgain = false;
+        let sawAgain = false;
+        let pressedLight = false;
         const tick = (): void => {
           if (recorder.playStop) return;
           const sample = play();
           recorder.playSamples.push(sample);
           if (sample.comboStep === 3) sawFinisher = true;
           const open = sample.attackTime !== null && sample.bufferOpensAt !== null && sample.attackTime >= sample.bufferOpensAt;
-          if (sample.comboStep > 0 && sample.comboStep < 3 && open && !pressedIn.has(sample.comboStep)) {
+          if (!pressedAgain && sample.comboStep > 0 && sample.comboStep < 3 && open && !pressedIn.has(sample.comboStep)) {
             pressedIn.add(sample.comboStep);
             press(`in attack_${sample.comboStep} at ${sample.attackTime!.toFixed(3)} s`);
           }
@@ -735,15 +751,24 @@ test.describe('the Asset World', () => {
             pressedAgain = true;
             press(`${sample.sinceEnd.toFixed(3)} s after the finisher`);
           }
+          // The attack_1 that press began is a light hit: the first frame after it ends must name attack_2 next, and once
+          // the reset has run the press must still begin attack_1.
+          if (pressedAgain && sample.comboStep === 1) sawAgain = true;
+          if (sawAgain && !recorder.lightEnd && sample.comboStep === 0) recorder.lightEnd = sample;
+          if (recorder.lightEnd && !pressedLight && sample.comboStep === 0 && sample.sinceEnd >= resetSeconds) {
+            pressedLight = true;
+            press(`${sample.sinceEnd.toFixed(3)} s after a light hit`);
+          }
           requestAnimationFrame(tick);
         };
         requestAnimationFrame(tick);
         press('to begin');
       }, DEFAULT_COMBAT_FEEL.reset);
-      // Until the press after the reset has begun a hit and that hit has struck: the fourth strike.
-      await page.waitForFunction(() => ((window as unknown as Recorder).playSamples.at(-1)?.strikes ?? 0) >= 4, undefined, { timeout: 120_000 });
+      // Until the press after the light hit's reset has begun a hit and that hit has struck: the fifth strike.
+      await page.waitForFunction(() => ((window as unknown as Recorder).playSamples.at(-1)?.strikes ?? 0) >= 5, undefined, { timeout: 120_000 });
       const samples = await stopRecording(page);
       const presses = await page.evaluate(() => (window as unknown as { chainPresses: string[] }).chainPresses);
+      const lightEnd = await page.evaluate(() => (window as unknown as { lightEnd: PlayReading | null }).lightEnd);
       // Each hit as the recorder saw it: the samples from the frame its step appeared to the frame before the next.
       type Hit = { step: number; samples: PlayReading[]; before: PlayReading };
       const hits: Hit[] = [];
@@ -752,7 +777,7 @@ test.describe('the Asset World', () => {
         if (sample.comboStep > 0 && (!previous || previous.comboStep !== sample.comboStep)) hits.push({ step: sample.comboStep, samples: [], before: previous ?? sample });
         if (sample.comboStep > 0) hits.at(-1)!.samples.push(sample);
       });
-      const [one, two, three, again] = hits;
+      const [one, two, three, again, light] = hits;
       const struckAt = (hit: Hit | undefined) => hit?.samples.find((sample) => sample.strikesByStep[hit.step - 1]! > hit.before.strikesByStep[hit.step - 1]!);
       const describeHit = (hit: Hit | undefined) =>
         hit
@@ -768,13 +793,15 @@ test.describe('the Asset World', () => {
       const throughChain = fullFrom < 0 ? [] : held.slice(fullFrom, held.findIndex((sample) => sample.comboStep === 3 && (sample.attackTime ?? 0) >= 0.6));
       const chainLine =
         `asset world play chain [${test.info().project.name}]: ${samples.length} frames read; presses ${JSON.stringify(presses)}; hits ${hits.map((hit) => hit.step).join(', ')}; ` +
-        `${[one, two, three, again].map(describeHit).join('; ')}; strikes by hit ${JSON.stringify(samples[chainEnd]?.strikesByStep)} after the chain and ${JSON.stringify(samples.at(-1)!.strikesByStep)} at the end; ` +
+        `${[one, two, three, again, light].map(describeHit).join('; ')}; strikes by hit ${JSON.stringify(samples[chainEnd]?.strikesByStep)} after the chain and ${JSON.stringify(samples.at(-1)!.strikesByStep)} at the end; ` +
         `finisher speed ${Math.max(...finisher.map((sample) => sample.speed)).toFixed(2)} m/s at most, its cancel ${finisher[0]?.cancelAt ?? 'none'}; ` +
         `upper-body hit weight ${throughChain.length ? Math.min(...throughChain.map((sample) => sample.upperAttackWeight)).toFixed(6) : 'unread'} at least over ${throughChain.length} frames from attack_1's full weight to the finisher's fade out; ` +
-        `before the last press ${again ? `${again.before.sinceEnd.toFixed(3)} s since the finisher, next hit ${again.before.nextStep}` : 'none'}; dropped ${samples.at(-1)!.dropped}; console errors ${JSON.stringify(log.errors)}`;
+        `before the press after the finisher ${again ? `${again.before.sinceEnd.toFixed(3)} s since it, next hit ${again.before.nextStep}` : 'none'}; ` +
+        `as the light hit after it ended next hit ${lightEnd ? `${lightEnd.nextStep} at ${lightEnd.sinceEnd.toFixed(3)} s` : 'unread'}, ` +
+        `before the last press ${light ? `${light.before.sinceEnd.toFixed(3)} s since it, next hit ${light.before.nextStep}` : 'none'}; dropped ${samples.at(-1)!.dropped}; console errors ${JSON.stringify(log.errors)}`;
       console.log(chainLine);
-      expect(hits.map((hit) => hit.step), chainLine).toEqual([1, 2, 3, 1]);
-      expect(presses.length, chainLine).toBe(4);
+      expect(hits.map((hit) => hit.step), chainLine).toEqual([1, 2, 3, 1, 1]);
+      expect(presses.length, chainLine).toBe(5);
       expect(one!.samples[0]!.chainedAt, chainLine).toBeNull();
       // attack_2 and attack_3 each start at the hit before's cancel point or after it, from a press kept in its buffer.
       for (const hit of [two!, three!]) {
@@ -782,10 +809,10 @@ test.describe('the Asset World', () => {
         expect(hit.before.queued, chainLine).toBe(true);
         expect(hit.samples[0]!.chainedAt!, chainLine).toBeGreaterThanOrEqual(hit.before.cancelAt! - 1e-9);
       }
-      // Three strikes, one per hit, then the fourth from the new chain's attack_1.
+      // Three strikes, one per hit, then the fourth and fifth from the two attack_1 hits after it.
       expect(samples[chainEnd]!.strikesByStep, chainLine).toEqual([1, 1, 1]);
-      expect(samples.at(-1)!.strikesByStep, chainLine).toEqual([2, 1, 1]);
-      for (const hit of [one, two, three, again]) expect(struckAt(hit), chainLine).toBeDefined();
+      expect(samples.at(-1)!.strikesByStep, chainLine).toEqual([3, 1, 1]);
+      for (const hit of [one, two, three, again, light]) expect(struckAt(hit), chainLine).toBeDefined();
       // The finisher has no cancel, plants him, and plays out to its last frame.
       for (const sample of finisher) {
         expect(sample.cancelAt, chainLine).toBeNull();
@@ -801,6 +828,14 @@ test.describe('the Asset World', () => {
       expect(again!.before.sinceEnd, chainLine).toBeGreaterThanOrEqual(DEFAULT_COMBAT_FEEL.reset);
       expect(again!.before.nextStep, chainLine).toBe(1);
       expect(again!.samples[0]!.chainedAt, chainLine).toBeNull();
+      // After a light hit the chain waits the reset for its next hit, attack_2, and then starts again from attack_1.
+      expect(lightEnd, chainLine).not.toBeNull();
+      expect(lightEnd!.sinceEnd, chainLine).toBeLessThan(DEFAULT_COMBAT_FEEL.reset);
+      expect(lightEnd!.nextStep, chainLine).toBe(2);
+      expect(light!.before.comboStep, chainLine).toBe(0);
+      expect(light!.before.sinceEnd, chainLine).toBeGreaterThanOrEqual(DEFAULT_COMBAT_FEEL.reset);
+      expect(light!.before.nextStep, chainLine).toBe(1);
+      expect(light!.samples[0]!.chainedAt, chainLine).toBeNull();
       expect(log.errors, chainLine).toEqual([]);
     });
 

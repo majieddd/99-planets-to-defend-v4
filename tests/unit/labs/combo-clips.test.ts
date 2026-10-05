@@ -1,11 +1,24 @@
 import { fileURLToPath } from 'node:url';
-import { AnimationClip, AnimationMixer, NumberKeyframeTrack, PropertyBinding, Quaternion, Vector3, type AnimationAction, type Group, type Object3D } from 'three';
+import {
+  AnimationClip,
+  AnimationMixer,
+  InterpolateDiscrete,
+  InterpolateLinear,
+  LinearInterpolant,
+  NumberKeyframeTrack,
+  PropertyBinding,
+  Quaternion,
+  Vector3,
+  type AnimationAction,
+  type Group,
+  type Object3D,
+} from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { BACKHAND_STRIKE_BEFORE_STRIKE, COMBO_HITS, placeholderAnchors } from '../../../src/labs/world/combo';
-import { hitClips, PLACEHOLDER_SAMPLES_PER_SECOND, splitClip, upperBodyBones, warpClip, warpSampleTimes } from '../../../src/labs/world/comboClips';
+import { CLIP_LENGTH_TOLERANCE, hitClips, PLACEHOLDER_SAMPLES_PER_SECOND, splitClip, upperBodyBones, warpClip, warpSampleTimes } from '../../../src/labs/world/comboClips';
 import timings from '../../../src/shared/timings.json';
 import { assetIO } from '../../../tools/assets/optimize.mjs';
 
@@ -146,6 +159,49 @@ describe("Play Pip's combo clips", () => {
     expect(hits[1]!.clip).toBe(real);
     // With neither the hit's own clip nor an attack clip to warp, there is no combo.
     expect(hitClips(animations.filter((clip) => clip.name !== 'attack'), SOURCE_STRIKE)).toBeNull();
+  });
+
+  it("names a GLB hit clip whose length misses its contract by more than a frame, and keeps the miss for the reading", () => {
+    const attack = animations.find((clip) => clip.name === 'attack')!;
+    const warned: string[] = [];
+    const warn = (text: string): void => {
+      warned.push(text);
+    };
+    // Within a frame at 30 fps of its 0.55 s contract, as assets:check allows: kept quietly, its small miss still read.
+    const close = hitClips([...animations, new AnimationClip('attack_2', 0.55 + CLIP_LENGTH_TOLERANCE * 0.9, attack.tracks)], SOURCE_STRIKE, COMBO_HITS, warn)!;
+    expect(warned).toEqual([]);
+    expect(close[1]!.lengthOff).toBeCloseTo(CLIP_LENGTH_TOLERANCE * 0.9, 9);
+    // 0.15 s long: named, with its length and the miss, and the miss kept.
+    const long = hitClips([...animations, new AnimationClip('attack_2', 0.7, attack.tracks)], SOURCE_STRIKE, COMBO_HITS, warn)!;
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('attack_2 is 0.700 s long, +0.150 s off its 0.55 s contract');
+    expect(long[1]!.lengthOff).toBeCloseTo(0.15, 6);
+    expect(long.map((hit) => hit.lengthOff)).toEqual([0, long[1]!.lengthOff, 0]);
+  });
+
+  it("keeps each warped track's interpolation, and reads a glTF cubic spline track at its value's own size", () => {
+    // A stepped track stays stepped: built linear, it slid between the warp's samples where its source held.
+    const stepped = new AnimationClip('steps', 1, [new NumberKeyframeTrack('.steps', [0, 0.5], [0, 1], InterpolateDiscrete)]);
+    const anchors = placeholderAnchors(COMBO_HITS[0]!, 1, 0.4);
+    expect(warpClip(stepped, 'steps_warped', anchors, 0.55).tracks[0]!.getInterpolation()).toBe(InterpolateDiscrete);
+    const linear = new AnimationClip('ramp', 1, [new NumberKeyframeTrack('.ramp', [0, 1], [0, 1])]);
+    expect(warpClip(linear, 'ramp_warped', anchors, 0.55).tracks[0]!.getInterpolation()).toBe(InterpolateLinear);
+    // A CUBICSPLINE track as GLTFLoader builds one: three values per key (in tangent, value, out tangent) and an
+    // interpolant factory marked as glTF's, here sampling the values linearly. Read at getValueSize(), 3, the warp
+    // took two values past each sample and wrote NaN.
+    const cubic = new NumberKeyframeTrack('.cubic', [0, 1], [0, 0, 0, 0, 1, 0]);
+    const factory = function (this: NumberKeyframeTrack, result?: ArrayLike<number>) {
+      return new LinearInterpolant(this.times, Float32Array.from([this.values[1]!, this.values[4]!]), 1, result as never);
+    } as unknown as ((result?: ArrayLike<number>) => LinearInterpolant) & { isInterpolantFactoryMethodGLTFCubicSpline: boolean };
+    factory.isInterpolantFactoryMethodGLTFCubicSpline = true;
+    (cubic as unknown as { createInterpolant: typeof factory }).createInterpolant = factory;
+    expect(cubic.getValueSize()).toBe(3);
+    const warped = warpClip(new AnimationClip('cubic', 1, [cubic]), 'cubic_warped', anchors, 0.55).tracks[0]!;
+    expect(warped.getValueSize()).toBe(1);
+    expect(warped.values.length).toBe(warped.times.length);
+    expect(Array.from(warped.values).every(Number.isFinite)).toBe(true);
+    // The value at the hit's strike is the source's at its 0.4 s strike.
+    expect(warped.values[Array.from(warped.times).findIndex((time) => Math.abs(time - 0.2) < 1e-6)]).toBeCloseTo(0.4, 6);
   });
 
   it('samples a warp at an even rate and at its anchors, and maps each sample through the warp', () => {

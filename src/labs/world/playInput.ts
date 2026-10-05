@@ -90,7 +90,10 @@ export function createPlayInput(pad: HTMLElement, knob: HTMLElement, attackButto
     if (active && !buttonPressed) attackAsked = true;
     buttonPressed = false;
   });
-  window.addEventListener('keyup', (event) => held.delete(event.code));
+  // Read on the way down to the target, before lil-gui's controllers stop every key event that starts inside them: a
+  // key held while the focus moved into the panel was released there, its keyup never reached the window, and he ran
+  // on by himself until the key was pressed and released again.
+  window.addEventListener('keyup', (event) => held.delete(event.code), { capture: true });
   // A key released while the window was in the background never sends its keyup, and he would run on by himself.
   window.addEventListener('blur', () => held.clear());
 

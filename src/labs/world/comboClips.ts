@@ -1,4 +1,4 @@
-import { AnimationClip, PropertyBinding, type Interpolant, type KeyframeTrack, type Object3D } from 'three';
+import { AnimationClip, InterpolateBezier, PropertyBinding, type Interpolant, type InterpolationModes, type KeyframeTrack, type Object3D } from 'three';
 import { COMBO_HITS, placeholderAnchors, warpTime, type HitContract, type WarpAnchors } from './combo';
 
 /**
@@ -24,6 +24,8 @@ export interface HitClip {
   contract: HitContract;
   clip: AnimationClip;
   source: HitSource;
+  /** The clip's length less its contract's, in seconds: 0 for a placeholder, which is warped to the contract exactly. */
+  lengthOff: number;
 }
 
 /** The names of the upper-body mask's nodes: the UPPER_BODY_ROOT bone and everything under it, or null without one. */
@@ -38,12 +40,26 @@ export function upperBodyBones(root: Object3D): Set<string> | null {
   return names;
 }
 
+/** A track's interpolant factory, which three sets on every track but its type declarations leave out. */
+type InterpolantFactory = (() => Interpolant) & { isInterpolantFactoryMethodGLTFCubicSpline?: boolean };
+
 /**
  * A track's own interpolant, the one the mixer samples it with (a quaternion track's slerps). three sets
- * createInterpolant on every track from its interpolation mode at construction, but its type declarations leave it out.
+ * createInterpolant on every track from its interpolation mode at construction, and GLTFLoader replaces it with a cubic
+ * spline interpolant for a CUBICSPLINE sampler.
  */
 function interpolantOf(track: KeyframeTrack): Interpolant {
-  return (track as KeyframeTrack & { createInterpolant(): Interpolant }).createInterpolant();
+  return (track as KeyframeTrack & { createInterpolant: InterpolantFactory }).createInterpolant();
+}
+
+/**
+ * The size of one sampled value of a track. A glTF CUBICSPLINE track stores three values per key (the in tangent, the
+ * value and the out tangent), so its getValueSize() is three times what its interpolant returns: read at that size, a
+ * warp of a cubic track read two values past each sample into NaN. GLTFLoader marks such a track's interpolant factory.
+ */
+function sampleSize(track: KeyframeTrack): number {
+  const factory = (track as KeyframeTrack & { createInterpolant: InterpolantFactory }).createInterpolant;
+  return factory.isInterpolantFactoryMethodGLTFCubicSpline ? track.getValueSize() / 3 : track.getValueSize();
 }
 
 /** The node a track animates, as the mixer binds it. */
@@ -77,38 +93,68 @@ export function warpSampleTimes(anchors: WarpAnchors, duration: number): number[
  * A copy of `source` time-warped through the anchors into a clip of `duration` seconds named `name`: each track is
  * sampled from the source, through its own interpolant (a quaternion track slerps), at the hit times warpSampleTimes
  * gives, each mapped to its source time by warpTime. Sampling rather than moving the source's keys lets a warp run the
- * source backward or start partway into it.
+ * source backward or start partway into it. Each warped track keeps its source's interpolation, so a stepped (discrete)
+ * track still steps between its samples rather than sliding from one to the next, where every warped track used to be
+ * built linear; a glTF cubic spline or Bezier track, whose tangents belong to its own keys and do not survive the
+ * resample, plays its dense samples linearly, which three does for a track whose mode it cannot name.
  */
 export function warpClip(source: AnimationClip, name: string, anchors: WarpAnchors, duration: number): AnimationClip {
   const times = warpSampleTimes(anchors, duration);
   const tracks = source.tracks.map((track) => {
     const interpolant = interpolantOf(track);
-    const size = track.getValueSize();
+    const size = sampleSize(track);
     const values = new Float32Array(times.length * size);
     times.forEach((time, i) => {
       const result = interpolant.evaluate(warpTime(anchors, time));
       for (let k = 0; k < size; k++) values[i * size + k] = result[k] as number;
     });
-    const Track = track.constructor as new (name: string, times: ArrayLike<number>, values: ArrayLike<number>) => KeyframeTrack;
-    return new Track(track.name, Float32Array.from(times), values);
+    const mode = track.getInterpolation();
+    const interpolation = mode === InterpolateBezier ? undefined : mode;
+    const Track = track.constructor as new (name: string, times: ArrayLike<number>, values: ArrayLike<number>, interpolation?: InterpolationModes) => KeyframeTrack;
+    return new Track(track.name, Float32Array.from(times), values, interpolation);
   });
   return new AnimationClip(name, duration, tracks);
 }
+
+/**
+ * How far a GLB's own hit clip may run from its contract's length, in seconds: one frame at 30 fps, assets:check's
+ * tolerance for every timed clip (`FRAME`, tools/assets/check.mjs), so a clip that passes there passes here.
+ */
+export const CLIP_LENGTH_TOLERANCE = 1 / 30;
 
 /**
  * Each hit's clip, in the contracts' order: the GLB's own clip named for the hit (attack_1, attack_2 or attack_3) when it
  * exports one, so the swap to the real clips is an asset change alone, and otherwise a placeholder warped from the
  * `attack` clip (placeholderAnchors) with the source's strike at `sourceStrike`. Null when there is neither for some
  * hit, and the page then has no combo to play.
+ *
+ * The combo's clock runs each hit to its contract, whatever its clip's length, so a GLB clip that misses its contract
+ * by more than CLIP_LENGTH_TOLERANCE is named in the console (`warn`) and its miss kept in `lengthOff` for the reading:
+ * a real attack_N replaced its placeholder unchecked, and a long clip would have been cut off before its end, a short
+ * one held on its last pose, with nothing to say why.
  */
-export function hitClips(animations: readonly AnimationClip[], sourceStrike: number, hits: readonly HitContract[] = COMBO_HITS): HitClip[] | null {
+export function hitClips(
+  animations: readonly AnimationClip[],
+  sourceStrike: number,
+  hits: readonly HitContract[] = COMBO_HITS,
+  warn: (text: string) => void = (text) => console.warn(text),
+): HitClip[] | null {
   const attack = animations.find((clip) => clip.name === 'attack') ?? null;
   const out: HitClip[] = [];
   for (const contract of hits) {
     const own = animations.find((clip) => clip.name === contract.name);
-    if (own) out.push({ contract, clip: own, source: 'clip' });
-    else if (attack) out.push({ contract, clip: warpClip(attack, contract.name, placeholderAnchors(contract, attack.duration, sourceStrike), contract.duration), source: 'placeholder' });
-    else return null;
+    if (own) {
+      const lengthOff = own.duration - contract.duration;
+      if (Math.abs(lengthOff) > CLIP_LENGTH_TOLERANCE) {
+        warn(
+          `Play Pip: the GLB's ${contract.name} is ${own.duration.toFixed(3)} s long, ${lengthOff > 0 ? '+' : ''}${lengthOff.toFixed(3)} s off its ` +
+            `${contract.duration} s contract (combo.ts); the combo plays it to the contract's length, strike and cancel`,
+        );
+      }
+      out.push({ contract, clip: own, source: 'clip', lengthOff });
+    } else if (attack) {
+      out.push({ contract, clip: warpClip(attack, contract.name, placeholderAnchors(contract, attack.duration, sourceStrike), contract.duration), source: 'placeholder', lengthOff: 0 });
+    } else return null;
   }
   return out;
 }

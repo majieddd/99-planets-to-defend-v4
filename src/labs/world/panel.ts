@@ -1,4 +1,4 @@
-import GUI, { type Controller } from 'lil-gui';
+import GUI, { BooleanController, FunctionController, OptionController, type Controller } from 'lil-gui';
 import type { TierName } from '../../render/quality';
 import { NARROW_SCREEN } from '../style/referenceBoard';
 import { COMBAT_FEEL_KEYS, COMBAT_FEEL_RANGES, combatFeelJson, defaultCombatFeel, type CombatFeel } from './combatFeel';
@@ -34,14 +34,116 @@ export interface WorldPanelState {
   play: boolean;
 }
 
-export interface WorldPanelHandlers {
+export interface WorldPanelHandlers extends CombatFeelHandlers {
   onFocus(): void;
   onPlay(on: boolean): void;
   onHeartLevel(level: number): void;
   onTier(tier: TierName): void;
   openStyleLab(): void;
+}
+
+/** What the combat feel folder tells its page. */
+export interface CombatFeelHandlers {
+  /** A setting moved, by a slider or the folder's reset: the page rewrites `?feel=` (feelAddressValue). */
+  onFeel(): void;
   /** Puts a line in the page's banner: the copy button's fallback when the clipboard refuses the settings. */
   notice(text: string): void;
+}
+
+/**
+ * Hands the focus back to the page after a pointer works one of the panel's checkboxes, dropdowns or buttons. lil-gui
+ * stops every key event that starts inside a controller from reaching the window, so that typing in a field fires no
+ * page shortcut, and a clicked checkbox, dropdown or button keeps the focus, so it swallowed Play Pip's keys until a
+ * click elsewhere: after ticking Play Pip or the copy button (S held for 0.7 s after the copy button moved him 0.00 m),
+ * and, before this covered every such control, after the labels or pause checkbox or the quality tier, where with the
+ * dropdown focused the arrow keys changed the tier instead of moving him. A keyboard's activation keeps the focus where
+ * the keyboard put it: blurring there too, as the first fix did, threw a keyboard user's place in the panel away. A
+ * pointer press anywhere in the panel marks the next change as the pointer's and a key marks it as the keyboard's, both
+ * read before lil-gui's own listeners stop the event.
+ */
+export function handFocusBack(gui: GUI): void {
+  let byPointer = false;
+  gui.domElement.addEventListener('pointerdown', () => (byPointer = true), { capture: true });
+  gui.domElement.addEventListener('keydown', () => (byPointer = false), { capture: true });
+  gui.onChange(({ controller }) => {
+    if (!byPointer) return;
+    if (!(controller instanceof BooleanController || controller instanceof OptionController || controller instanceof FunctionController)) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && gui.domElement.contains(active)) active.blur();
+  });
+}
+
+/** The combat feel folder's handle: redraws its sliders and its readout from the settings. */
+export interface CombatFeelFolder {
+  sync(): void;
+}
+
+/**
+ * Play Pip's combat feel folder (combatFeel.ts), shared by the Asset World's panel and the combat arena's. One slider per
+ * setting, in COMBAT_FEEL_RANGES's order, so a setting added there (phase B's hit-stop, lunge, shake and trail) arrives
+ * here with no change to this code; `feel` is the page's one settings object, which the sliders write directly, so a
+ * change takes effect on the next frame. The readout shows the settings as the JSON the copy button copies, so the owner
+ * can also select it by hand.
+ */
+export function addCombatFeelFolder(gui: GUI, feel: CombatFeel, handlers: CombatFeelHandlers, open: boolean): CombatFeelFolder {
+  const feelFolder = gui.addFolder('combat feel');
+  if (!open) feelFolder.close();
+  const readout = { settings: combatFeelJson(feel) };
+  const syncReadout = (): void => {
+    readout.settings = combatFeelJson(feel);
+    readoutControl.updateDisplay();
+  };
+  const changed = (): void => {
+    syncReadout();
+    handlers.onFeel();
+  };
+  for (const key of COMBAT_FEEL_KEYS) {
+    const range = COMBAT_FEEL_RANGES[key];
+    feelFolder.add(feel, key, range.min, range.max, range.step).name(range.label).onChange(changed);
+  }
+  const readoutControl: Controller = feelFolder.add(readout, 'settings').name('settings');
+  // The readout reports the settings; typing into it would change nothing, so it takes a selection but no edits.
+  const readoutInput = readoutControl.domElement.querySelector('input');
+  if (readoutInput) readoutInput.readOnly = true;
+  const copyControl: Controller = feelFolder
+    .add(
+      {
+        copy: () => {
+          const json = combatFeelJson(feel);
+          // The clipboard may be missing (an insecure address) or refuse (no permission, the page not focused), and it
+          // may throw at once or reject later; either way the settings go to the banner, where the owner can copy them.
+          const refused = (error: unknown): void => handlers.notice(`The clipboard refused the combat feel settings (${String(error)}); they are: ${json}`);
+          try {
+            navigator.clipboard.writeText(json).then(() => {
+              copyControl.name(COPIED_FEEL);
+              setTimeout(() => copyControl.name(COPY_FEEL), COPIED_SHOWN_MS);
+            }, refused);
+          } catch (error) {
+            refused(error);
+          }
+        },
+      },
+      'copy',
+    )
+    .name(COPY_FEEL);
+  feelFolder
+    .add(
+      {
+        reset: () => {
+          Object.assign(feel, defaultCombatFeel());
+          for (const controller of feelFolder.controllers) controller.updateDisplay();
+          changed();
+        },
+      },
+      'reset',
+    )
+    .name('Reset combat feel to the defaults');
+  return {
+    sync() {
+      for (const controller of feelFolder.controllers) controller.updateDisplay();
+      syncReadout();
+    },
+  };
 }
 
 /** The view dropdown: the overview and the characters, then the families in the order the zones stand. */
@@ -92,24 +194,13 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
   };
   gui.onOpenClose(syncOpenClass);
   syncOpenClass();
-  // lil-gui stops every key event that starts inside a controller from reaching the window, so that typing in a field
-  // fires no page shortcut. A checkbox or a button keeps the focus after a click, though, so it swallowed Play Pip's
-  // keys: after ticking Play Pip itself, or after the copy button, WASD and F did nothing until a click elsewhere
-  // (measured: S held for 0.7 s after the copy button moved him 0.00 m). The controls Play Pip's keys follow hand the
-  // focus back to the page once they have acted.
-  const releaseFocus = (): void => {
-    const active = document.activeElement;
-    if (active instanceof HTMLElement && gui.domElement.contains(active)) active.blur();
-  };
+  handFocusBack(gui);
 
   // First, so the owner finds it without scrolling the panel on a phone.
   gui
     .add(state, 'play')
     .name('Play Pip (prototype)')
-    .onChange((on: boolean) => {
-      handlers.onPlay(on);
-      releaseFocus();
-    });
+    .onChange((on: boolean) => handlers.onPlay(on));
   const viewControl: Controller = gui
     .add(state, 'view', viewOptions())
     .name('view')
@@ -137,60 +228,9 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
   gui.add(state, 'tier', ['high', 'medium', 'low']).name('quality tier').onChange((tier: TierName) => handlers.onTier(tier));
   gui.add({ open: () => handlers.openStyleLab() }, 'open').name('Open this look in the Style Lab');
 
-  // Play Pip's combat feel: one slider per setting, in COMBAT_FEEL_RANGES's order, so a setting added there (phase B's
-  // hit-stop, lunge, shake and trail) arrives here with no change to this code. The readout shows the settings as the
-  // JSON the copy button copies, so the owner can also select it by hand. On a phone the folder starts closed, as the
-  // panel does, so it does not fill the small screen when the panel opens.
-  const feelFolder = gui.addFolder('combat feel');
-  if (narrow.matches) feelFolder.close();
-  const readout = { settings: combatFeelJson(feel) };
-  const syncReadout = (): void => {
-    readout.settings = combatFeelJson(feel);
-    readoutControl.updateDisplay();
-  };
-  for (const key of COMBAT_FEEL_KEYS) {
-    const range = COMBAT_FEEL_RANGES[key];
-    feelFolder.add(feel, key, range.min, range.max, range.step).name(range.label).onChange(syncReadout);
-  }
-  const readoutControl: Controller = feelFolder.add(readout, 'settings').name('settings');
-  // The readout reports the settings; typing into it would change nothing, so it takes a selection but no edits.
-  const readoutInput = readoutControl.domElement.querySelector('input');
-  if (readoutInput) readoutInput.readOnly = true;
-  const copyControl: Controller = feelFolder
-    .add(
-      {
-        copy: () => {
-          releaseFocus();
-          const json = combatFeelJson(feel);
-          // The clipboard may be missing (an insecure address) or refuse (no permission, the page not focused), and it
-          // may throw at once or reject later; either way the settings go to the banner, where the owner can copy them.
-          const refused = (error: unknown): void => handlers.notice(`The clipboard refused the combat feel settings (${String(error)}); they are: ${json}`);
-          try {
-            navigator.clipboard.writeText(json).then(() => {
-              copyControl.name(COPIED_FEEL);
-              setTimeout(() => copyControl.name(COPY_FEEL), COPIED_SHOWN_MS);
-            }, refused);
-          } catch (error) {
-            refused(error);
-          }
-        },
-      },
-      'copy',
-    )
-    .name(COPY_FEEL);
-  feelFolder
-    .add(
-      {
-        reset: () => {
-          releaseFocus();
-          Object.assign(feel, defaultCombatFeel());
-          for (const controller of feelFolder.controllers) controller.updateDisplay();
-          syncReadout();
-        },
-      },
-      'reset',
-    )
-    .name('Reset combat feel to the defaults');
+  // Play Pip's combat feel. On a phone the folder starts closed, as the panel does, so it does not fill the small
+  // screen when the panel opens.
+  const feelFolder = addCombatFeelFolder(gui, feel, handlers, !narrow.matches);
 
   return {
     refresh() {
@@ -198,7 +238,7 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
       // While he plays, the camera follows him, so the controls that would glide it to a view or turn it wait.
       for (const controller of [viewControl, memberControl, turntableControl]) controller.enable(!state.play);
       for (const controller of gui.controllersRecursive()) controller.updateDisplay();
-      syncReadout();
+      feelFolder.sync();
     },
   };
 }

@@ -111,6 +111,8 @@ export interface PlayReading {
   /** Where each hit's clip came from, attack_1 to attack_3 (null without a combo), and the playing hit's. */
   sources: HitSource[] | null;
   source: HitSource | null;
+  /** Each hit's clip length less its contract's, in seconds, attack_1 to attack_3 (null without a combo; hitClips). */
+  clipLengthOff: number[] | null;
   /** Presses dropped since he came out: before a buffer opened, while one was kept, or on a frozen frame. */
   dropped: number;
   /** The hits' total weight on the upper body and on the lower body, and the run's weight on the legs. */
@@ -122,6 +124,19 @@ export interface PlayReading {
   turnScale: number;
 }
 
+/**
+ * The two clocks a frame of play runs on, in seconds. Kept apart so phase B's hit-stop can hold the combo's clock at 0
+ * for a few frames on contact while his movement, the camera and the input go on: a press in the stop is still taken
+ * and kept (combo.ts), and the combo picks up where it stopped once its clock runs again. Both are the frame's step
+ * today, and both 0 while the lab is frozen.
+ */
+export interface PlayClocks {
+  /** The combo and his clips: the hits' clip times, the mixer and his face. */
+  combo: number;
+  /** His movement and the camera's follow; also the frame's real interval, which the hits' fades read (ownWeight). */
+  motion: number;
+}
+
 export interface PipPlay {
   /** False when the page has no Pip to play (a build without the assets). */
   readonly available: boolean;
@@ -130,9 +145,11 @@ export interface PipPlay {
   exit(controls: OrbitControls): void;
   /**
    * One frame: takes the frame's attack press into the combo (combo.ts says what a press does when), moves him by the
-   * input as the playing hit allows, poses him, and carries the camera with him; dt is 0 while the lab is frozen.
+   * input as the playing hit allows, poses him, and carries the camera with him. A press while the lab is frozen is
+   * dropped here and counted (`dropped`), since a frozen lab takes no input; one on a combo clock of 0 that is not a
+   * freeze, phase B's hit-stop, reaches the combo and is kept.
    */
-  update(dt: number, input: MoveInput, attack: boolean, camera: PerspectiveCamera, controls: OrbitControls): void;
+  update(clocks: PlayClocks, input: MoveInput, attack: boolean, camera: PerspectiveCamera, controls: OrbitControls): void;
   setFrozen(on: boolean): void;
   /** Re-reads every member's reach, for a member whose drawn size changed while he plays: the slider heart. */
   refreshObstacles(members: readonly PlacedMember[]): void;
@@ -228,6 +245,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
   let strikesByStep = [0, 0, 0];
   let lastStrikeStep: ComboStep | null = null;
   let dropped = 0;
+  let frozen = false;
   let runShare = 0;
   let weights = { current: 0, outgoing: 0 };
   let body = bodyWeights(0, 0, false, 0, false);
@@ -291,8 +309,9 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
     get active() {
       return root !== null;
     },
-    enter(camera, controls, members, seed, frozen) {
+    enter(camera, controls, members, seed, frozenNow) {
       if (!template || !idleHalves || !runHalves || !runClip || root) return;
+      frozen = frozenNow;
       stride ??= measureRunLoop(template, runClip);
       if (!stride) console.warn('Play Pip: the run clip gave no stride to read, so it plays at its authored rate');
       root = cloneRig(template);
@@ -368,11 +387,14 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       if (saved) Object.assign(controls, saved);
       saved = null;
     },
-    update(dt, input, attackAsked, camera, controls) {
+    update(clocks, input, attackAsked, camera, controls) {
       if (!root || !mixer || !idle || !run) return;
-      // The press and the frame's step go into the combo first, so this frame's movement already follows the hit it
-      // leaves playing; a press on a frozen frame is dropped there.
-      const frame = stepCombo(combo, attackAsked && hits !== null, dt, feel);
+      const asked = attackAsked && hits !== null;
+      // The press and the combo's step go into the combo first, so this frame's movement already follows the hit it
+      // leaves playing. The combo keeps a press on a step of 0, for phase B's hit-stop, so the lab's freeze, which takes
+      // no input, drops its presses here.
+      if (asked && frozen) dropped += 1;
+      const frame = stepCombo(combo, asked && !frozen, clocks.combo, feel, clocks.motion);
       combo = frame.state;
       if (frame.press === 'dropped') dropped += 1;
       if (frame.struck !== null) {
@@ -391,14 +413,15 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       else forward.set(0, 0, 0);
       turn.setFromUnitVectors(UP, surfaceUp).invert();
       forward.applyQuaternion(turn);
-      motion = stepMotion(motion, moveDirection(input, forward.x, forward.z), input.sprint, dt, obstacles, planetRadius, swing);
+      motion = stepMotion(motion, moveDirection(input, forward.x, forward.z), input.sprint, clocks.motion, obstacles, planetRadius, swing);
       pose();
 
-      // The fades read the frame's step (ownWeight), so a frozen frame, whose step is 0, keeps the weights it had rather
-      // than jumping by a frame's worth of fade.
-      if (dt > 0) weights = comboWeights(combo, feel, dt);
+      // The fades read the frame's real interval (ownWeight), so a frozen frame, whose interval is 0, keeps the weights
+      // it had rather than jumping by a frame's worth of fade; a held combo clock with frames still running (phase B's
+      // hit-stop) reads the same interval as the frames around it, so its weights hold too.
+      if (clocks.motion > 0) weights = comboWeights(combo, clocks.motion);
       // The run keeps its weight while the finisher fades in over his stop (holdsRunWeight says why).
-      runShare = blendRunWeight(runShare, motion.speed, holdsRunWeight(combo, feel));
+      runShare = blendRunWeight(runShare, motion.speed, holdsRunWeight(combo));
       timeScale = stride ? runTimeScale(motion.speed, stride.clipSpeed) : 1;
       const current = combo.hit;
       const outgoing = current ? combo.outgoing : null;
@@ -414,20 +437,21 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
         for (const action of [actions.upper, actions.lower]) if (action) action.time = time;
         weigh(actions, (isCurrent ? body.upper.current : 0) + (isOutgoing ? body.upper.outgoing : 0), (isCurrent ? body.lower.current : 0) + (isOutgoing ? body.lower.outgoing : 0));
       });
-      mixer.update(dt);
+      mixer.update(clocks.combo);
       // After the mixer, which would otherwise write any morph or jaw track a clip carries over the face; the blinks run
-      // through the swings.
-      face?.update(dt);
+      // through the swings, and hold with the clips, so the whole figure holds together under a held combo clock.
+      face?.update(clocks.combo);
 
       // The orbit's centre closes on his chest, and the camera moves with it, so a drag still orbits and the wheel
       // still zooms about him.
       chest(desired);
-      follow.lerp(desired, 1 - Math.exp(-PLAY_FOLLOW_RATE * dt));
+      follow.lerp(desired, 1 - Math.exp(-PLAY_FOLLOW_RATE * clocks.motion));
       shift.subVectors(follow, controls.target);
       controls.target.add(shift);
       camera.position.add(shift);
     },
     setFrozen(on) {
+      frozen = on;
       face?.setFrozen(on);
     },
     refreshObstacles(members) {
@@ -467,6 +491,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
         outgoingWeight: hit && combo.outgoing ? weights.outgoing : 0,
         sources: hits ? hits.map((entry) => entry.source) : null,
         source: hit && hits ? hits[hit.step - 1]!.source : null,
+        clipLengthOff: hits ? hits.map((entry) => entry.lengthOff) : null,
         dropped,
         upperAttackWeight: body.upper.current + body.upper.outgoing,
         lowerAttackWeight: body.lower.current + body.lower.outgoing,

@@ -340,10 +340,38 @@ describe('a swing holding him back (stepMotion)', () => {
     expect(active.speed).toBeCloseTo(0.4 * PLAY_WALK_SPEED, 12);
     const locked = stepMotion(walking, moveDirection(walkKey, 1, 0), false, DT, [], R, { moveScale: 0.4, turnScale: 0, cap: true });
     expect(locked.yaw).toBe(0);
+    // Asked a quarter turn off his locked facing, he keeps the hit's pace on this frame: the cap is the hit's ceiling,
+    // not the pace the key asks, which here is 0 and used to drop him from 3.2 m/s to a standstill in one frame.
+    expect(locked.speed).toBeCloseTo(0.4 * PLAY_WALK_SPEED, 12);
+    // Asked to reverse, likewise.
+    const reversed = stepMotion(walking, moveDirection(walkKey, 0, -1), false, DT, [], R, { moveScale: 0.4, turnScale: 0, cap: true });
+    expect(reversed.yaw).toBe(0);
+    expect(reversed.speed).toBeCloseTo(0.4 * PLAY_WALK_SPEED, 12);
     // Wind-up: half the turn rate, and the drive eased down at the stop rate rather than dropped.
     const windup = stepMotion(walking, moveDirection(walkKey, 1, 0), false, DT, [], R, { moveScale: 0.4, turnScale: 0.5, cap: false });
     expect(windup.yaw).toBeCloseTo(((PLAY_TURN_RATE_DEG * Math.PI) / 180) * 0.5 * DT, 12);
     expect(windup.drive).toBeCloseTo(PLAY_WALK_SPEED - (PLAY_WALK_SPEED / PLAY_SECONDS_TO_STOP) * DT, 12);
+  });
+
+  it("eases him down at the stop rate when he lets go in a light swing's active frames, where his legs and hips popped", () => {
+    const stopRate = PLAY_WALK_SPEED / PLAY_SECONDS_TO_STOP;
+    const active = { moveScale: 0.4, turnScale: 0, cap: true };
+    const capped: MotionState = { x: 0, z: 0, yaw: 0, speed: 0.4 * PLAY_WALK_SPEED, drive: 0.4 * PLAY_WALK_SPEED };
+    // With no key, the next drive is 1.28 m/s less a frame of the stop rate, not 0: the run's weight follows his speed
+    // down over a few frames instead of falling from 1 to 0 at once.
+    const released = stepMotion(capped, null, false, DT, [], R, active);
+    expect(released.drive).toBeCloseTo(0.4 * PLAY_WALK_SPEED - stopRate * DT, 12);
+    expect(released.speed).toBeCloseTo(released.drive, 12);
+    expect(runWeight(released.speed)).toBeGreaterThan(0.6);
+    // It reaches 0 in the 0.048 s the stop rate takes from 1.28 m/s, three frames at 60 fps.
+    let state = released;
+    for (let i = 0; i < 3; i++) state = stepMotion(state, null, false, DT, [], R, active);
+    expect(state.drive).toBe(0);
+    // Sprinting into the hit, the ceiling is the sprint's share, so the active frames keep 2.24 m/s.
+    const sprinting: MotionState = { x: 0, z: 0, yaw: 0, speed: PLAY_SPRINT_SPEED, drive: 0.4 * PLAY_SPRINT_SPEED };
+    expect(stepMotion(sprinting, moveDirection(sprintKey, 0, 1), true, DT, [], R, active).speed).toBeCloseTo(0.4 * PLAY_SPRINT_SPEED, 12);
+    // The finisher's ceiling is 0, so it still stops him dead on its first frame, key or no key.
+    expect(stepMotion(capped, null, false, DT, [], R, { moveScale: 0, turnScale: 0, cap: true }).drive).toBe(0);
   });
 
   it("holds the run's weight only while it is told to, and otherwise follows his speed", () => {

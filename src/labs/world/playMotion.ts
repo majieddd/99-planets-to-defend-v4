@@ -219,7 +219,8 @@ export function clampToArea(x: number, z: number, radius = PLAY_AREA_RADIUS): { 
 
 /**
  * How a swing holds him back on one frame (combo.ts, swingMotion): the share of the pace asked that he keeps, the share
- * of his turn rate, and whether his drive is held at that pace at once rather than eased down to it.
+ * of his turn rate, and whether his drive is held at or under that share of the walk's or the sprint's pace at once
+ * rather than eased down to it.
  */
 export interface SwingMotion {
   moveScale: number;
@@ -238,11 +239,15 @@ export const FREE_MOTION: SwingMotion = Object.freeze({ moveScale: 1, turnScale:
  * carries on. Fed back into the drive, the held-back speed restarted every frame's ease from it, so a slide along a
  * wall settled far below its share of the pace asked along the wall.
  *
- * A swing (`swing`) scales the pace asked and the turn rate, and with `cap` holds his drive at the scaled pace on this
- * very frame rather than easing it down: the finisher's plant (no pace, no turn) stops him dead on its first frame, as
- * it must under boots the clip holds planted, where easing down at the stop rate took 0.12 s from a walk and 0.21 s from
- * a sprint and slid him about 0.19 m and 0.59 m (2026-10-05), and a light hit's active frames land at the reduced pace
- * exactly.
+ * A swing (`swing`) scales the pace asked and the turn rate, and with `cap` holds his drive at or under the swing's
+ * ceiling, its share of the walk's or the sprint's pace, on this very frame rather than easing it down: the finisher's
+ * plant (no pace, no turn) stops him dead on its first frame, as it must under boots the clip holds planted, where
+ * easing down at the stop rate took 0.12 s from a walk and 0.21 s from a sprint and slid him about 0.19 m and 0.59 m
+ * (2026-10-05), and a light hit's active frames land no faster than the reduced pace. The cap is the hit's ceiling, not
+ * the pace the input asks: capped to the input, letting go of W in a light hit's active frames, or asking for a way more
+ * than a quarter turn from the locked facing, dropped his drive from 1.28 m/s to 0 in one frame, the run's weight from 1
+ * to 0 with it, and his legs and hips jumped from the run to the idle. Under the ceiling his drive eases down at the stop
+ * rate as it does out of a swing.
  */
 export function stepMotion(
   state: MotionState,
@@ -256,16 +261,18 @@ export function stepMotion(
   if (dt <= 0) return { ...state };
   let yaw = state.yaw;
   let target = 0;
+  const share = Math.min(1, Math.max(0, swing.moveScale));
+  const ceiling = (sprint ? PLAY_SPRINT_SPEED : PLAY_WALK_SPEED) * share;
   if (direction) {
     const desired = yawOf(direction.x, direction.z);
     yaw = turnToward(yaw, desired, ((PLAY_TURN_RATE_DEG * Math.PI) / 180) * Math.max(0, swing.turnScale) * dt);
     const facing = Math.max(0, Math.cos(wrapAngle(desired - yaw)));
-    target = direction.amount * (sprint ? PLAY_SPRINT_SPEED : PLAY_WALK_SPEED) * facing * Math.min(1, Math.max(0, swing.moveScale));
+    target = direction.amount * ceiling * facing;
   }
   const speedUp = PLAY_WALK_SPEED / PLAY_SECONDS_TO_WALK;
   const slowDown = PLAY_WALK_SPEED / PLAY_SECONDS_TO_STOP;
   const eased = target > state.drive ? Math.min(target, state.drive + speedUp * dt) : Math.max(target, state.drive - slowDown * dt);
-  const drive = swing.cap ? Math.min(eased, target) : eased;
+  const drive = swing.cap ? Math.min(eased, ceiling) : eased;
   const [tx, tz] = groundToTangent(state.x, state.z, Math.sin(yaw) * drive * dt, Math.cos(yaw) * drive * dt, planetRadius);
   const free = resolveObstacles(state.x + tx, state.z + tz, state.x, state.z, obstacles);
   const kept = clampToArea(free.x, free.z);

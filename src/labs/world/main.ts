@@ -17,7 +17,7 @@ import { VERDANT } from '../../render/themes';
 import { FACE_SEED, type FacePose } from '../shared/commanderFace';
 import { flatTexture, loadManifestTexture, loadNamedAsset } from '../shared/labAssets';
 import { NARROW_SCREEN } from '../style/referenceBoard';
-import { combatFeelJson, defaultCombatFeel, parseCombatFeel } from './combatFeel';
+import { combatFeelJson, defaultCombatFeel, feelAddressValue, parseCombatFeel } from './combatFeel';
 import { WorldLabels, type LabelSpec } from './labels';
 import { buildAssetWorld, type AssetWorld } from './layout';
 import { createWorldPanel, type WorldPanelState } from './panel';
@@ -297,6 +297,10 @@ async function start(): Promise<void> {
     else if (state.view !== OVERVIEW) next.set('family', state.view);
     next.delete('play');
     if (state.play) next.set('play', PLAY_PIP);
+    // The combat feel as the sliders have it now, or none at the defaults (feelAddressValue says why).
+    next.delete('feel');
+    const feelValue = feelAddressValue(feel);
+    if (feelValue) next.set('feel', feelValue);
     const query = next.toString();
     history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}`);
   }
@@ -441,6 +445,7 @@ async function start(): Promise<void> {
         url.search = styleLabQuery(encodeDials(dials), state.member);
         location.assign(url.toString());
       },
+      onFeel: syncAddress,
       notice: showBanner,
     },
     feel,
@@ -581,8 +586,9 @@ async function start(): Promise<void> {
         if (t >= 1) transition = null;
       }
       // Pip moves on the frame's own step, which the freeze stops, and not on the animation speed dial, which is the
-      // world's clips'; the camera then follows him before the controls apply a drag or the wheel.
-      if (pipPlay.active) pipPlay.update(dt, input.read(), input.takeAttack(), camera, controls);
+      // world's clips'; the camera then follows him before the controls apply a drag or the wheel. His combo and his
+      // movement share the step here; phase B's hit-stop will hold the combo's alone.
+      if (pipPlay.active) pipPlay.update({ combo: dt, motion: dt }, input.read(), input.takeAttack(), camera, controls);
       // The turntable turns around the open view, and waits while a view glides in or Pip plays.
       controls.autoRotate = state.turntable && transition === null && !pipPlay.active;
       controls.update(frozen ? 0 : Math.min(interval / 1000, 1 / 20));

@@ -60,7 +60,12 @@ export const COMBAT_FEEL_RANGES: { readonly [K in keyof CombatFeel]: FeelRange }
   windupTurn: { min: 0, max: 1, step: 0.05, label: 'turn rate kept in the wind-up' },
 };
 
-export const COMBAT_FEEL_KEYS = Object.keys(DEFAULT_COMBAT_FEEL) as (keyof CombatFeel)[];
+/**
+ * The settings in the folder's order, read from COMBAT_FEEL_RANGES, which sets that order. They were read from the
+ * defaults, whose order only happened to match, so a setting added to the two tables in different places would have
+ * shown in one order in the folder and copied in another.
+ */
+export const COMBAT_FEEL_KEYS = Object.keys(COMBAT_FEEL_RANGES) as (keyof CombatFeel)[];
 
 /** A fresh, writable copy of the defaults. */
 export function defaultCombatFeel(): CombatFeel {
@@ -91,10 +96,20 @@ export function acceptFeel(key: string, value: unknown): key is keyof CombatFeel
   return typeof value === 'number' && Number.isFinite(value) && value >= range.min && value <= range.max;
 }
 
+/** A value put on its slider's nearest step, from the slider's least value, written to the step's decimals. */
+export function snapFeel(key: keyof CombatFeel, value: number): number {
+  const range = COMBAT_FEEL_RANGES[key];
+  const snapped = range.min + Math.round((value - range.min) / range.step) * range.step;
+  return Number(Math.min(range.max, Math.max(range.min, snapped)).toFixed(decimals(range.step)));
+}
+
 /**
  * Reads pasted settings, such as the readout's JSON: every key it names that is a setting, with a number within that
- * setting's range, is taken, and each other key, or a value out of range, is named in `rejected`. Text that is not a
- * JSON object takes nothing and is named as a whole, so a mistyped address opens the defaults rather than a broken feel.
+ * setting's range, is taken, put on its slider's step, and each other key, or a value out of range, is named in
+ * `rejected`. Text that is not a JSON object takes nothing and is named as a whole, so a mistyped address opens the
+ * defaults rather than a broken feel. A value between two steps used to be taken as it was, so the slider, which can
+ * show only its steps, drew one value while the play code read another (`?feel={"crossfade":0.123}` played 0.123 s
+ * under a slider at 0.12).
  */
 export function parseCombatFeel(text: string): { feel: Partial<CombatFeel>; rejected: string[] } {
   let parsed: unknown;
@@ -107,8 +122,19 @@ export function parseCombatFeel(text: string): { feel: Partial<CombatFeel>; reje
   const feel: Partial<CombatFeel> = {};
   const rejected: string[] = [];
   for (const [key, value] of Object.entries(parsed)) {
-    if (acceptFeel(key, value)) feel[key] = value as number;
+    if (acceptFeel(key, value)) feel[key] = snapFeel(key, value as number);
     else rejected.push(key);
   }
   return { feel, rejected };
+}
+
+/**
+ * What the address's `feel` parameter should hold for the settings: their compact JSON, or null when every one stands
+ * at its default, so the address names only a feel that was changed. The pages rewrite the parameter whenever a setting
+ * moves; read once at load and never written, it kept the opening settings after the sliders moved, so a reload or a
+ * copied address brought back the old feel.
+ */
+export function feelAddressValue(feel: CombatFeel): string | null {
+  const json = combatFeelJson(feel);
+  return json === combatFeelJson(DEFAULT_COMBAT_FEEL) ? null : json;
 }
