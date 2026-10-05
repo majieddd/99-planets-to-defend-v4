@@ -22,7 +22,7 @@ export interface PlayInput {
 /**
  * The play prototype's controls: WASD or the arrow keys, Shift to sprint, F or a left click on the canvas to attack, and
  * on a touch screen a thumb pad in the bottom left and an attack button in the bottom right (world.css), whose elements
- * the page shows only while playing. A one-finger drag anywhere else still reaches the canvas and orbits, because a
+ * the page shows only while playing; the button also answers Enter, Space and a screen reader's activation. A one-finger drag anywhere else still reaches the canvas and orbits, because a
  * touch that starts on the pad or the button never reaches OrbitControls, and a left drag on the canvas still orbits,
  * because only a press that stays put and lifts quickly counts as a click (isAttackClick).
  */
@@ -71,8 +71,16 @@ export function createPlayInput(pad: HTMLElement, knob: HTMLElement, attackButto
   canvas.addEventListener('pointercancel', () => (press = null));
   attackButton.addEventListener('pointerdown', (event) => {
     if (active) attackAsked = true;
-    // The press is the button's alone: no focus ring, no text selection and no orbit start underneath.
+    // No focus ring and no text selection from a press. No orbit starts under it either, but for another reason: the
+    // canvas never receives a press that lands on a separate element, so nothing needs stopping here.
     event.preventDefault();
+  });
+  // Enter or Space on the focused button, and a screen reader's activation (TalkBack's double tap), arrive as a click
+  // with no pointer press before it, which the pointerdown above never saw, so the button did nothing for them. Such a
+  // click has a detail of 0; a pointer's tap clicks with a detail of 1 after its pointerdown has already asked, so it
+  // is left alone and one tap stays one swing.
+  attackButton.addEventListener('click', (event) => {
+    if (active && event.detail === 0) attackAsked = true;
   });
   window.addEventListener('keyup', (event) => held.delete(event.code));
   // A key released while the window was in the background never sends its keyup, and he would run on by himself.

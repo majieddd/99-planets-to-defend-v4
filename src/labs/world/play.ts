@@ -1,4 +1,4 @@
-import { AnimationMixer, LoopOnce, LoopRepeat, Quaternion, Vector3, type AnimationAction, type AnimationClip, type Mesh, type Object3D, type PerspectiveCamera, type SkinnedMesh } from 'three';
+import { AnimationMixer, LoopRepeat, Quaternion, Vector3, type AnimationAction, type AnimationClip, type Mesh, type Object3D, type PerspectiveCamera, type SkinnedMesh } from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
 import type { LoadedAsset } from '../../render/assets/loadAsset';
@@ -21,9 +21,9 @@ import {
   runLoopDistance,
   runTimeScale,
   runWeight,
+  startSwing,
   stepAttack,
   stepMotion,
-  triggerAttack,
   type AttackState,
   type FootSample,
   type MotionState,
@@ -223,10 +223,11 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       run.setEffectiveWeight(0);
       run.timeScale = 0;
       // The swing's clip time is set from the attack state every frame rather than advanced by the mixer, so the pose,
-      // the reading and the strike moment all come from the one clock in playMotion.ts.
+      // the reading and the strike moment all come from the one clock in playMotion.ts. With its time scale at 0 the
+      // mixer never moves its time, so its loop mode and clampWhenFinished, which act only on a time the mixer moves,
+      // would do nothing; the LoopOnce and clamp it was given are left off for that reason.
       if (attackClip) {
-        swing = mixer.clipAction(attackClip).setLoop(LoopOnce, 1).play();
-        swing.clampWhenFinished = true;
+        swing = mixer.clipAction(attackClip).play();
         swing.timeScale = 0;
         swing.setEffectiveWeight(0);
       }
@@ -274,8 +275,9 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
     },
     update(dt, input, attackAsked, camera, controls) {
       if (!root || !mixer || !idle || !run) return;
-      // A trigger starts the swing on this frame, so the frame that takes it already stops him; mid-swing it is ignored.
-      if (attackAsked && swing && attackClip) attack = triggerAttack(attack);
+      // A trigger starts the swing on this frame and stops him dead on it (startSwing); mid-swing, or on a frozen frame,
+      // it is dropped.
+      ({ attack, motion } = startSwing(attack, motion, attackAsked && swing !== null && attackClip !== null, dt));
       const swinging = attack.time !== null;
       // The camera's facing, laid on the ground at his feet from the camera's level right (groundForward, which says why
       // the view ray is not used) and read in the frame place() turns him in, so W runs up the screen wherever he stands
@@ -294,7 +296,9 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
         const stepped = stepAttack(attack, dt, attackClip.duration, STRIKE_AT);
         attack = stepped.state;
         if (stepped.struck) strikes += 1;
-        swingWeight = attackWeight(attack.time, attackClip.duration);
+        // The fade reads the frame's step (attackWeight), so a frozen frame, whose step is 0, keeps the weight it had
+        // rather than jumping up by a frame's worth of fade.
+        if (dt > 0) swingWeight = attackWeight(attack.time, attackClip.duration, dt);
         swing.time = attack.time ?? 0;
         swing.setEffectiveWeight(swingWeight);
       }

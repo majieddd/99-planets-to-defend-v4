@@ -127,6 +127,59 @@ async function open(page: Page, query: string): Promise<void> {
   await page.waitForFunction(() => window.__P99__?.ready === true && window.__P99__?.page === 'world', undefined, { timeout: 180_000 });
 }
 
+/** The play recorder's state in the page (startRecording). */
+type Recorder = { playSamples: PlayReading[]; playStop: boolean; playMark: number };
+
+/**
+ * Starts reading play() on every frame in the page, since reads from the test, each a round trip to a page busy under
+ * SwiftShader, once let the whole 0.83 s swing pass between two of them. The first reading is taken at once. With
+ * `pressF`, F's keydown and keyup are dispatched in the same call, right after it, so the swing starts from the state
+ * recorded: pressed from the test once the recorder had started, F came a round trip later, while he ran on under the
+ * held key toward whatever stood ahead.
+ */
+async function startRecording(page: Page, pressF = false): Promise<void> {
+  await page.evaluate((press) => {
+    const recorder = window as unknown as Recorder;
+    recorder.playSamples = [(window.__P99__!['play'] as () => PlayReading)()];
+    recorder.playStop = false;
+    const tick = (): void => {
+      if (recorder.playStop) return;
+      recorder.playSamples.push((window.__P99__!['play'] as () => PlayReading)());
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    if (press) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF', key: 'f' }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyF', key: 'f' }));
+    }
+  }, pressF);
+}
+
+/** Stops the recorder and returns every reading it took. */
+async function stopRecording(page: Page): Promise<PlayReading[]> {
+  return page.evaluate(() => {
+    const recorder = window as unknown as Recorder;
+    recorder.playStop = true;
+    return recorder.playSamples;
+  });
+}
+
+/** Waits until the recorder has seen a swing begin and end, and, with `running`, him run again after it. */
+async function waitForSwing(page: Page, running: boolean): Promise<void> {
+  await page.waitForFunction(
+    (run) => {
+      const samples = (window as unknown as Recorder).playSamples;
+      const first = samples.findIndex((sample) => sample.attacking);
+      return first >= 0 && samples.slice(first).some((sample) => !sample.attacking && (!run || sample.runWeight > 0.5));
+    },
+    running,
+    { timeout: 60_000 },
+  );
+}
+
+/** How many swings a recording saw begin. */
+const swingsIn = (samples: readonly PlayReading[]): number => samples.filter((sample, index) => sample.attacking && !(samples[index - 1]?.attacking ?? false)).length;
+
 /** Where a world point lands on screen under a camera reading, in normalized device coordinates, and whether in front. */
 function project(camera: CameraReading, [x, y, z]: readonly number[]): { x: number; y: number; w: number } {
   const v = camera.view;
@@ -447,41 +500,18 @@ test.describe('the Asset World', () => {
       expect(followed, line).toBeGreaterThan(0.1);
       expect(held.play.stride, line).not.toBeNull();
 
-      // The attack: F with W held. He swings once, stops for the swing and keeps his facing, the clip reaches its
-      // strike, and once it ends he runs on under the held key. A recorder in the page reads play() on every frame, since
-      // reads from the test, each a round trip to a page busy under SwiftShader, once let the whole 0.83 s swing pass
-      // between two of them.
-      type Recorder = { attackSamples: PlayReading[]; attackStop: boolean };
-      await page.keyboard.down('KeyW');
+      // The attack: F with S held. He swings once, stops dead for the swing and keeps his facing, the clip reaches its
+      // strike, and once it ends he runs on under the held key. F is pressed in the call that starts the recorder. S turns
+      // him back toward the cameras, over the open clearing between his row and the kit's arc, more than 10 m clear, so
+      // the run after the swing does not depend on how far the walk above carried him toward his row: run on with W,
+      // toward the row, he came out of one swing 0.53 m from a member's reach, where S heads him away from the row.
+      await page.keyboard.down('KeyS');
       await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().runWeight > 0.5, undefined, { timeout: 60_000 });
-      await page.evaluate(() => {
-        const recorder = window as unknown as Recorder;
-        // The first reading is taken here, before F is pressed, so it is the state the swing starts from.
-        recorder.attackSamples = [(window.__P99__!['play'] as () => PlayReading)()];
-        recorder.attackStop = false;
-        const tick = (): void => {
-          recorder.attackSamples.push((window.__P99__!['play'] as () => PlayReading)());
-          if (!recorder.attackStop) requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
-      });
-      await page.keyboard.press('KeyF');
+      await startRecording(page, true);
       // Until the swing has come and gone and he runs again under the held key.
-      await page.waitForFunction(
-        () => {
-          const samples = (window as unknown as Recorder).attackSamples;
-          const first = samples.findIndex((sample) => sample.attacking);
-          return first >= 0 && samples.slice(first).some((sample) => !sample.attacking && sample.runWeight > 0.5);
-        },
-        undefined,
-        { timeout: 60_000 },
-      );
-      const samples = await page.evaluate(() => {
-        const recorder = window as unknown as Recorder;
-        recorder.attackStop = true;
-        return recorder.attackSamples;
-      });
-      await page.keyboard.up('KeyW');
+      await waitForSwing(page, true);
+      const samples = await stopRecording(page);
+      await page.keyboard.up('KeyS');
       const before = samples[0]!;
       const first = samples.findIndex((sample) => sample.attacking);
       const last = samples.length - 1 - [...samples].reverse().findIndex((sample) => sample.attacking);
@@ -490,25 +520,30 @@ test.describe('the Asset World', () => {
       const atStrike = swing.find((sample) => (sample.attackTime ?? 0) >= (sample.strikeAt ?? Infinity));
       const struck = swing.filter((sample) => (sample.attackTime ?? 0) >= (sample.strikeAt ?? Infinity));
       const after = samples.slice(last + 1).find((sample) => sample.runWeight > 0.5)!;
-      const swings = samples.filter((sample, index) => sample.attacking && !(samples[index - 1]?.attacking ?? false)).length;
+      const swings = swingsIn(samples);
       const turnedDeg = Math.max(...swing.map((sample) => Math.abs(Math.atan2(Math.sin(sample.yaw - swingStart.yaw), Math.cos(sample.yaw - swingStart.yaw))))) * (180 / Math.PI);
       const attackLine =
-        `asset world play attack [${test.info().project.name}]: ${samples.length} frames read; running at ${before.speed.toFixed(2)} m/s (run weight ${before.runWeight.toFixed(2)}), ` +
+        `asset world play attack [${test.info().project.name}]: ${samples.length} frames read; running at ${before.speed.toFixed(2)} m/s (run weight ${before.runWeight.toFixed(2)}, clearance ${before.clearance?.toFixed(2)} m), ` +
         `F started ${swings} swing over ${swing.length} frames, from clip time ${swingStart.attackTime?.toFixed(3)} s of ${swingStart.attackSeconds?.toFixed(3)} s; ` +
         `first frame at or past the strike ${atStrike ? `clip time ${atStrike.attackTime?.toFixed(3)} s (strike ${atStrike.strikeAt} s), weight ${atStrike.attackWeight.toFixed(2)}, speed ${atStrike.speed.toFixed(2)} m/s, strikes ${atStrike.strikes}` : 'none'}; ` +
-        `largest speed from the strike on ${Math.max(...struck.map((sample) => sample.speed)).toFixed(2)} m/s, turned at most ${turnedDeg.toFixed(2)} degrees through the swing; ` +
-        `after the swing attacking ${after.attacking}, weight ${after.attackWeight.toFixed(2)}, run weight ${after.runWeight.toFixed(2)} at ${after.speed.toFixed(2)} m/s, strikes ${after.strikes}`;
+        `largest speed through the swing ${Math.max(...swing.map((sample) => sample.speed)).toFixed(2)} m/s from its first frame, turned at most ${turnedDeg.toFixed(2)} degrees; ` +
+        `last swing frame at clip time ${swing.at(-1)!.attackTime?.toFixed(3)} s, weight ${swing.at(-1)!.attackWeight.toFixed(3)}; ` +
+        `after the swing attacking ${after.attacking}, weight ${after.attackWeight.toFixed(2)}, run weight ${after.runWeight.toFixed(2)} at ${after.speed.toFixed(2)} m/s, ` +
+        `clearance ${after.clearance?.toFixed(2)} m, strikes ${after.strikes}`;
       console.log(attackLine);
       expect(before.attacking, attackLine).toBe(false);
       expect(swings, attackLine).toBe(1);
-      expect(swingStart.attackSeconds, attackLine).toBeCloseTo(0.85, 1);
+      // Within one 30 fps frame of the 0.85 s contract, the tolerance assets:check holds the export to: the exporter
+      // samples whole frames, so the clip is 25 frames, 0.833 s. toBeCloseTo(0.85, 1) let it be 0.05 s off.
+      expect(Math.abs(swingStart.attackSeconds! - 0.85), attackLine).toBeLessThanOrEqual(1 / 30);
       expect(swingStart.strikeAt, attackLine).toBe(0.34);
-      // The clip reaches its strike at full weight, and from the strike to the swing's end he stands still, facing as he
-      // did when the swing began.
+      // The clip reaches its strike at full weight; from the swing's first frame to its end he stands still, stopped dead
+      // on the frame that took F, facing as he did when the swing began.
       expect(atStrike, attackLine).toBeDefined();
       expect(atStrike!.attackWeight, attackLine).toBe(1);
       expect(atStrike!.strikes, attackLine).toBe(1);
-      for (const sample of struck) expect(sample.speed, attackLine).toBe(0);
+      expect(struck.length, attackLine).toBeGreaterThan(0);
+      for (const sample of swing) expect(sample.speed, attackLine).toBe(0);
       expect(turnedDeg, attackLine).toBe(0);
       // One swing for one press, and the run back under the held key once it ended.
       expect(after.attacking, attackLine).toBe(false);
@@ -516,12 +551,83 @@ test.describe('the Asset World', () => {
       expect(after.strikes, attackLine).toBe(1);
       expect(after.runWeight, attackLine).toBeGreaterThan(0.5);
       expect(after.speed, attackLine).toBeGreaterThan(0);
+
+      // A left click on the canvas's centre swings once, as F does; he stands, W being up.
+      const canvas = (await page.locator('#stage canvas').boundingBox())!;
+      const centre = { x: canvas.x + canvas.width / 2, y: canvas.y + canvas.height / 2 };
+      await startRecording(page);
+      await page.mouse.click(centre.x, centre.y);
+      await waitForSwing(page, false);
+      const clicked = await stopRecording(page);
+      const clickLine =
+        `asset world play click [${test.info().project.name}]: ${clicked.length} frames read; a left click at the canvas centre (${centre.x}, ${centre.y}) ` +
+        `started ${swingsIn(clicked)} swing; strikes ${clicked[0]!.strikes} before, ${clicked.at(-1)!.strikes} after`;
+      console.log(clickLine);
+      expect(clicked[0]!.attacking, clickLine).toBe(false);
+      expect(swingsIn(clicked), clickLine).toBe(1);
+      expect(clicked.at(-1)!.strikes - clicked[0]!.strikes, clickLine).toBe(1);
+
+      // A press, a 40 px move and a release are OrbitControls' orbit: the camera turns and no swing starts. A swing the
+      // release started would show on the next frame, so the recorder runs on for five frames past it.
+      const cameraAt = () => page.evaluate(() => (window.__P99__!['camera'] as () => CameraReading)().position);
+      const cameraBefore = await cameraAt();
+      await startRecording(page);
+      await page.mouse.move(centre.x, centre.y);
+      await page.mouse.down();
+      await page.mouse.move(centre.x + 40, centre.y, { steps: 4 });
+      await page.mouse.up();
+      await page.evaluate(() => {
+        const recorder = window as unknown as Recorder;
+        recorder.playMark = recorder.playSamples.length;
+      });
+      await page.waitForFunction(
+        () => {
+          const recorder = window as unknown as Recorder;
+          return recorder.playSamples.length >= recorder.playMark + 5;
+        },
+        undefined,
+        { timeout: 60_000 },
+      );
+      const dragged = await stopRecording(page);
+      const cameraAfter = await cameraAt();
+      const orbited = Math.hypot(...cameraAfter.map((value, i) => value - cameraBefore[i]!));
+      const dragLine =
+        `asset world play drag [${test.info().project.name}]: ${dragged.length} frames read; a 40 px drag from the canvas centre started ${swingsIn(dragged)} swings ` +
+        `(a frame attacking ${dragged.some((sample) => sample.attacking)}), strikes ${dragged[0]!.strikes} before, ${dragged.at(-1)!.strikes} after; ` +
+        `the camera moved ${orbited.toFixed(3)} m`;
+      console.log(dragLine);
+      expect(dragged.some((sample) => sample.attacking), dragLine).toBe(false);
+      expect(dragged.at(-1)!.strikes, dragLine).toBe(dragged[0]!.strikes);
+      expect(orbited, dragLine).toBeGreaterThan(0.05);
       expect(log.errors, line).toEqual([]);
     });
 
     // The owner follows the work on a phone; 375 x 667 is the iPhone SE and iPhone 8 viewport.
     test.describe('on a 375 x 667 phone', () => {
       test.use({ viewport: { width: 375, height: 667 }, hasTouch: true, isMobile: true });
+
+      test('shows the Attack button while Pip plays, and swings once for one tap on it', async ({ page }) => {
+        test.setTimeout(240_000);
+        const log = collectConsole(page);
+        await open(page, '?tier=low&play=pip');
+        // The button shows on a coarse pointer while he plays, so this touch context must show it.
+        const button = page.locator('#attack');
+        await expect(button).toBeVisible();
+        const box = (await button.boundingBox())!;
+        await startRecording(page);
+        await button.tap();
+        await waitForSwing(page, false);
+        const tapped = await stopRecording(page);
+        const line =
+          `asset world play tap [${test.info().project.name}]: Attack button ${Math.round(box.width)}x${Math.round(box.height)} at (${Math.round(box.x)}, ${Math.round(box.y)}); ` +
+          `${tapped.length} frames read; one tap started ${swingsIn(tapped)} swing; strikes ${tapped[0]!.strikes} before, ${tapped.at(-1)!.strikes} after; ` +
+          `${log.errors.length} console errors`;
+        console.log(line);
+        expect(tapped[0]!.attacking, line).toBe(false);
+        expect(swingsIn(tapped), line).toBe(1);
+        expect(tapped.at(-1)!.strikes - tapped[0]!.strikes, line).toBe(1);
+        expect(log.errors, line).toEqual([]);
+      });
 
       test('starts with the panel closed and the canvas clear, opens and closes the panel, and names the families', async ({ page }) => {
         test.setTimeout(240_000);

@@ -42,15 +42,18 @@ export const PLAY_STICK_DEAD_ZONE = 0.15;
 export const PLAY_STICK_SPRINT = 0.9;
 /**
  * The share of the pace asked that he keeps while he swings: none. The cleave plants both boots (the recipe holds them
- * by IK on every frame), so any pace under it would slide them across the ground; he stops instead, shedding a run at
- * the PLAY_SECONDS_TO_STOP rate, and a direction asked mid-swing neither moves nor turns him. The cleave is committed
- * (Pillar 4): he keeps the facing he had when the swing began.
+ * by IK on every frame), so any pace under it would slide them across the ground; he stops dead instead, on the frame
+ * the swing starts (startSwing zeroes his drive), and a direction asked mid-swing neither moves nor turns him. The
+ * cleave is committed (Pillar 4): he keeps the facing he had when the swing began. He used to shed his pace at the
+ * PLAY_SECONDS_TO_STOP rate, but the clip reaches full weight in PLAY_ATTACK_FADE_IN, 0.07 s, and that rate takes
+ * 0.12 s from a walk and 0.21 s from a sprint, so he slid about 0.19 m and 0.59 m with his boots planted.
  */
 export const PLAY_ATTACK_MOVE_SCALE = 0;
 /**
  * Seconds the attack clip takes to take over from the idle and run, and to hand back to them at its end. The fade in
  * is short, a fifth of the 0.34 s wind-up, so the wind-up reads from its first frames; the fade out spans the clip's last
- * stretch, where the recovery returns to the guard, so he settles into the idle or the run without a pop.
+ * stretch, where the recovery returns to the guard, so he settles into the idle or the run without a pop, and ends one
+ * frame before the clip does (attackWeight says why).
  */
 export const PLAY_ATTACK_FADE_IN = 0.07;
 export const PLAY_ATTACK_FADE_OUT = 0.2;
@@ -84,6 +87,18 @@ export function triggerAttack(state: AttackState): AttackState {
 }
 
 /**
+ * One frame's trigger, as the page's loop takes it before it moves him: a swing starts only on a frame that advances
+ * time, and the frame that starts it stops him dead, his drive and speed at 0, so the stop is a committed plant rather
+ * than a slide under planted boots (PLAY_ATTACK_MOVE_SCALE says how far he slid). A trigger on a frozen frame (dt 0) is
+ * dropped like one mid-swing: it used to start a swing that sat at its first frame until the lab unfroze and then
+ * played, a buffered press, which the prototype does not keep.
+ */
+export function startSwing(attack: AttackState, motion: MotionState, asked: boolean, dt: number): { attack: AttackState; motion: MotionState } {
+  if (!asked || dt <= 0 || attack.time !== null) return { attack, motion };
+  return { attack: triggerAttack(attack), motion: { ...motion, drive: 0, speed: 0 } };
+}
+
+/**
  * Advances the swing by dt over a clip of `duration` seconds, and says whether the strike moment, `strikeAt` seconds in,
  * passed in this step: once per swing, on the step that reaches it. The swing ends, and he is free to move, on the step
  * that reaches the clip's end.
@@ -95,11 +110,17 @@ export function stepAttack(state: AttackState, dt: number, duration: number, str
   return { state: next >= duration ? NOT_SWINGING : { time: next }, struck };
 }
 
-/** The attack clip's weight over the idle and run at a time into the swing: faded in, held, faded out by its end. */
-export function attackWeight(time: number | null, duration: number): number {
+/**
+ * The attack clip's weight over the idle and run at a time into the swing: faded in, held, and faded out to 0 one frame
+ * before the clip's end, `step` (the frame's dt, the best guess at the next one) short of it. The swing ends on the
+ * frame that reaches the clip's end, so a fade that reached 0 only there left the last swing frame up to step /
+ * PLAY_ATTACK_FADE_OUT of weight, a quarter at the 0.05 s step SwiftShader runs at, which then vanished in one frame
+ * and popped; ending one frame early, the last swing frame already stands at 0 at a steady frame rate.
+ */
+export function attackWeight(time: number | null, duration: number, step = 0): number {
   if (time === null || duration <= 0) return 0;
   const fadeIn = time / PLAY_ATTACK_FADE_IN;
-  const fadeOut = (duration - time) / PLAY_ATTACK_FADE_OUT;
+  const fadeOut = (duration - Math.max(0, step) - time) / PLAY_ATTACK_FADE_OUT;
   return Math.min(1, Math.max(0, Math.min(fadeIn, fadeOut)));
 }
 
