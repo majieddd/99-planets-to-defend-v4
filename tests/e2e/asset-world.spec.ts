@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
+import { DEFAULT_COMBAT_FEEL } from '../../src/labs/world/combatFeel';
+import { COMBO_HITS } from '../../src/labs/world/combo';
+import { PLAY_WALK_SPEED } from '../../src/labs/world/playMotion';
 import { clipHasReason, coverageGaps, LEAN, MEMBERS, type CoverageManifest } from '../../src/labs/world/registry';
 import { FOCUSED_MEMBER_LABEL_ROOM_PX } from '../../src/labs/world/views';
 import { DEFAULT_DIALS } from '../../src/render/defaults';
@@ -56,13 +59,35 @@ interface PlayReading {
   /** How far he stands outside the nearest member's reach, in metres (negative inside one). */
   clearance: number | null;
   yaw: number;
-  /** His swing: whether he is in one, the attack clip's time and weight, the clip's length, its strike, and strikes so far. */
+  /** The combo's playing hit: whether one plays, its clip time and own weight, its contract, and the strikes so far. */
   attacking: boolean;
   attackTime: number | null;
   attackWeight: number;
   attackSeconds: number | null;
   strikeAt: number | null;
+  cancelAt: number | null;
+  bufferOpensAt: number | null;
   strikes: number;
+  strikesByStep: number[];
+  lastStrikeStep: number | null;
+  /** The combo (labs/world/combo.ts): the playing hit's step (0 for none), its phase, a kept press, the next step. */
+  comboStep: number;
+  phase: 'ready' | 'windup' | 'active' | 'recovery';
+  queued: boolean;
+  nextStep: number;
+  sinceEnd: number;
+  chainedAt: number | null;
+  outgoingStep: number;
+  outgoingWeight: number;
+  sources: ('clip' | 'placeholder')[] | null;
+  source: 'clip' | 'placeholder' | null;
+  dropped: number;
+  /** The hits' total weight on the upper and lower body, and the run's weight on the legs. */
+  upperAttackWeight: number;
+  lowerAttackWeight: number;
+  legsRunWeight: number;
+  moveScale: number;
+  turnScale: number;
 }
 
 const manifest = JSON.parse(readFileSync('public/assets/manifest.json', 'utf8')) as { assets: ManifestEntry[] };
@@ -532,15 +557,17 @@ test.describe('the Asset World', () => {
       expect(followed, line).toBeGreaterThan(0.1);
       expect(held.play.stride, line).not.toBeNull();
 
-      // The attack: F with S held. He swings once, stops dead for the swing and keeps his facing, the clip reaches its
-      // strike, and once it ends he runs on under the held key. F is pressed in the call that starts the recorder. S turns
-      // him back toward the cameras, over the open clearing between his row and the kit's arc, more than 10 m clear, so
-      // the run after the swing does not depend on how far the walk above carried him toward his row: run on with W,
-      // toward the row, he came out of one swing 0.53 m from a member's reach, where S heads him away from the row.
+      // The moving attack: F with S held. attack_1 plays on his upper body while his legs keep the run: his pace eases
+      // down through the wind-up and is held at DEFAULT_COMBAT_FEEL.moveScale of the walk through the active frames,
+      // with his facing locked there, the hit reaches its strike at full weight, and once it ends he runs on under the
+      // held key. F is pressed in the call that starts the recorder. S turns him back toward the cameras, over the open
+      // clearing between his row and the kit's arc, more than 10 m clear, so the run through and after the hit does not
+      // depend on how far the walk above carried him toward his row: run on with W, toward the row, he came out of one
+      // swing 0.53 m from a member's reach, where S heads him away from the row.
       await page.keyboard.down('KeyS');
       await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().runWeight > 0.5, undefined, { timeout: 60_000 });
       await startRecording(page, true);
-      // Until the swing has come and gone and he runs again under the held key.
+      // Until the hit has come and gone and he runs on under the held key.
       await waitForSwing(page, true);
       const samples = await stopRecording(page);
       await page.keyboard.up('KeyS');
@@ -549,41 +576,43 @@ test.describe('the Asset World', () => {
       const last = samples.length - 1 - [...samples].reverse().findIndex((sample) => sample.attacking);
       const swing = samples.slice(first, last + 1);
       const swingStart = swing[0]!;
-      const beforeSwing = samples[first - 1]!;
+      const active = swing.filter((sample) => sample.phase === 'active');
       const atStrike = swing.find((sample) => (sample.attackTime ?? 0) >= (sample.strikeAt ?? Infinity));
-      const struck = swing.filter((sample) => (sample.attackTime ?? 0) >= (sample.strikeAt ?? Infinity));
       const after = samples.slice(last + 1).find((sample) => sample.runWeight > 0.5)!;
       const swings = swingsIn(samples);
-      const turnedDeg = Math.max(...swing.map((sample) => Math.abs(Math.atan2(Math.sin(sample.yaw - swingStart.yaw), Math.cos(sample.yaw - swingStart.yaw))))) * (180 / Math.PI);
+      const paceCap = DEFAULT_COMBAT_FEEL.moveScale * PLAY_WALK_SPEED;
+      const lockedDeg = active.length ? Math.max(...active.map((sample) => Math.abs(Math.atan2(Math.sin(sample.yaw - active[0]!.yaw), Math.cos(sample.yaw - active[0]!.yaw))))) * (180 / Math.PI) : NaN;
+      const span = (values: number[]) => `${Math.min(...values).toFixed(3)} to ${Math.max(...values).toFixed(3)}`;
       const attackLine =
-        `asset world play attack [${test.info().project.name}]: ${samples.length} frames read; running at ${before.speed.toFixed(2)} m/s (run weight ${before.runWeight.toFixed(2)}, clearance ${before.clearance?.toFixed(2)} m), ` +
-        `F started ${swings} swing over ${swing.length} frames, from clip time ${swingStart.attackTime?.toFixed(3)} s of ${swingStart.attackSeconds?.toFixed(3)} s; ` +
-        `run weight ${beforeSwing.runWeight.toFixed(3)} on the frame before the swing and ${swingStart.runWeight.toFixed(3)} on its first, under a swing weight of ${swingStart.attackWeight.toFixed(3)}; ` +
-        `first frame at or past the strike ${atStrike ? `clip time ${atStrike.attackTime?.toFixed(3)} s (strike ${atStrike.strikeAt} s), weight ${atStrike.attackWeight.toFixed(2)}, speed ${atStrike.speed.toFixed(2)} m/s, strikes ${atStrike.strikes}` : 'none'}; ` +
-        `largest speed through the swing ${Math.max(...swing.map((sample) => sample.speed)).toFixed(2)} m/s from its first frame, turned at most ${turnedDeg.toFixed(2)} degrees; ` +
-        `last swing frame at clip time ${swing.at(-1)!.attackTime?.toFixed(3)} s, weight ${swing.at(-1)!.attackWeight.toFixed(3)}; ` +
-        `after the swing attacking ${after.attacking}, weight ${after.attackWeight.toFixed(2)}, run weight ${after.runWeight.toFixed(2)} at ${after.speed.toFixed(2)} m/s, ` +
-        `clearance ${after.clearance?.toFixed(2)} m, strikes ${after.strikes}`;
+        `asset world play moving attack [${test.info().project.name}]: ${samples.length} frames read; running at ${before.speed.toFixed(2)} m/s (run weight ${before.runWeight.toFixed(2)}, clearance ${before.clearance?.toFixed(2)} m), ` +
+        `F started ${swings} hit over ${swing.length} frames, steps ${[...new Set(swing.map((sample) => sample.comboStep))].join(',')} from ${swingStart.source}, ${swingStart.attackSeconds} s with strike ${swingStart.strikeAt} s; ` +
+        `speed through the hit ${span(swing.map((sample) => sample.speed))} m/s, in its ${active.length} active frames ${span(active.map((sample) => sample.speed))} m/s against a cap of ${paceCap.toFixed(2)} (pace kept ${active[0]?.moveScale}); ` +
+        `legs' run weight ${span(swing.map((sample) => sample.legsRunWeight))}, upper-body hit weight up to ${Math.max(...swing.map((sample) => sample.upperAttackWeight)).toFixed(3)}, lower-body hit weight up to ${Math.max(...swing.map((sample) => sample.lowerAttackWeight)).toFixed(3)}; ` +
+        `turned ${lockedDeg.toFixed(2)} degrees through the active frames; ` +
+        `first frame at or past the strike ${atStrike ? `clip time ${atStrike.attackTime?.toFixed(3)} s, weight ${atStrike.attackWeight.toFixed(2)}, speed ${atStrike.speed.toFixed(2)} m/s, strikes ${atStrike.strikes}` : 'none'}; ` +
+        `after the hit attacking ${after.attacking}, run weight ${after.runWeight.toFixed(2)} at ${after.speed.toFixed(2)} m/s, clearance ${after.clearance?.toFixed(2)} m, strikes ${after.strikes}`;
       console.log(attackLine);
       expect(before.attacking, attackLine).toBe(false);
       expect(swings, attackLine).toBe(1);
-      // Within one 30 fps frame of the 0.85 s contract, the tolerance assets:check holds the export to: the exporter
-      // samples whole frames, so the clip is 25 frames, 0.833 s. toBeCloseTo(0.85, 1) let it be 0.05 s off.
-      expect(Math.abs(swingStart.attackSeconds! - 0.85), attackLine).toBeLessThanOrEqual(1 / 30);
-      expect(swingStart.strikeAt, attackLine).toBe(0.34);
-      // The trigger frame keeps the run's weight while the swing fades in over it: following his speed, zeroed on that
-      // frame, it dropped from 1 to 0 at once and showed the idle under the swing's first frame (blendRunWeight). The
-      // page caps a frame's step at 1/20 s, so the trigger frame always lands inside the 0.07 s fade in.
-      expect(swingStart.runWeight, attackLine).toBe(beforeSwing.runWeight);
-      // The clip reaches its strike at full weight; from the swing's first frame to its end he stands still, stopped dead
-      // on the frame that took F, facing as he did when the swing began.
+      for (const sample of swing) expect(sample.comboStep, attackLine).toBe(1);
+      expect(swingStart.attackSeconds, attackLine).toBe(COMBO_HITS[0]!.duration);
+      expect(swingStart.strikeAt, attackLine).toBe(COMBO_HITS[0]!.strike);
+      // The hit reaches its strike at full weight, once.
       expect(atStrike, attackLine).toBeDefined();
       expect(atStrike!.attackWeight, attackLine).toBe(1);
       expect(atStrike!.strikes, attackLine).toBe(1);
-      expect(struck.length, attackLine).toBeGreaterThan(0);
-      for (const sample of swing) expect(sample.speed, attackLine).toBe(0);
-      expect(turnedDeg, attackLine).toBe(0);
-      // One swing for one press, and the run back under the held key once it ended.
+      expect(atStrike!.lastStrikeStep, attackLine).toBe(1);
+      // He keeps moving through the active frames, no faster than the pace kept of the walk, facing where he aimed.
+      expect(active.length, attackLine).toBeGreaterThan(0);
+      for (const sample of active) {
+        expect(sample.speed, attackLine).toBeGreaterThan(0);
+        expect(sample.speed, attackLine).toBeLessThanOrEqual(paceCap + 1e-9);
+      }
+      expect(lockedDeg, attackLine).toBe(0);
+      // His legs keep the run under the swinging arms: the run's weight on the legs never leaves them.
+      for (const sample of swing) expect(sample.legsRunWeight, attackLine).toBeGreaterThan(0);
+      expect(Math.max(...swing.map((sample) => sample.upperAttackWeight)), attackLine).toBe(1);
+      // One hit for one press, and the run on under the held key once it ended.
       expect(after.attacking, attackLine).toBe(false);
       expect(after.attackWeight, attackLine).toBe(0);
       expect(after.strikes, attackLine).toBe(1);
@@ -662,6 +691,111 @@ test.describe('the Asset World', () => {
       // above anything but the orbit and far below what the orbit gives.
       expect(orbited, dragLine).toBeGreaterThan(0.05);
       expect(log.errors, line).toEqual([]);
+    });
+
+    test('chains three presses into attack_1, attack_2 and the finisher, then starts again from attack_1 after the reset', async ({ page }) => {
+      test.setTimeout(240_000);
+      const log = collectConsole(page);
+      await open(page, '?tier=low&play=pip');
+      // The presses go from inside the page, on the frames the recorder reads: one in each light hit as soon as its
+      // buffer is open, which keeps it for the next hit, and one more once the finisher has ended and the reset has run,
+      // which must start attack_1 again. Pressed from the test, each would come a round trip late, and SwiftShader's
+      // slow frames can stretch a round trip past the 0.2 s buffer.
+      await page.evaluate((resetSeconds) => {
+        const recorder = window as unknown as Recorder & { chainPresses: string[] };
+        const play = () => (window.__P99__!['play'] as () => PlayReading)();
+        const press = (why: string): void => {
+          recorder.chainPresses.push(why);
+          window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF', key: 'f' }));
+          window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyF', key: 'f' }));
+        };
+        recorder.playSamples = [play()];
+        recorder.playStop = false;
+        recorder.chainPresses = [];
+        const pressedIn = new Set<number>();
+        let sawFinisher = false;
+        let pressedAgain = false;
+        const tick = (): void => {
+          if (recorder.playStop) return;
+          const sample = play();
+          recorder.playSamples.push(sample);
+          if (sample.comboStep === 3) sawFinisher = true;
+          const open = sample.attackTime !== null && sample.bufferOpensAt !== null && sample.attackTime >= sample.bufferOpensAt;
+          if (sample.comboStep > 0 && sample.comboStep < 3 && open && !pressedIn.has(sample.comboStep)) {
+            pressedIn.add(sample.comboStep);
+            press(`in attack_${sample.comboStep} at ${sample.attackTime!.toFixed(3)} s`);
+          }
+          if (sawFinisher && !pressedAgain && sample.comboStep === 0 && sample.sinceEnd >= resetSeconds) {
+            pressedAgain = true;
+            press(`${sample.sinceEnd.toFixed(3)} s after the finisher`);
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+        press('to begin');
+      }, DEFAULT_COMBAT_FEEL.reset);
+      // Until the press after the reset has begun a hit and that hit has struck: the fourth strike.
+      await page.waitForFunction(() => ((window as unknown as Recorder).playSamples.at(-1)?.strikes ?? 0) >= 4, undefined, { timeout: 120_000 });
+      const samples = await stopRecording(page);
+      const presses = await page.evaluate(() => (window as unknown as { chainPresses: string[] }).chainPresses);
+      // Each hit as the recorder saw it: the samples from the frame its step appeared to the frame before the next.
+      type Hit = { step: number; samples: PlayReading[]; before: PlayReading };
+      const hits: Hit[] = [];
+      samples.forEach((sample, index) => {
+        const previous = samples[index - 1];
+        if (sample.comboStep > 0 && (!previous || previous.comboStep !== sample.comboStep)) hits.push({ step: sample.comboStep, samples: [], before: previous ?? sample });
+        if (sample.comboStep > 0) hits.at(-1)!.samples.push(sample);
+      });
+      const [one, two, three, again] = hits;
+      const struckAt = (hit: Hit | undefined) => hit?.samples.find((sample) => sample.strikesByStep[hit.step - 1]! > hit.before.strikesByStep[hit.step - 1]!);
+      const describeHit = (hit: Hit | undefined) =>
+        hit
+          ? `attack_${hit.step} (${hit.samples[0]!.source}) over ${hit.samples.length} frames from clip time ${hit.samples[0]!.attackTime?.toFixed(3)} s, ` +
+            `chained at ${hit.samples[0]!.chainedAt === null ? 'none' : `${hit.samples[0]!.chainedAt.toFixed(3)} s`} of a cancel at ${hit.before.cancelAt ?? 'none'}, ` +
+            `the press kept ${hit.before.queued}, struck at ${struckAt(hit)?.attackTime?.toFixed(3) ?? 'never'} s, last frame at ${hit.samples.at(-1)!.attackTime?.toFixed(3)} s`
+          : 'missing';
+      const chainEnd = again ? samples.indexOf(again.before) : -1;
+      const finisher = three?.samples ?? [];
+      const held = samples.filter((sample) => sample.comboStep > 0 && sample.upperAttackWeight > 0);
+      const fullFrom = held.findIndex((sample) => sample.upperAttackWeight === 1);
+      // From attack_1's first frame at full weight to the finisher 0.6 s in, before its fade out begins.
+      const throughChain = fullFrom < 0 ? [] : held.slice(fullFrom, held.findIndex((sample) => sample.comboStep === 3 && (sample.attackTime ?? 0) >= 0.6));
+      const chainLine =
+        `asset world play chain [${test.info().project.name}]: ${samples.length} frames read; presses ${JSON.stringify(presses)}; hits ${hits.map((hit) => hit.step).join(', ')}; ` +
+        `${[one, two, three, again].map(describeHit).join('; ')}; strikes by hit ${JSON.stringify(samples[chainEnd]?.strikesByStep)} after the chain and ${JSON.stringify(samples.at(-1)!.strikesByStep)} at the end; ` +
+        `finisher speed ${Math.max(...finisher.map((sample) => sample.speed)).toFixed(2)} m/s at most, its cancel ${finisher[0]?.cancelAt ?? 'none'}; ` +
+        `upper-body hit weight ${throughChain.length ? Math.min(...throughChain.map((sample) => sample.upperAttackWeight)).toFixed(6) : 'unread'} at least over ${throughChain.length} frames from attack_1's full weight to the finisher's fade out; ` +
+        `before the last press ${again ? `${again.before.sinceEnd.toFixed(3)} s since the finisher, next hit ${again.before.nextStep}` : 'none'}; dropped ${samples.at(-1)!.dropped}; console errors ${JSON.stringify(log.errors)}`;
+      console.log(chainLine);
+      expect(hits.map((hit) => hit.step), chainLine).toEqual([1, 2, 3, 1]);
+      expect(presses.length, chainLine).toBe(4);
+      expect(one!.samples[0]!.chainedAt, chainLine).toBeNull();
+      // attack_2 and attack_3 each start at the hit before's cancel point or after it, from a press kept in its buffer.
+      for (const hit of [two!, three!]) {
+        expect(hit.before.comboStep, chainLine).toBe(hit.step - 1);
+        expect(hit.before.queued, chainLine).toBe(true);
+        expect(hit.samples[0]!.chainedAt!, chainLine).toBeGreaterThanOrEqual(hit.before.cancelAt! - 1e-9);
+      }
+      // Three strikes, one per hit, then the fourth from the new chain's attack_1.
+      expect(samples[chainEnd]!.strikesByStep, chainLine).toEqual([1, 1, 1]);
+      expect(samples.at(-1)!.strikesByStep, chainLine).toEqual([2, 1, 1]);
+      for (const hit of [one, two, three, again]) expect(struckAt(hit), chainLine).toBeDefined();
+      // The finisher has no cancel, plants him, and plays out to its last frame.
+      for (const sample of finisher) {
+        expect(sample.cancelAt, chainLine).toBeNull();
+        expect(sample.speed, chainLine).toBe(0);
+      }
+      expect(finisher.at(-1)!.attackTime!, chainLine).toBeGreaterThan(COMBO_HITS[2]!.duration - 0.05 - 1e-9);
+      // From attack_1's full weight to the finisher's fade out, the hits hold the upper body whole: no idle shows between
+      // hits, through both crossfades.
+      expect(throughChain.length, chainLine).toBeGreaterThan(0);
+      for (const sample of throughChain) expect(sample.upperAttackWeight, chainLine).toBeCloseTo(1, 9);
+      // After the finisher and the reset, the next press starts attack_1 afresh.
+      expect(again!.before.comboStep, chainLine).toBe(0);
+      expect(again!.before.sinceEnd, chainLine).toBeGreaterThanOrEqual(DEFAULT_COMBAT_FEEL.reset);
+      expect(again!.before.nextStep, chainLine).toBe(1);
+      expect(again!.samples[0]!.chainedAt, chainLine).toBeNull();
+      expect(log.errors, chainLine).toEqual([]);
     });
 
     // The owner follows the work on a phone; 375 x 667 is the iPhone SE and iPhone 8 viewport.
