@@ -192,7 +192,7 @@ test.describe('the style lab test handle', () => {
       expect(differences[`${key} back`], `${key}: ${line}`).toBe(0);
     }
 
-    // Unfrozen, the scene moves (the Husk walks, Bulwark cycles), which shows the freeze held it. The grain is off at the
+    // Unfrozen, the scene moves (the Husk walks, the commander cycles), which shows the freeze held it. The grain is off at the
     // defaults, so the difference is the scene's motion alone: 0.26 to 0.29 in five runs under SwiftShader at renderer
     // v1's dials and 0.29 and 0.30 in two at the locked ones. The grain's re-seeding at its old default of 0.04 had made
     // the difference about 2.8, which would have hidden a scene that never moved.
@@ -208,73 +208,117 @@ test.describe('the style lab test handle', () => {
   });
 });
 
-// Pip-A, the M1 commander preview, joins the lab by the address or the panel; Bulwark stays the default the locked look
-// was approved on, so a lab opened without the parameter never loads Pip-A at all.
+// Pip (commander) is the lab's default commander, by the owner's decision of 2026-10-04, and loads with the other models
+// so the first frame shows him; Bulwark, the alternate the locked look was approved on, opens by the address or the
+// panel, and a lab opened on him loads nothing of Pip until the panel switches.
 test.describe('the style lab commander toggle', () => {
   test.use({ viewport: { width: 480, height: 270 } });
 
-  test('opens on Pip-A from the address, switches back to Bulwark, and names a commander it does not know', async ({ page }) => {
+  test('opens on Pip by default and by name, on Bulwark by name, switches, names an unknown commander, and falls back without Pip', async ({ page }) => {
     test.setTimeout(240_000);
     const errors: string[] = [];
     const warnings: string[] = [];
-    const requests: string[] = [];
+    let requests: string[] = [];
     page.on('console', (message) => {
       if (message.type() === 'error') errors.push(message.text());
       if (message.type() === 'warning') warnings.push(message.text());
     });
     page.on('pageerror', (error) => errors.push(String(error)));
     page.on('request', (request) => requests.push(request.url()));
-    await page.goto('./labs/style.html?tier=low&freeze=1');
-    await page.waitForFunction(() => window.__P99__?.ready === true, undefined, { timeout: 180_000 });
-    const byDefault = await page.evaluate(() => (window.__P99__!['commander'] as () => string)());
-    const pipRequestedByDefault = requests.some((url) => url.includes('commander_pip'));
-
-    await page.goto('./labs/style.html?tier=low&freeze=1&commander=pip');
-    await page.waitForFunction(() => window.__P99__?.ready === true, undefined, { timeout: 180_000 });
-    const pip = await page.evaluate(async () => {
-      const p99 = window.__P99__!;
-      const call = <T>(name: string, ...args: unknown[]) => (p99[name] as (...a: unknown[]) => T)(...args);
-      const read = {
-        shown: call<string>('commander'),
-        panel:
+    // One reading per load: the commander shown, the panel's choice and its options, whether Pip's model was requested,
+    // whether a face pose holds, the banner and the dials; then, when asked, a switch to another commander.
+    const load = async (query: string, switchTo: string | null = null) => {
+      requests = [];
+      await page.goto(`./labs/style.html?tier=low&freeze=1${query}`);
+      await page.waitForFunction(() => window.__P99__?.ready === true, undefined, { timeout: 180_000 });
+      const pipRequestedAtLoad = requests.some((url) => url.includes('commander_pip'));
+      const read = await page.evaluate(async (next) => {
+        const p99 = window.__P99__!;
+        const call = <T>(name: string, ...args: unknown[]) => (p99[name] as (...a: unknown[]) => T)(...args);
+        const select = () =>
           [...document.querySelectorAll('.lil-gui .lil-controller')]
             .find((controller) => controller.querySelector('.lil-name')?.textContent === 'commander')
-            ?.querySelector('select')?.selectedOptions[0]?.textContent ?? null,
-        face: call<boolean>('setFace', { blink: 1 }),
-        faceReleased: call<boolean>('setFace', null),
-        dials: call<Record<string, unknown>>('dials'),
-        back: '',
-        bulwarkFace: true,
-      };
-      read.back = await call<Promise<string>>('setCommander', 'bulwark');
-      read.bulwarkFace = call<boolean>('setFace', { blink: 1 });
-      return read;
-    });
+            ?.querySelector('select') ?? null;
+        const reading = {
+          shown: call<string>('commander'),
+          panel: select()?.selectedOptions[0]?.textContent ?? null,
+          options: [...(select()?.options ?? [])].map((option) => option.textContent),
+          face: call<boolean>('setFace', { blink: 1 }),
+          faceReleased: call<boolean>('setFace', null),
+          banner: document.getElementById('banner')!.hidden ? '' : document.getElementById('banner')!.textContent,
+          dials: call<Record<string, unknown>>('dials'),
+          switched: null as string | null,
+          switchedPanel: null as string | null,
+          switchedFace: null as boolean | null,
+        };
+        if (next) {
+          reading.switched = await call<Promise<string>>('setCommander', next);
+          reading.switchedPanel = select()?.selectedOptions[0]?.textContent ?? null;
+          reading.switchedFace = call<boolean>('setFace', { blink: 1 });
+          call('setFace', null);
+        }
+        return reading;
+      }, switchTo);
+      return { ...read, pipRequestedAtLoad, pipRequestedAfter: requests.some((url) => url.includes('commander_pip')) };
+    };
 
-    await page.goto('./labs/style.html?tier=low&freeze=1&commander=nope');
-    await page.waitForFunction(() => window.__P99__?.ready === true, undefined, { timeout: 180_000 });
-    const unknown = await page.evaluate(() => ({
-      shown: (window.__P99__!['commander'] as () => string)(),
-      banner: document.getElementById('banner')!.hidden ? '' : document.getElementById('banner')!.textContent,
-    }));
+    const byDefault = await load('', 'bulwark');
+    const bulwark = await load('&commander=bulwark', 'pip');
+    const pip = await load('&commander=pip');
+    const unknown = await load('&commander=nope');
+    // A build whose manifest has no Pip: the default falls back to Bulwark and the banner says why.
+    await page.route('**/assets/manifest.json', async (route) => {
+      const response = await route.fetch();
+      const shipped = (await response.json()) as { assets: { name: string }[] };
+      await route.fulfill({ response, json: { ...shipped, assets: shipped.assets.filter((entry) => entry.name !== 'commander_pip') } });
+    });
+    const missing = await load('');
+    await page.unroute('**/assets/manifest.json');
+    const summary = (name: string, r: typeof byDefault) =>
+      `${name} shows ${r.shown} (panel "${r.panel}" of ${JSON.stringify(r.options)}, Pip requested at load ${r.pipRequestedAtLoad}, ` +
+      `face ${r.face}/${r.faceReleased}, banner "${r.banner}")` +
+      (r.switched ? `, switched to ${r.switched} (panel "${r.switchedPanel}", face ${r.switchedFace}, Pip requested by then ${r.pipRequestedAfter})` : '');
     const line =
-      `style lab commander [${test.info().project.name}]: default ${byDefault} (Pip-A requested: ${pipRequestedByDefault}), ` +
-      `?commander=pip shows ${pip.shown} (panel "${pip.panel}"), face pose ${pip.face}/${pip.faceReleased}, back to ${pip.back} ` +
-      `(face ${pip.bulwarkFace}), ?commander=nope shows ${unknown.shown} with "${unknown.banner}", ${errors.length} console errors`;
+      `style lab commander [${test.info().project.name}]: ${summary('default', byDefault)}; ${summary('?commander=bulwark', bulwark)}; ` +
+      `${summary('?commander=pip', pip)}; ${summary('?commander=nope', unknown)}; ${summary('a manifest without Pip', missing)}; ${errors.length} console errors`;
     console.log(line);
-    expect(byDefault, line).toBe('bulwark');
-    expect(pipRequestedByDefault, line).toBe(false);
-    expect(pip.shown, line).toBe('pip');
-    expect(pip.panel, line).toBe('Pip-A (preview)');
-    expect(pip.face && pip.faceReleased, line).toBe(true);
-    // The address changes the commander, never the look.
-    expect(pip.dials, line).toEqual(DEFAULT_DIALS);
-    expect(pip.back, line).toBe('bulwark');
+    // The default: Pip, loaded with the other models and posed from the first frame, first in the panel; Bulwark one switch away.
+    expect(byDefault.shown, line).toBe('pip');
+    expect(byDefault.panel, line).toBe('Pip (commander)');
+    expect(byDefault.options, line).toEqual(['Pip (commander)', 'Bulwark']);
+    expect(byDefault.pipRequestedAtLoad, line).toBe(true);
+    expect(byDefault.face && byDefault.faceReleased, line).toBe(true);
+    expect(byDefault.banner, line).toBe('');
+    expect(byDefault.switched, line).toBe('bulwark');
+    expect(byDefault.switchedPanel, line).toBe('Bulwark');
     // Bulwark's visored rig has no face to pose.
-    expect(pip.bulwarkFace, line).toBe(false);
-    expect(unknown.shown, line).toBe('bulwark');
-    expect(unknown.banner, line).toBe('No commander named "nope"; showing Bulwark.');
+    expect(byDefault.switchedFace, line).toBe(false);
+    // ?commander=bulwark: the alternate, with nothing of Pip loaded until the panel switches to him.
+    expect(bulwark.shown, line).toBe('bulwark');
+    expect(bulwark.panel, line).toBe('Bulwark');
+    expect(bulwark.pipRequestedAtLoad, line).toBe(false);
+    expect(bulwark.face, line).toBe(false);
+    expect(bulwark.banner, line).toBe('');
+    expect(bulwark.switched, line).toBe('pip');
+    expect(bulwark.switchedPanel, line).toBe('Pip (commander)');
+    expect(bulwark.switchedFace, line).toBe(true);
+    expect(bulwark.pipRequestedAfter, line).toBe(true);
+    // ?commander=pip still names him.
+    expect(pip.shown, line).toBe('pip');
+    expect(pip.panel, line).toBe('Pip (commander)');
+    expect(pip.face && pip.faceReleased, line).toBe(true);
+    // An unknown name falls back to the default and says so once, in the banner and the console.
+    expect(unknown.shown, line).toBe('pip');
+    expect(unknown.banner, line).toBe('No commander named "nope"; showing Pip (commander).');
     expect(warnings.filter((text) => text.includes('Style Lab: No commander named "nope"')), line).toHaveLength(1);
+    expect(warnings.filter((text) => text.includes('Style Lab: No commander named "nope"; showing Pip (commander).')), line).toHaveLength(1);
+    // Without Pip in the manifest the lab shows Bulwark, requests nothing of Pip, and names why.
+    expect(missing.shown, line).toBe('bulwark');
+    expect(missing.panel, line).toBe('Bulwark');
+    expect(missing.pipRequestedAtLoad, line).toBe(false);
+    expect(missing.banner, line).toBe('Pip (commander) is not in the built assets (npm run assets); showing Bulwark.');
+    // The address changes the commander, never the look.
+    for (const reading of [byDefault, bulwark, pip, unknown, missing]) expect(reading.dials, line).toEqual(DEFAULT_DIALS);
     expect(errors, line).toEqual([]);
   });
 });

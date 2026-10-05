@@ -22,14 +22,34 @@ import type { FaceDriver } from '../shared/faceDriver';
 import { NO_EDGE_PIECES } from '../shared/meadow';
 
 export type BulwarkMode = 'cycle' | 'idle' | 'run' | 'attack';
-/** The commander the scene shows at home and on the lap: the locked Bulwark, or Pip-A, the M1 commander preview. */
+/**
+ * The commander the scene shows at home and on the lap: Pip (commander), the M1 commander built as `commander_pip`, or
+ * Bulwark, the visored knight the M0 look was locked on.
+ */
 export type CommanderKind = 'bulwark' | 'pip';
-export const COMMANDERS: readonly CommanderKind[] = ['bulwark', 'pip'];
+/** The commanders in the order the panel offers them, the default first. */
+export const COMMANDERS: readonly CommanderKind[] = ['pip', 'bulwark'];
+/**
+ * The commander a lab shows when nothing names another: Pip, by the owner's decision of 2026-10-04 ("yes make Pip the
+ * default, keep Bulwark as alternate"). Bulwark stays one switch away, and is the fallback when Pip is not built.
+ */
+export const DEFAULT_COMMANDER: CommanderKind = 'pip';
+/**
+ * Each commander's name as the panel, the banner and the console give it. The owner has not named Pip's character yet,
+ * so he is "Pip (commander)" wherever the labs name him as a character.
+ */
+export const COMMANDER_LABELS: Readonly<Record<CommanderKind, string>> = { pip: 'Pip (commander)', bulwark: 'Bulwark' };
 export type PresetName = 'hero' | 'strategic' | 'closeup' | 'horizon';
 export const PRESETS: PresetName[] = ['hero', 'strategic', 'closeup', 'horizon'];
 
 export interface StyleAssets {
   bulwark: LoadedAsset;
+  /**
+   * Pip's model, when it came with the others: loaded up front when he is the commander a lab opens on, so the first
+   * frame shows him with no swap. Absent when the manifest lacks him, with the placeholders, and when a lab opens on
+   * Bulwark, where the first switch to Pip hands the scene his asset instead (setCommander).
+   */
+  pip?: LoadedAsset;
   husk: LoadedAsset;
   bolt: LoadedAsset;
   heart: LoadedAsset;
@@ -41,11 +61,11 @@ export interface StyleScene {
   root: Group;
   update(dt: number): void;
   setHeartStage(level: number): void;
-  /** The commander's mode, whichever commander is shown; the name is Bulwark's, from before Pip-A joined. */
+  /** The commander's mode, whichever commander is shown; the name is Bulwark's, from before Pip joined. */
   setBulwarkMode(mode: BulwarkMode): void;
   /**
-   * Shows a commander in the same home pose and cycle, starting its mode over. Pip-A needs his loaded asset the first
-   * time; the scene keeps it for later switches.
+   * Shows a commander in the same home pose and cycle, starting its mode over. Pip needs his loaded asset the first time
+   * unless the scene was built with it; the scene keeps it for later switches.
    */
   setCommander(kind: CommanderKind, asset?: LoadedAsset): void;
   commander(): CommanderKind;
@@ -189,7 +209,11 @@ function scatter(root: Group, patch: StylePatch, kit: LoadedAsset, ctx: Material
   }
 }
 
-export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: MaterialContext, scatterScale: number): StyleScene {
+/**
+ * Builds the style scene with `initial` as its commander, Pip by default. Pip needs `assets.pip`; without it the scene
+ * opens on Bulwark, and commander() says so, which the lab turns into its banner.
+ */
+export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: MaterialContext, scatterScale: number, initial: CommanderKind = DEFAULT_COMMANDER): StyleScene {
   const root = new Group();
   root.name = 'style_scene';
 
@@ -224,18 +248,22 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
   const husk = new Actor(assets.husk.root, assets.husk);
   root.add(husk.root);
   const bulwark = new Actor(assets.bulwark.root, assets.bulwark);
-  root.add(bulwark.root);
-  // The commander on show, Bulwark until the lab switches. Pip-A's actor and face are built on the first switch to him,
-  // so a lab that never shows him draws exactly what it drew before he existed.
-  let commander = bulwark;
-  let commanderKind: CommanderKind = 'bulwark';
-  let face: FaceDriver | null = null;
-  let pip: { actor: Actor; face: FaceDriver | null } | null = null;
+  // The face is made before the actor's mixer first moves the rig, because it reads the jaw's axis from the bind pose.
+  const makePip = (asset: LoadedAsset) => ({ actor: new Actor(asset.root, asset), face: createCommanderFace(asset.root, FACE_SEED) });
+  // Pip's actor and face, built now when his asset came with the others, or on the first switch to him. A lab opened on
+  // Bulwark builds neither until then, so it draws exactly what the locked look's lab drew before Pip existed.
+  let pip: { actor: Actor; face: FaceDriver | null } | null = assets.pip ? makePip(assets.pip) : null;
+  // The commander on show: the one asked for, or Bulwark when Pip was asked for and is not built.
+  const opening = initial === 'pip' && pip ? pip : { actor: bulwark, face: null };
+  let commander = opening.actor;
+  let commanderKind: CommanderKind = opening.actor === bulwark ? 'bulwark' : 'pip';
+  let face: FaceDriver | null = opening.face;
   let faceFrozen = false;
+  root.add(commander.root);
 
   scatter(root, patch, assets.kit, ctx, scatterScale);
 
-  // The hero and close-up presets frame Bulwark's home pose rather than wherever he is, so a preset gives the same
+  // The hero and close-up presets frame the commander's home pose rather than wherever he is, so a preset gives the same
   // view whenever it is applied: before-and-after dial comparisons and the lab's evidence frames then line up.
   const homePose = new Object3D();
   place(homePose, patch, BULWARK_HOME.x, BULWARK_HOME.z, HOME_YAW);
@@ -270,7 +298,7 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
   }
 
   /**
-   * The commander's cycle: idle, a strike, idle, one lap, idle, every 12 s. Pip-A has no attack clip yet (phase B), so
+   * The commander's cycle: idle, a strike, idle, one lap, idle, every 12 s. Pip has no attack clip yet (phase B), so
    * where Bulwark strikes he holds his idle, in the cycle and in attack mode alike, rather than freezing in whatever clip
    * played before.
    */
@@ -327,7 +355,7 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
     }
   }
 
-  // Every actor takes its place now, so the scene is whole before the first update(): the Husk on its ring, Bulwark
+  // Every actor takes its place now, so the scene is whole before the first update(): the Husk on its ring, the commander
   // at home and every rail on the Husk. A turn of pi snaps the heads onto the Husk (a wrapped turn never exceeds pi)
   // rather than starting them facing outward.
   updateHusk(0);
@@ -351,9 +379,8 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
     setCommander(kind, asset) {
       if (kind === commanderKind) return;
       if (kind === 'pip' && !pip) {
-        if (!asset) throw new Error('the Style Lab needs the loaded commander_pip asset to show Pip-A');
-        // The face is made before the actor's mixer first moves the rig, because it reads the jaw's axis from the bind pose.
-        pip = { actor: new Actor(asset.root, asset), face: createCommanderFace(asset.root, FACE_SEED) };
+        if (!asset) throw new Error('the Style Lab needs the loaded commander_pip asset to show Pip (commander)');
+        pip = makePip(asset);
       }
       const next = kind === 'pip' && pip ? pip : { actor: bulwark, face: null };
       root.remove(commander.root);

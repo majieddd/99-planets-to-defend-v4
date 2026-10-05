@@ -26,6 +26,9 @@ import { placeholderAssets } from '../../../src/labs/style/placeholders';
 import {
   buildStyleScene,
   BULWARK_HOME,
+  COMMANDER_LABELS,
+  COMMANDERS,
+  DEFAULT_COMMANDER,
   HUSK_RADIUS,
   HUSK_SPEED,
   PRESETS,
@@ -760,8 +763,8 @@ describe('buildStyleScene', () => {
 });
 
 /**
- * A Pip-A stand-in: a body carrying the five face morphs, with idle and run clips that hold it at their own x, and no
- * attack clip, as the shipped Pip-A has none yet.
+ * A stand-in for Pip (commander), the `commander_pip` model: a body carrying the five face morphs, with idle and run
+ * clips that hold it at their own x, and no attack clip, as the shipped model has none yet.
  */
 function pipStandIn(x: { idle: number; run: number }): LoadedAsset {
   const geometry = new CapsuleGeometry(0.25, 1.2).translate(0, 0.85, 0);
@@ -782,29 +785,63 @@ function pipStandIn(x: { idle: number; run: number }): LoadedAsset {
 }
 
 describe('the Style Lab commander', () => {
-  it('shows Bulwark by default, and Pip-A in his place, home pose and cycle once switched, and Bulwark again after', () => {
-    const { assets, style } = build();
-    expect(style.commander()).toBe('bulwark');
-    expect(style.setFace({ blink: 1 })).toBe(false);
+  it("opens on Pip by default when his asset comes with the others, at the commander's home, with Bulwark unplaced", () => {
+    expect(DEFAULT_COMMANDER).toBe('pip');
+    // The panel offers the default first, under the name the owner's decision gives him until his character is named.
+    expect(COMMANDERS[0]).toBe('pip');
+    expect(COMMANDER_LABELS).toEqual({ pip: 'Pip (commander)', bulwark: 'Bulwark' });
     const pip = pipStandIn({ idle: 0, run: 2 });
-    style.setCommander('pip', pip);
+    const assets = { ...placeholderAssets(ctx), pip };
+    const style = buildStyleScene(patch, assets, ctx, SCALE);
     expect(style.commander()).toBe('pip');
     expect(pip.root.parent).toBe(style.root);
     expect(assets.bulwark.root.parent).toBeNull();
-    // He stands where Bulwark stood, facing as Bulwark faced, before any update.
+    // He stands at home, facing as the commander faces, before any update, so the hero preset frames him from behind.
     const home = patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position;
     expect(worldPosition(pip.root).distanceTo(home)).toBeLessThan(1e-9);
-    expect(style.setFace({ blink: 1, smile: 1 })).toBe(true);
+    const hero = style.preset('hero');
+    expect(Math.abs(hero.position.clone().sub(home).dot(facing(pip.root)) + 5.5)).toBeLessThan(0.1);
+    // His face is live from the build, with no switch: a pose holds on him.
+    expect(style.setFace({ blink: 1 })).toBe(true);
     style.setFace(null);
+    // Bulwark, the alternate, is one switch away, and Pip comes back without his asset being handed over again.
     style.setCommander('bulwark');
+    expect(style.commander()).toBe('bulwark');
     expect(assets.bulwark.root.parent).toBe(style.root);
     expect(pip.root.parent).toBeNull();
-    // The second switch reuses the actor the first one built, so no asset is needed.
+    expect(worldPosition(assets.bulwark.root).distanceTo(home)).toBeLessThan(1e-9);
     expect(() => style.setCommander('pip')).not.toThrow();
     expect(pip.root.parent).toBe(style.root);
   });
 
-  it('holds Pip-A\'s idle where Bulwark strikes, in the cycle and in attack mode, since he has no attack clip yet', () => {
+  it('opens on Bulwark when asked, leaving Pip unplaced, and when Pip is asked for but not built', () => {
+    const pip = pipStandIn({ idle: 0, run: 2 });
+    const asked = { ...placeholderAssets(ctx), pip };
+    const onBulwark = buildStyleScene(patch, asked, ctx, SCALE, 'bulwark');
+    expect(onBulwark.commander()).toBe('bulwark');
+    expect(asked.bulwark.root.parent).toBe(onBulwark.root);
+    expect(pip.root.parent).toBeNull();
+    // Bulwark's visored rig has no face to pose.
+    expect(onBulwark.setFace({ blink: 1 })).toBe(false);
+    // With no Pip in the assets (a manifest without him, or the placeholders) the default falls back to Bulwark, and
+    // commander() says so, which the lab turns into its banner.
+    const { assets, style } = build();
+    expect(style.commander()).toBe('bulwark');
+    expect(assets.bulwark.root.parent).toBe(style.root);
+    expect(style.setFace({ blink: 1 })).toBe(false);
+    // Pip still arrives by a switch that hands his asset over, as the panel does once it has loaded him.
+    expect(() => style.setCommander('pip')).toThrow(/commander_pip/);
+    const late = pipStandIn({ idle: 0, run: 2 });
+    style.setCommander('pip', late);
+    expect(style.commander()).toBe('pip');
+    expect(late.root.parent).toBe(style.root);
+    expect(assets.bulwark.root.parent).toBeNull();
+    expect(worldPosition(late.root).distanceTo(patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position)).toBeLessThan(1e-9);
+    expect(style.setFace({ blink: 1, smile: 1 })).toBe(true);
+    style.setFace(null);
+  });
+
+  it("holds Pip's idle where Bulwark strikes, in the cycle and in attack mode, since he has no attack clip yet", () => {
     const { style } = build();
     const pip = pipStandIn({ idle: 0.5, run: 2 });
     const body = pip.root.getObjectByName('pip_body')!;
@@ -825,7 +862,7 @@ describe('the Style Lab commander', () => {
     expect(body.position.x).toBeCloseTo(2, 9);
   });
 
-  it('blinks Pip-A after his mixer and holds the blink while frozen', () => {
+  it('blinks Pip after his mixer and holds the blink while frozen', () => {
     const { style } = build();
     const pip = pipStandIn({ idle: 0, run: 0 });
     const body = pip.root.getObjectByName('pip_body') as Mesh;

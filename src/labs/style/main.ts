@@ -20,7 +20,18 @@ import { createDialsPanel, type LabState } from './dials';
 import { placeholderAssets } from './placeholders';
 import { mountReferenceBoard } from './referenceBoard';
 import type { FacePose } from '../shared/commanderFace';
-import { applyPreset, buildStyleScene, COMMANDERS, PRESETS, SCATTER_PLAN, type CommanderKind, type PresetName, type StyleAssets } from './scene';
+import {
+  applyPreset,
+  buildStyleScene,
+  COMMANDER_LABELS,
+  COMMANDERS,
+  DEFAULT_COMMANDER,
+  PRESETS,
+  SCATTER_PLAN,
+  type CommanderKind,
+  type PresetName,
+  type StyleAssets,
+} from './scene';
 
 const BASE = import.meta.env.BASE_URL;
 const theme = VERDANT;
@@ -84,7 +95,12 @@ function fail(error: unknown): void {
   }
 }
 
-async function loadStyleAssets(manifest: Manifest | null, ctx: MaterialContext): Promise<StyleAssets | null> {
+/**
+ * The style scene's models, in one round of loads. Pip comes with them when he is the commander the lab opens on, so
+ * the first frame and its colour audit show him with no swap; Bulwark always comes, as the alternate and the fallback.
+ * A manifest without Pip still gives the scene, without him; a manifest without any other model gives the placeholders.
+ */
+async function loadStyleAssets(manifest: Manifest | null, ctx: MaterialContext, commander: CommanderKind): Promise<StyleAssets | null> {
   if (!manifest) return null;
   const urls = {
     bulwark: assetUrl(BASE, manifest, 'bulwark'),
@@ -95,15 +111,16 @@ async function loadStyleAssets(manifest: Manifest | null, ctx: MaterialContext):
     kit: assetUrl(BASE, manifest, 'verdant_kit'),
   };
   if (Object.values(urls).some((url) => url === null)) return null;
-  const [bulwark, husk, bolt, heart, nest, kit] = await Promise.all([
+  const [bulwark, husk, bolt, heart, nest, kit, pip] = await Promise.all([
     loadNamedAsset('bulwark', urls.bulwark as string, ctx, FAMILY_STANDARD_BLEND.commanders),
     loadNamedAsset('husk', urls.husk as string, ctx, FAMILY_STANDARD_BLEND.xeno),
     loadNamedAsset('bolt_sentinel', urls.bolt as string, ctx, FAMILY_STANDARD_BLEND.towers),
     loadNamedAsset('worldheart', urls.heart as string, ctx, FAMILY_STANDARD_BLEND.heart),
     loadNamedAsset('nest', urls.nest as string, ctx, FAMILY_STANDARD_BLEND.nests),
     loadNamedAsset('verdant_kit', urls.kit as string, ctx, FAMILY_STANDARD_BLEND.env),
+    commander === 'pip' ? loadPip(manifest, ctx) : null,
   ]);
-  return { bulwark, husk, bolt, heart, nest, kit };
+  return pip ? { bulwark, husk, bolt, heart, nest, kit, pip } : { bulwark, husk, bolt, heart, nest, kit };
 }
 
 /** A preset named in the URL must be one the scene knows: applyPreset threw on any other name and stopped the lab. */
@@ -112,16 +129,17 @@ function parsePreset(value: string | null): PresetName {
 }
 
 /**
- * The commander `?commander=` names, `pip` for Pip-A and `bulwark` (or nothing) for the locked Bulwark. Any other name is
- * named in the console and the banner, and the lab shows Bulwark, as the Asset World falls back on a bad address.
+ * The commander `?commander=` names: `pip` (or nothing) for Pip (commander), the default since the owner's decision of
+ * 2026-10-04, and `bulwark` for the visored knight the look was locked on. Any other name is named in the console and
+ * the banner, and the lab shows the default, as the Asset World falls back on a bad address.
  */
 function parseCommander(value: string | null): { kind: CommanderKind; problem: string | null } {
-  if (!value) return { kind: 'bulwark', problem: null };
+  if (!value) return { kind: DEFAULT_COMMANDER, problem: null };
   const kind = COMMANDERS.find((name) => name === value);
-  return kind ? { kind, problem: null } : { kind: 'bulwark', problem: `no commander named "${value}"; showing Bulwark` };
+  return kind ? { kind, problem: null } : { kind: DEFAULT_COMMANDER, problem: `no commander named "${value}"; showing ${COMMANDER_LABELS[DEFAULT_COMMANDER]}` };
 }
 
-/** Pip-A's model, the M1 commander preview, loaded with the commanders' standard blend, or null when the manifest lacks it. */
+/** Pip's model (`commander_pip`), loaded with the commanders' standard blend, or null when the manifest lacks it. */
 async function loadPip(manifest: Manifest | null, ctx: MaterialContext): Promise<LoadedAsset | null> {
   const url = manifest ? assetUrl(BASE, manifest, 'commander_pip') : null;
   return url ? loadNamedAsset('commander_pip', url, ctx, FAMILY_STANDARD_BLEND.commanders) : null;
@@ -225,34 +243,39 @@ async function start(): Promise<void> {
   const patch = createStylePatch(theme, paint, tier.terrainSegments);
   scene.add(patch.mesh, patch.lowPlanet);
 
-  const loaded = await loadStyleAssets(manifest, ctx);
+  // Pip, the default commander, loads with the other models, so the scene is built with him and his first frame needs no
+  // swap. A lab opened on Bulwark leaves Pip unloaded until the panel switches to him, so it loads and draws exactly what
+  // the locked look's lab drew before Pip existed.
+  const loaded = await loadStyleAssets(manifest, ctx, state.commander);
   const banner = document.getElementById('banner') as HTMLElement;
   if (!loaded) {
     banner.hidden = false;
     banner.textContent = 'Placeholders: M0c assets are not built yet (npm run assets).';
   }
-  const style = buildStyleScene(patch, loaded ?? placeholderAssets(ctx), ctx, tier.scatterScale);
+  const style = buildStyleScene(patch, loaded ?? placeholderAssets(ctx), ctx, tier.scatterScale, state.commander);
   scene.add(style.root);
 
-  // Pip-A loads only when the address asks for him or the panel switches to him, so the default lab loads and draws
-  // exactly what it drew before he existed. Without the built assets there is no Pip-A to show, and the lab says so.
-  let pipAsset: LoadedAsset | null = null;
+  let pipAsset: LoadedAsset | null = loaded?.pip ?? null;
   const note = (text: string): void => {
     console.warn(`Style Lab: ${text}`);
     banner.hidden = false;
     banner.textContent = banner.textContent ? `${banner.textContent}\n${text}` : text;
   };
   if (commanderParam.problem) note(`${commanderParam.problem.charAt(0).toUpperCase()}${commanderParam.problem.slice(1)}.`);
+  // Without Pip in the built assets there is no Pip to show, so the lab shows Bulwark and says why, whether Pip came by
+  // default, by the address or by the panel.
+  const pipMissing = `${COMMANDER_LABELS.pip} is not in the built assets (npm run assets); showing ${COMMANDER_LABELS.bulwark}.`;
+  if (state.commander !== style.commander()) note(pipMissing);
+  state.commander = style.commander();
   async function showCommander(kind: CommanderKind): Promise<CommanderKind> {
     if (kind === 'pip' && !pipAsset) pipAsset = loaded ? await loadPip(manifest, ctx) : null;
     if (kind === 'pip' && !pipAsset) {
-      note('Pip-A is not in the built assets (npm run assets); showing Bulwark.');
+      note(pipMissing);
       style.setCommander('bulwark');
     } else style.setCommander(kind, pipAsset ?? undefined);
     state.commander = style.commander();
     return state.commander;
   }
-  if (state.commander === 'pip') await showCommander('pip');
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -403,9 +426,9 @@ async function start(): Promise<void> {
     return { dials: { ...dials }, rejected };
   }
 
-  // Frozen, the scene, Bulwark's cycle and the film grain hold still while frames keep rendering, so two captures that
-  // differ in one dial differ only by what that dial does (the halo and fog measurements subtract such pairs). Opened
-  // with ?freeze=1 the scene never leaves the pose it is built in, so frames from separate page loads line up too.
+  // Frozen, the scene, the commander's cycle and the film grain hold still while frames keep rendering, so two captures
+  // that differ in one dial differ only by what that dial does (the halo and fog measurements subtract such pairs).
+  // Opened with ?freeze=1 the scene never leaves the pose it is built in, so frames from separate page loads line up too.
   let frozen = params.get('freeze') === '1';
   // A shown commander's face holds with the scene, a blink included, so frames from separate loads line up.
   style.setFrozen(frozen);
@@ -428,7 +451,7 @@ async function start(): Promise<void> {
       style.setFrozen(on);
     },
     commander: () => style.commander(),
-    // Switches the commander as the panel does and resolves to the one shown, Bulwark when Pip-A is not built.
+    // Switches the commander as the panel does and resolves to the one shown, Bulwark when Pip is not built.
     setCommander: async (kind: CommanderKind) => {
       const shown = await showCommander(kind);
       for (const controller of gui.controllersRecursive()) controller.updateDisplay();
