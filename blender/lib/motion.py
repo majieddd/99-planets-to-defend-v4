@@ -114,15 +114,22 @@ def _unit(v, what='a direction'):
 
 
 def solve(arm, s, blade_rest):
-    """Every bone's rotation (and the hips' offset) for one spec."""
+    """Every bone's rotation (and the hips' offset) for one spec. `blade_rest` is the blade's axis at rest, which the
+    forearm's twist aims at the spec's blade direction, or {'held': axis, 'aim': axis} for a sword regripped since its
+    keys were written: the forearm twists as it did for the old axis (`aim`) and the hand then turns at the wrist to
+    point the blade the fist now holds (`held`) where the old one pointed, so the keys swing the blade along the path
+    they were written for (the hand-keyed comparison set, blender/recipes/commander_pip.py)."""
+    held, aimed = (blade_rest['held'], blade_rest['aim']) if isinstance(blade_rest, dict) else (blade_rest, None)
     ops = [('move', P + 'Hips', tuple(s['hips_off'])), ('turn', P + 'Hips', UP, float(s['hips_turn'][0]))]
     ops += torso_ops(float(s['torso'][0]), float(s['torso'][1]))
     turn, nod = float(s['head'][0]), float(s['head'][1])
     ops += [('turn', P + 'Neck', UP, turn * 0.4), ('turn', P + 'Head', UP, turn * 0.6), ('turn', P + 'Head', AHEAD, nod)]
     ops += [('aim', P + 'RightArm', _unit(s['s_up'], 'the sword upper arm (s_up)')),
-            ('aim_carry', P + 'RightForeArm', _unit(s['s_fore'], 'the sword forearm (s_fore)'), P + 'RightHand', blade_rest,
-             _unit(s['s_want'], 'the blade (s_want)')),
-            ('aim', P + 'LeftArm', _unit(s['h_up'], 'the shield upper arm (h_up)')),
+            ('aim_carry', P + 'RightForeArm', _unit(s['s_fore'], 'the sword forearm (s_fore)'), P + 'RightHand', aimed or held,
+             _unit(s['s_want'], 'the blade (s_want)'))]
+    if aimed is not None:
+        ops.append(('match', P + 'RightHand', held, aimed))
+    ops += [('aim', P + 'LeftArm', _unit(s['h_up'], 'the shield upper arm (h_up)')),
             ('aim', P + 'LeftForeArm', _unit(s['h_fore'], 'the shield forearm (h_fore)')),
             ('leg', 'Left', _grounded(s['step_l'])), ('leg', 'Right', _grounded(s['step_r']))]
     return cf.pose_rotations(arm, ops)

@@ -2379,7 +2379,10 @@ def pose_rotations(arm, ops):
     smallest rotation and then twists it about that direction; ('turn', bone, axis, angle) rotates the bone about a
     world axis through its head; ('aim_carry', bone, direction, carried_bone, carried_rest, want) aims the bone, then
     twists it so a direction carried by a child (given in the rest pose, such as a blade's axis) points as close to
-    `want` as the twist allows; ('move', bone, offset) translates a bone (the hips) in world space; ('leg', side[,
+    `want` as the twist allows; ('match', bone, carried_rest, target_rest) turns the bone about its head by the smallest
+    rotation that points the direction `carried_rest` carries (given in the rest pose) where `target_rest` points as the
+    bone stands, so a sword regripped in the fist can be swung along the path its old grip was keyed to; ('move', bone,
+    offset) translates a bone (the hips) in world space; ('leg', side[,
     offset]) solves that leg's thigh and shin as a two-bone chain so its ankle stays on its rest position (or that
     position moved by `offset`, in metres in the armature's own space, as the rest position is, for a step), the knee
     bending forward, and puts the foot back at its rest orientation, so the boot stays planted however the hips move.
@@ -2427,6 +2430,9 @@ def pose_rotations(arm, ops):
             rot = (pb.tail - h).rotation_difference(d).to_matrix().to_4x4()
             if len(op) > 3 and op[3]:
                 rot = Matrix.Rotation(op[3], 4, d) @ rot
+        elif op[0] == 'match':
+            carried = (pb.matrix @ arm.data.bones[op[1]].matrix_local.inverted()).to_3x3()
+            rot = (carried @ Vector(op[2])).rotation_difference(carried @ Vector(op[3])).to_matrix().to_4x4()
         else:
             rot = Matrix.Rotation(op[3], 4, Vector(op[2]).normalized())
         pb.matrix = Matrix.Translation(h) @ rot @ Matrix.Translation(-h) @ pb.matrix

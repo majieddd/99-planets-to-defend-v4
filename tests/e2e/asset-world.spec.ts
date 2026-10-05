@@ -88,6 +88,8 @@ interface PlayReading {
   legsRunWeight: number;
   moveScale: number;
   turnScale: number;
+  /** The clip time from which the playing hit's next hit (or the finisher's new chain) may start. */
+  opensAt: number | null;
 }
 
 const manifest = JSON.parse(readFileSync('public/assets/manifest.json', 'utf8')) as { assets: ManifestEntry[] };
@@ -849,12 +851,16 @@ test.describe('the Asset World', () => {
       expect(samples[chainEnd]!.strikesByStep, chainLine).toEqual([1, 1, 1]);
       expect(samples.at(-1)!.strikesByStep, chainLine).toEqual([3, 1, 1]);
       for (const hit of [one, two, three, again, light]) expect(struckAt(hit), chainLine).toBeDefined();
-      // The finisher has no cancel, plants him, and plays out to its last frame.
+      // The finisher has no cancel and keeps at most its pace kept of the walk (no key is held here, so none); its
+      // recovery is cut where the feel says, and it fades out from the cut, so it plays to the cut and its fade out.
       for (const sample of finisher) {
         expect(sample.cancelAt, chainLine).toBeNull();
-        expect(sample.speed, chainLine).toBe(0);
+        expect(sample.speed, chainLine).toBeLessThanOrEqual(DEFAULT_COMBAT_FEEL.finisherPace * PLAY_WALK_SPEED + 1e-9);
       }
-      expect(finisher.at(-1)!.attackTime!, chainLine).toBeGreaterThan(COMBO_HITS[2]!.duration - 0.05 - 1e-9);
+      const cutAt = finisher[0]!.opensAt!;
+      expect(cutAt, chainLine).toBeGreaterThan(COMBO_HITS[2]!.recoverFrom! - 1e-9);
+      expect(cutAt, chainLine).toBeLessThan(COMBO_HITS[2]!.recoverTo! + 1e-9);
+      expect(finisher.at(-1)!.attackTime!, chainLine).toBeGreaterThan(Math.min(COMBO_HITS[2]!.duration, cutAt + DEFAULT_COMBAT_FEEL.fadeOut) - 0.05 - 1e-9);
       // From attack_1's full weight to the finisher's fade out, the hits hold the upper body whole: no idle shows between
       // hits, through both crossfades.
       expect(throughChain.length, chainLine).toBeGreaterThan(0);

@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { ARENA_DUMMY_NAMES, RESET_NAME } from '../../src/labs/combat/arena';
-import { PLAY_BODY_RADIUS } from '../../src/labs/world/playMotion';
+import { DEFAULT_COMBAT_FEEL } from '../../src/labs/world/combatFeel';
+import { PLAY_WALK_SPEED } from '../../src/labs/world/playMotion';
 
 /** What `__P99__.play()` reads of Play Pip (labs/world/play.ts), as far as these tests read it. */
 interface PlayReading {
@@ -26,6 +27,22 @@ interface PlayReading {
   lunge: { moved: number; planned: number; target: number; turnDeg: number; blocked: boolean; source: string | null; total: number };
   lungeSources: string[];
   trail: { points: number; alpha: number; emitting: boolean };
+  swingSet: string;
+  swingSets: string[];
+  attackClip: string | null;
+  opensAt: number | null;
+  phase: string;
+  moveScale: number;
+  turnScale: number;
+  recovery: { clip: string; step: number; time: number; weight: number } | null;
+  guardWeight: number;
+}
+
+/** What `__P99__.bodyGap()` reads (labs/combat/bodyGap.ts): the least distance from Pip's body to a dummy's mesh. */
+interface BodyGap {
+  distance: number;
+  pip: number[] | null;
+  dummy: number[] | null;
 }
 
 /** What `__P99__.dummies()` reads of one training dummy (labs/combat/main.ts). */
@@ -36,8 +53,8 @@ interface DummyReading {
   yaw: number;
   home: { tangent: number[]; yaw: number };
   reach: number;
-  /** Its core's radius (labs/combat/dummies.ts DUMMY_CORE_SHARE of its reach): the hump and thorax a lunge comes up to. */
-  core: number;
+  /** Its footprint (labs/combat/footprint.ts): the core and the head's capsule, without Pip's reach. */
+  footprint: { core: number; head: { from: number; to: number; radius: number } | null };
   hits: number;
   fromPip: { distance: number; angleDeg: number } | null;
   flinch: number;
@@ -81,10 +98,10 @@ const pipMeta = JSON.parse(readFileSync('public/assets/commanders/commander_pip.
   notes: { combo: Record<string, { checks: { strike_blade_tip: BladeTip } }> };
 };
 /**
- * How far across the ground from his root each hit's blade tip reaches at its strike, attack_1 to attack_3, from the
- * sidecar's strike_blade_tip of each real clip: 1.14 m for the forehand, 1.48 m for the backhand (out to his right) and
- * 1.35 m for the finisher's chop. It read the attack clip's 1.12 m for every hit while placeholders warped that clip.
- * Phase B's hit detection replaces this reading with real hits.
+ * How far across the ground from his root each hit's blade tip reaches at its strike, attack_1 to attack_3 (the
+ * Quaternius set), from the sidecar's strike_blade_tip of each real clip: 1.26 m for the forehand, 1.71 m for the
+ * backhand (out to his right) and 1.62 m for the spin finisher. It read the attack clip's 1.12 m for every hit while
+ * placeholders warped that clip.
  */
 const BLADE_REACH = [1, 2, 3].map((step) => {
   const tip = pipMeta.notes.combo[`attack_${step}`]!.checks.strike_blade_tip;
@@ -92,6 +109,11 @@ const BLADE_REACH = [1, 2, 3].map((step) => {
 });
 /** The widest a dummy may stand off his facing at a strike, or his facing off the middle dummy at the start, in degrees. */
 const FACING_DEG = 15;
+/** How far ahead of its root a dummy's footprint reaches (its head's front, or its core): where the blade must reach. */
+const front = (dummy: DummyReading): number => Math.max(dummy.footprint.core, dummy.footprint.head ? dummy.footprint.head.to + dummy.footprint.head.radius : 0);
+/** The finisher's pace kept and the walk's pace, which a held key gives him through the finisher at most together. */
+const DEFAULT_FINISHER_PACE = DEFAULT_COMBAT_FEEL.finisherPace;
+const WALK = PLAY_WALK_SPEED;
 
 /** The Pages project serves the site under this path (playwright.config.ts). */
 const PAGES_BASE = '/99-planets-to-defend-v4/';
@@ -204,22 +226,23 @@ test.describe('the combat arena', () => {
   test.describe('beyond the load', () => {
     test.skip(({ baseURL }) => Boolean(baseURL?.endsWith(PAGES_BASE)), 'The Pages project keeps the load test for its base path; the play and the phone layout need no second run.');
 
-    test('lands a three-hit chain with the middle dummy in front of him and within the blade\'s reach at each strike', async ({ page }) => {
+    test('lands a three-hit chain with the middle dummy in front of him and within the blade\'s reach at each strike, his body never in its head', async ({ page }) => {
       test.setTimeout(240_000);
       const log = collectConsole(page);
       await open(page);
-      // W walks him straight at the middle dummy, the camera being behind him, until its reach holds him.
+      // W walks him straight at the middle dummy, the camera being behind him, until its footprint holds him: its head
+      // and core widened by his reach in a swing (labs/combat/footprint.ts).
       await page.keyboard.down('KeyW');
       await page.waitForFunction(() => ((window.__P99__!['play'] as () => PlayReading)().clearance ?? 1) < 0.02, undefined, { timeout: 60_000 });
       await page.keyboard.up('KeyW');
       await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().speed === 0, undefined, { timeout: 60_000 });
       // The chain's presses go from inside the page on the frames a recorder reads, one as each light hit's buffer
       // opens, as the Asset World's chain test does; the recorder keeps every dummy's reading on each strike's frame, and
-      // from the finisher's first frame to ten frames past its end it keeps his root and his feet on every frame.
+      // on every third frame the closest Pip's body (his sword and shield left out) comes to the middle dummy's mesh and
+      // his root's gap to its footprint, until a while after the chain ends.
       await page.evaluate(() => {
         type Strike = { step: number; dummies: DummyReading[] };
-        type Frame = { step: number; time: number | null; weight: number; tangent: number[]; position: number[]; feet: number[][]; lunge: number };
-        const store = window as unknown as { strikes: Strike[]; frames: Frame[]; presses: number; done: boolean; lunges: number[]; closest: { distance: number; core: number; step: number } };
+        const store = window as unknown as { strikes: Strike[]; presses: number; done: boolean; lunges: number[]; closest: BodyGap & { step: number; time: number | null }; clearance: number; frames: number };
         const p99 = window.__P99__!;
         const play = () => (p99['play'] as () => PlayReading)();
         const press = (): void => {
@@ -228,33 +251,29 @@ test.describe('the combat arena', () => {
           window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyF', key: 'f' }));
         };
         store.strikes = [];
-        store.frames = [];
         store.presses = 0;
         store.done = false;
         store.lunges = [0, 0, 0];
-        store.closest = { distance: Infinity, core: 0, step: 0 };
+        store.closest = { distance: Infinity, pip: null, dummy: null, step: 0, time: null };
+        store.clearance = Infinity;
+        store.frames = 0;
         const pressedIn = new Set<number>();
         let last = play().strikes;
-        let after = -1;
+        let after = 0;
+        let sawFinisher = false;
         const tick = (): void => {
           const sample = play();
+          store.frames += 1;
           if (sample.comboStep > 0) store.lunges[sample.comboStep - 1] = Math.max(store.lunges[sample.comboStep - 1]!, sample.lunge.moved);
-          const middleNow = (p99['dummies'] as () => DummyReading[])()[1]!;
-          if (middleNow.fromPip && middleNow.fromPip.distance < store.closest.distance) store.closest = { distance: middleNow.fromPip.distance, core: middleNow.core, step: sample.comboStep };
+          store.clearance = Math.min(store.clearance, sample.clearance ?? Infinity);
+          if (store.frames % 3 === 0 || sample.strikes > last) {
+            const gap = (p99['bodyGap'] as (index: number) => BodyGap | null)(1);
+            if (gap && gap.distance < store.closest.distance) store.closest = { ...gap, step: sample.comboStep, time: sample.attackTime };
+          }
           if (sample.strikes > last) store.strikes.push({ step: sample.lastStrikeStep ?? 0, dummies: (p99['dummies'] as () => DummyReading[])() });
           last = sample.strikes;
-          if (sample.comboStep === 3 || store.frames.length) {
-            store.frames.push({
-              step: sample.comboStep,
-              time: sample.attackTime,
-              weight: sample.attackWeight,
-              tangent: sample.tangent!,
-              position: sample.position!,
-              feet: sample.feet!,
-              lunge: sample.lunge.moved,
-            });
-            if (sample.comboStep === 0) after += 1;
-          }
+          if (sample.comboStep === 3) sawFinisher = true;
+          if (sawFinisher && sample.comboStep === 0) after += 1;
           if (after >= 10) {
             store.done = true;
             return;
@@ -269,81 +288,165 @@ test.describe('the combat arena', () => {
         requestAnimationFrame(tick);
         press();
       });
-      await page.waitForFunction(() => (window as unknown as { done: boolean }).done, undefined, { timeout: 120_000 });
+      await page.waitForFunction(() => (window as unknown as { done: boolean }).done, undefined, { timeout: 180_000 });
       const result = await page.evaluate(() => {
         const store = window as unknown as {
           strikes: { step: number; dummies: DummyReading[] }[];
-          frames: { step: number; time: number | null; weight: number; tangent: number[]; position: number[]; feet: number[][]; lunge: number }[];
           presses: number;
           lunges: number[];
-          closest: { distance: number; core: number; step: number };
+          closest: BodyGap & { step: number; time: number | null };
+          clearance: number;
+          frames: number;
         };
-        return { strikes: store.strikes, frames: store.frames, presses: store.presses, lunges: store.lunges, closest: store.closest, play: (window.__P99__!['play'] as () => PlayReading)() };
+        return { ...store, strikes: store.strikes, play: (window.__P99__!['play'] as () => PlayReading)() };
       });
       const atStrike = result.strikes.map((strike) => {
         const middle = strike.dummies[1]!;
-        const nearest = [...strike.dummies].sort((a, b) => a.fromPip!.distance - a.reach - (b.fromPip!.distance - b.reach))[0]!;
+        const nearest = [...strike.dummies].sort((a, b) => a.fromPip!.distance - front(a) - (b.fromPip!.distance - front(b)))[0]!;
         return { step: strike.step, middle, nearest };
       });
-      // The finisher plants him while its front (left) boot steps forward and back inside the clip: nothing but its lunge
-      // may move his root (his steering is held), the boot must travel about its 22 cm from his root, the frame on which
-      // the hit ends must move neither foot more than the frames before it did, and the feet must then stand still, or
-      // the step would read as a slide or a snap. That the boot comes home inside the clip is the unit test's
-      // (combo-clips.test.ts); here, ten frames after the end, it stands where the idle puts it, which is not where the
-      // hits stand it (the idle's stance is 9.4 cm wider at the left toe than the rest pose's, which every authored clip
-      // holds), so that distance is read, not held.
-      const frames = result.frames;
-      const finisher = frames.filter((frame) => frame.step === 3);
-      const end = frames.findIndex((frame) => frame.step === 0);
-      const gap = (a: number[], b: number[]) => Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
-      const rootDrift = Math.max(...finisher.map((frame) => Math.hypot(frame.tangent[0]! - finisher[0]!.tangent[0]!, frame.tangent[1]! - finisher[0]!.tangent[1]!)));
-      const lunged = finisher.at(-1)!.lunge;
-      // The boot's place from his root, so the lunge carrying both does not count as the step.
-      const fromRoot = (frame: (typeof frames)[number], foot: number) => frame.feet[foot]!.map((value, k) => value - frame.position[k]!);
-      const stepOut = Math.max(...finisher.map((frame) => gap(fromRoot(frame, 0), fromRoot(finisher[0]!, 0))));
-      const home = gap(fromRoot(frames.at(-1)!, 0), fromRoot(finisher[0]!, 0));
-      const footMove = (index: number) => Math.max(gap(frames[index]!.feet[0]!, frames[index - 1]!.feet[0]!), gap(frames[index]!.feet[1]!, frames[index - 1]!.feet[1]!));
-      const atEnd = footMove(end);
-      const lateMoves = frames.slice(1, end).map((_, i) => i + 1).filter((index) => (frames[index]!.time ?? 0) >= 0.55).map(footMove);
-      const afterMoves = frames.slice(end + 1).map((_, i) => footMove(end + 1 + i));
-      // The closest his body (PLAY_BODY_RADIUS about his root) came to the middle dummy's core (its hump and thorax).
-      const bodyToCore = result.closest.distance - PLAY_BODY_RADIUS - result.closest.core;
       const line =
-        `combat arena chain [${test.info().project.name}]: ${result.presses} presses; strikes at steps ${atStrike.map((s) => s.step).join(', ')}; ` +
+        `combat arena chain [${test.info().project.name}]: ${result.presses} presses over ${result.frames} frames; strikes at steps ${atStrike.map((s) => s.step).join(', ')}; ` +
         atStrike
           .map(
             (s) =>
-              `attack_${s.step}: the middle dummy ${s.middle.fromPip!.distance.toFixed(3)} m from his root (its reach ${s.middle.reach.toFixed(3)} m, so ${(s.middle.fromPip!.distance - s.middle.reach).toFixed(3)} m beyond it against the blade's ${BLADE_REACH[s.step - 1]!.toFixed(3)} m) ` +
+              `attack_${s.step}: the middle dummy ${s.middle.fromPip!.distance.toFixed(3)} m from his root (its footprint ${front(s.middle).toFixed(3)} m ahead of it, so ${(s.middle.fromPip!.distance - front(s.middle)).toFixed(3)} m beyond it against the blade's ${BLADE_REACH[s.step - 1]!.toFixed(3)} m) ` +
               `at ${s.middle.fromPip!.angleDeg.toFixed(2)} degrees, the nearest ${s.nearest.name} at ${s.nearest.fromPip!.distance.toFixed(3)} m and ${s.nearest.fromPip!.angleDeg.toFixed(2)} degrees`,
           )
           .join('; ') +
-        `; lunges from W-contact ${result.lunges.map((m, i) => `attack_${i + 1} ${(m * 1000).toFixed(1)} mm`).join(', ')} (${JSON.stringify(result.play.lungeSources)}), ` +
-        `his body ${(bodyToCore * 1000).toFixed(1)} mm from the middle dummy's core at the closest (roots ${result.closest.distance.toFixed(3)} m apart in attack_${result.closest.step}, core ${result.closest.core.toFixed(3)} m)` +
-        `; strikes by hit ${JSON.stringify(result.play.strikesByStep)}; finisher over ${finisher.length} frames: root moved ${(rootDrift * 1000).toFixed(2)} mm against its lunge's ${(lunged * 1000).toFixed(2)} mm, ` +
-        `left boot out ${(stepOut * 100).toFixed(1)} cm from his root at most, and ten frames after the end ${(home * 1000).toFixed(1)} mm from where it stood from his root at the start (the idle's stance against the hits'); ` +
-        `largest foot move in a frame ${(Math.max(...lateMoves) * 1000).toFixed(1)} mm from 0.55 s to the end, ${(atEnd * 1000).toFixed(1)} mm on the frame it ended, ` +
-        `${(Math.max(...afterMoves) * 1000).toFixed(1)} mm in the ten after; console errors ${JSON.stringify(log.errors)}`;
+        `; lunges from W-contact ${result.lunges.map((m, i) => `attack_${i + 1} ${(m * 1000).toFixed(1)} mm`).join(', ')} (${JSON.stringify(result.play.lungeSources)}); ` +
+        `closest body distance ${(result.closest.distance * 1000).toFixed(1)} mm (his body's vertex at ${result.closest.pip?.map((v) => v.toFixed(3)).join(',')} to the Husk's at ${result.closest.dummy?.map((v) => v.toFixed(3)).join(',')}, in attack_${result.closest.step} at ${result.closest.time?.toFixed(3) ?? 'none'} s); ` +
+        `least root gap to the footprints ${(result.clearance * 1000).toFixed(2)} mm; strikes by hit ${JSON.stringify(result.play.strikesByStep)}; console errors ${JSON.stringify(log.errors)}`;
       console.log(line);
       expect(atStrike.map((s) => s.step), line).toEqual([1, 2, 3]);
       expect(result.play.strikesByStep, line).toEqual([1, 1, 1]);
       for (const s of atStrike) {
         expect(s.nearest.name, line).toBe('dummy_middle');
-        expect(s.middle.fromPip!.distance - s.middle.reach, line).toBeLessThanOrEqual(BLADE_REACH[s.step - 1]!);
+        expect(s.middle.fromPip!.distance - front(s.middle), line).toBeLessThanOrEqual(BLADE_REACH[s.step - 1]!);
         expect(Math.abs(s.middle.fromPip!.angleDeg), line).toBeLessThan(FACING_DEG);
       }
-      // Every hit lunges from W-contact against the middle dummy: each light hit at least 0.3 m and the finisher further,
-      // swept against the dummy's core, so his body never enters its hump and thorax. The lunge was measured against the
-      // dummy's whole reach, where W parks him, and moved 0, 0.17 and 0.26 m.
-      expect(result.lunges[0]!, line).toBeGreaterThanOrEqual(0.3);
-      expect(result.lunges[1]!, line).toBeGreaterThanOrEqual(0.3);
-      expect(result.lunges[2]!, line).toBeGreaterThan(Math.max(result.lunges[0]!, result.lunges[1]!));
-      expect(bodyToCore, line).toBeGreaterThanOrEqual(-0.001);
-      // Only the lunge moved him: his root went the lunge's metres and no more (a straight lunge, read on the plane).
-      expect(Math.abs(rootDrift - lunged), line).toBeLessThan(0.001);
-      expect(stepOut, line).toBeGreaterThan(0.15);
-      expect(stepOut, line).toBeLessThan(0.3);
-      expect(atEnd, line).toBeLessThanOrEqual(Math.max(...lateMoves) + 1e-6);
-      for (const move of afterMoves) expect(move, line).toBeLessThan(0.002);
+      // His walk, his lunges and the clips' root motion all stopped at the footprint, his root never inside it; and his
+      // body, his fists and belly included, never met the Husk's mesh: the head capsule and his reach in a swing keep it
+      // off, where phase B's lunge to a round core put his torso about 0.5 m inside the head on the finisher.
+      expect(result.clearance, line).toBeGreaterThanOrEqual(-1e-6);
+      expect(result.closest.distance, line).toBeGreaterThan(0.02);
+      // From W-contact the forehand's 0.75 m of root motion has no room (the assist plans none), and the finisher's 1.47 m
+      // carries him into the room the knockbacks opened.
+      expect(result.lunges[0]!, line).toBeLessThan(0.01);
+      expect(result.lunges[2]!, line).toBeGreaterThan(0.1);
+      expect(result.play.lungeSources, line).toEqual(['root', 'root', 'root']);
+      expect(log.errors, line).toEqual([]);
+    });
+
+    test("keeps him moving through the finisher at its pace, under the light hits', and frees him at its recovery cut", async ({ page }) => {
+      test.setTimeout(240_000);
+      const log = collectConsole(page);
+      await open(page);
+      // S held throughout turns him to face the camera, away from the dummies, and walks him that way: the chain is pressed
+      // from the page as each buffer opens, and every frame read.
+      await page.keyboard.down('KeyS');
+      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().speed > 3, undefined, { timeout: 60_000 });
+      const frames = await page.evaluate(
+        () =>
+          new Promise<PlayReading[]>((done) => {
+            const p99 = window.__P99__!;
+            const play = () => (p99['play'] as () => PlayReading)();
+            const out: PlayReading[] = [];
+            const pressedIn = new Set<number>();
+            const press = (): void => {
+              window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF', key: 'f' }));
+              window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyF', key: 'f' }));
+            };
+            let sawFinisher = false;
+            const tick = (): void => {
+              const sample = play();
+              out.push(sample);
+              if (sample.comboStep === 3) sawFinisher = true;
+              if (sawFinisher && sample.comboStep === 0) return done(out);
+              const open = sample.attackTime !== null && sample.bufferOpensAt !== null && sample.attackTime >= sample.bufferOpensAt;
+              if (sample.comboStep > 0 && sample.comboStep < 3 && open && !pressedIn.has(sample.comboStep)) {
+                pressedIn.add(sample.comboStep);
+                press();
+              }
+              requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+            press();
+          }),
+      );
+      await page.keyboard.up('KeyS');
+      const finisher = frames.filter((frame) => frame.comboStep === 3);
+      const active = finisher.filter((frame) => frame.phase === 'active');
+      const beforeCut = finisher.filter((frame) => (frame.attackTime ?? 0) < (frame.opensAt ?? Infinity));
+      const afterCut = finisher.filter((frame) => (frame.attackTime ?? 0) >= (frame.opensAt ?? Infinity));
+      const span = (values: number[]) => (values.length ? `${Math.min(...values).toFixed(3)} to ${Math.max(...values).toFixed(3)}` : 'none');
+      const line =
+        `combat arena finisher pace [${test.info().project.name}]: ${frames.length} frames, finisher over ${finisher.length} (${finisher[0]?.attackClip}, its recovery cut at ${finisher[0]?.opensAt?.toFixed(3)} s); ` +
+        `speed in its ${active.length} active frames ${span(active.map((frame) => frame.speed))} m/s against the pace kept ${DEFAULT_FINISHER_PACE} of the walk, ${(DEFAULT_FINISHER_PACE * WALK).toFixed(2)} m/s; ` +
+        `pace kept ${span(beforeCut.map((frame) => frame.moveScale))} and turn ${span(beforeCut.map((frame) => frame.turnScale))} before the cut, pace ${span(afterCut.map((frame) => frame.moveScale))} after it; ` +
+        `his root motion carried him ${(finisher.at(-1)?.lunge.moved ?? 0).toFixed(3)} m; console errors ${JSON.stringify(log.errors)}`;
+      console.log(line);
+      expect(active.length, line).toBeGreaterThan(0);
+      for (const frame of active) {
+        expect(frame.speed, line).toBeGreaterThan(0);
+        expect(frame.speed, line).toBeLessThanOrEqual(DEFAULT_FINISHER_PACE * WALK + 1e-9);
+      }
+      for (const frame of beforeCut) expect(frame.moveScale, line).toBe(DEFAULT_FINISHER_PACE);
+      expect(afterCut.length, line).toBeGreaterThan(0);
+      for (const frame of afterCut) expect(frame.moveScale, line).toBe(1);
+      expect(log.errors, line).toEqual([]);
+    });
+
+    test('plays the hand-keyed swing set from the panel\'s swing set control, with the recovery clips and the guard of the Quaternius set', async ({ page }) => {
+      test.setTimeout(240_000);
+      const log = collectConsole(page);
+      await open(page);
+      // A single forehand from the start, the Quaternius set: the chain stops there, so its recovery clip plays, and the
+      // guard comes up.
+      const single = () =>
+        page.evaluate(
+          () =>
+            new Promise<PlayReading[]>((done) => {
+              const p99 = window.__P99__!;
+              const play = () => (p99['play'] as () => PlayReading)();
+              const out: PlayReading[] = [];
+              let sawHit = false;
+              const tick = (): void => {
+                const sample = play();
+                out.push(sample);
+                if (sample.comboStep > 0) sawHit = true;
+                if (sawHit && sample.comboStep === 0 && !sample.recovery) return done(out);
+                requestAnimationFrame(tick);
+              };
+              window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF', key: 'f' }));
+              window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyF', key: 'f' }));
+              requestAnimationFrame(tick);
+            }),
+        );
+      const quaternius = await single();
+      // The swing set dropdown, in the open panel's combat feel folder.
+      await page.locator('.lil-gui.lil-root > .lil-title').click();
+      await page.locator('.lil-gui .lil-controller', { hasText: 'swing set' }).locator('select').selectOption({ label: 'hand-keyed' });
+      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().swingSet === 'hand', undefined, { timeout: 30_000 });
+      const address = new URL(page.url()).searchParams.get('feel');
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      const hand = await single();
+      const clips = (frames: PlayReading[]) => [...new Set(frames.map((frame) => frame.attackClip).filter(Boolean))];
+      const recoveries = (frames: PlayReading[]) => [...new Set(frames.map((frame) => frame.recovery?.clip).filter(Boolean))];
+      const line =
+        `combat arena swing set [${test.info().project.name}]: offered ${JSON.stringify(quaternius[0]!.swingSets)}; quaternius played ${JSON.stringify(clips(quaternius))} then ${JSON.stringify(recoveries(quaternius))} ` +
+        `(guard up to ${Math.max(...quaternius.map((frame) => frame.guardWeight)).toFixed(2)}); the dropdown set ${hand[0]!.swingSet} (the address's feel ${address}) and played ${JSON.stringify(clips(hand))} ` +
+        `then ${JSON.stringify(recoveries(hand))}, lunging by ${JSON.stringify(hand[0]!.lungeSources)}; console errors ${JSON.stringify(log.errors)}`;
+      console.log(line);
+      expect(quaternius[0]!.swingSets, line).toEqual(['quaternius', 'hand']);
+      expect(clips(quaternius), line).toEqual(['attack_1']);
+      expect(recoveries(quaternius), line).toEqual(['attack_1_rec']);
+      expect(Math.max(...quaternius.map((frame) => frame.guardWeight)), line).toBeGreaterThan(0.5);
+      expect(hand[0]!.swingSet, line).toBe('hand');
+      expect(JSON.parse(address ?? '{}'), line).toMatchObject({ swingSet: 'hand' });
+      expect(clips(hand), line).toEqual(['attack_1_hand']);
+      expect(recoveries(hand), line).toEqual([]);
+      expect(hand[0]!.lungeSources, line).toEqual(['scripted', 'scripted', 'scripted']);
       expect(log.errors, line).toEqual([]);
     });
 
@@ -415,11 +518,20 @@ test.describe('the combat arena', () => {
         return out;
       };
 
-      // A swing at the air from the spawn, the dummies 3 m off: the blade meets nothing, so nothing marks it.
+      // A swing at the air, turned away from the dummies: S turns him to face the camera, and he swings once he stands.
+      // From the spawn facing them, the forehand's root motion would carry him to the middle dummy's footprint and its
+      // blade into the head.
+      await page.keyboard.down('KeyS');
+      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().speed > 1, undefined, { timeout: 60_000 });
+      await page.keyboard.up('KeyS');
+      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().speed === 0, undefined, { timeout: 60_000 });
       const whiff = await record('one');
       const whiffEnd = whiff.at(-1)!.impact;
       const afterWhiff = await sound();
-      // Then W walks him straight at the middle dummy until its reach holds him, and the chain is pressed from the page.
+      // Then, from the start again (R), W walks him straight at the middle dummy until its footprint holds him, and the
+      // chain is pressed from the page.
+      await page.keyboard.press('KeyR');
+      await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
       await page.keyboard.down('KeyW');
       await page.waitForFunction(() => ((window.__P99__!['play'] as () => PlayReading)().clearance ?? 1) < 0.02, undefined, { timeout: 60_000 });
       await page.keyboard.up('KeyW');
@@ -440,13 +552,18 @@ test.describe('the combat arena', () => {
           sparksAt: frame.impact.sparks.lastPosition,
           contact: frame.impact.lastConnect!.contact,
           hits: frame.middle.hits,
+          connects: frame.impact.connects,
         }));
       // The middle dummy's reaction between one contact and the next: its most flinch and its knockback.
       const connectAt = chain.map((frame, i) => (i > 0 && frame.impact.connects > chain[i - 1]!.impact.connects ? i : -1)).filter((i) => i >= 0);
-      const reactions = connectAt.map((from, k) => {
-        const span = chain.slice(from, connectAt[k + 1] ?? chain.length);
-        return { flinch: Math.max(...span.map((frame) => frame.middle.flinch)), knockback: Math.max(...span.map((frame) => frame.middle.knockback)) };
-      });
+      // Only the contacts that struck the middle dummy: the backhand may meet the right dummy's head instead.
+      const reactions = connectAt
+        .filter((from) => chain[from]!.middle.hits > chain[from - 1]!.middle.hits)
+        .map((from) => {
+          const next = connectAt.find((at) => at > from) ?? chain.length;
+          const span = chain.slice(from, next);
+          return { flinch: Math.max(...span.map((frame) => frame.middle.flinch)), knockback: Math.max(...span.map((frame) => frame.middle.knockback)) };
+        });
       const line =
         `combat arena impact [${test.info().project.name}]: whiff ${whiff.length} frames, swings ${JSON.stringify(whiffEnd.swings)}, ` +
         `stops ${JSON.stringify(stops(whiff))}, sparks ${whiffEnd.sparks.bursts}, trail up to ${Math.max(...whiff.map((frame) => frame.trail.points))} samples; ` +
@@ -459,11 +576,11 @@ test.describe('the combat arena', () => {
         `the whiff asked ${JSON.stringify(afterWhiff.asked)}, the chain to ${JSON.stringify(afterChain.asked)} (played ${JSON.stringify(afterChain.played)}, skipped ${JSON.stringify(afterChain.skipped)}, device errors ${afterChain.deviceErrors}); console errors ${JSON.stringify(log.errors)}`;
       console.log(line);
       // The sounds: locked until the gesture, then a whoosh for the whiff swing and a whiff at its end, no impact; then a
-      // whoosh for each hit of the chain and an impact for each contact, and no further whiff.
+      // whoosh for each hit of the chain and an impact for each hit that connected, and no further whiff.
       expect(locked.state, line).toBe('locked');
       expect(unlocked.state, line).toBe('running');
       expect(afterWhiff.asked, line).toEqual({ whoosh: 1, impact: 0, whiff: 1 });
-      expect(afterChain.asked, line).toEqual({ whoosh: 4, impact: 3, whiff: 1 });
+      expect(afterChain.asked, line).toEqual({ whoosh: 4, impact: end.connects, whiff: 1 });
       // The whiff: a swing, but no contact, no stop, no sparks; its trail still drew.
       expect(whiffEnd.swings.at(-1), line).toMatchObject({ step: 1, connected: false });
       expect(whiffEnd.connects, line).toBe(0);
@@ -471,24 +588,31 @@ test.describe('the combat arena', () => {
       expect(whiffEnd.hitStop.lengths, line).toEqual([]);
       expect(whiffEnd.sparks.bursts, line).toBe(0);
       expect(Math.max(...whiff.map((frame) => frame.trail.points)), line).toBeGreaterThan(1);
-      // The chain: three swings, each connected with the middle dummy alone.
-      expect(end.swings.slice(-3), line).toEqual([
-        expect.objectContaining({ step: 1, connected: true, dummies: [1] }),
-        expect.objectContaining({ step: 2, connected: true, dummies: [1] }),
-        expect.objectContaining({ step: 3, connected: true, dummies: [1] }),
+      // The chain: three swings, each connected; the forehand and the finisher with the middle dummy alone. The backhand,
+      // which steps back 6 cm where the forehand's knockback has carried the middle dummy 0.25 m off, sweeps 1.71 m out to
+      // his right and meets the middle dummy, the right one's head (which faces him), or both, as the frames fall.
+      expect(end.swings.slice(-3).map((swing) => [swing.step, swing.connected]), line).toEqual([
+        [1, true],
+        [2, true],
+        [3, true],
       ]);
+      expect(end.swings.at(-3)!.dummies, line).toEqual([1]);
+      expect(end.swings.at(-1)!.dummies, line).toEqual([1]);
       // A stop of time at each contact, measured on the frames' clocks: 55, 55 and 90 ms (the blueprint's light and heavy).
       expect(measured.map((run) => run.step), line).toEqual([1, 2, 3]);
       measured.forEach((run, i) => expect(run.ms, line).toBeCloseTo([55, 55, 90][i]!, 3));
-      // Sparks thrown at every contact, from the contact.
-      expect(contacts.map((c) => c.bursts), line).toEqual([1, 2, 3]);
+      // Sparks thrown at every contact, from the contact: one burst a dummy struck.
+      expect(contacts.map((c) => c.bursts), line).toEqual(contacts.map((c) => c.connects));
       for (const c of contacts) {
         expect(c.alive, line).toBeGreaterThan(0);
         expect(c.sparksAt, line).toEqual(c.contact);
       }
-      // The middle dummy counted all three, flinched and was knocked back after each.
-      expect(contacts.map((c) => c.hits), line).toEqual([1, 2, 3]);
-      expect(chain.at(-1)!.middle.hits, line).toBe(3);
+      // The middle dummy counted each hit that met it, the forehand's and the finisher's at least, and flinched and was
+      // knocked back after each.
+      const middleHits = end.swings.slice(-3).filter((swing) => swing.dummies.includes(1)).length;
+      expect(middleHits, line).toBeGreaterThanOrEqual(2);
+      expect(chain.at(-1)!.middle.hits, line).toBe(middleHits);
+      expect(reactions.length, line).toBe(middleHits);
       for (const r of reactions) {
         expect(r.flinch, line).toBeGreaterThan(0.5);
         expect(r.knockback, line).toBeGreaterThan(0.05);

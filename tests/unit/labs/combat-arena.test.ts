@@ -16,24 +16,32 @@ import {
   fromBody,
   type ArenaLens,
 } from '../../../src/labs/combat/arena';
+import { PIP_STRIKE_REACH } from '../../../src/labs/combat/footprint';
 import { PLAY_CAMERA_DISTANCE, PLAY_CAMERA_MAX_DISTANCE } from '../../../src/labs/world/play';
-import { PLAY_AREA_RADIUS, PLAY_BODY_RADIUS, yawOf } from '../../../src/labs/world/playMotion';
+import { obstacleGap, PLAY_AREA_RADIUS, yawOf } from '../../../src/labs/world/playMotion';
 import { TOWARD_CAMERAS } from '../../../src/labs/world/registry';
 import { FIT_NDC } from '../../../src/labs/world/views';
 
 const DEG = 180 / Math.PI;
 /**
- * A Husk dummy's reach about its root, as the page reads it from the drawn bounds: its legs spread wide, and the bounds
- * are square to the world's axes, so 1.17 to 1.22 m on the GPU for the three dummies' turns. The layout checks below
- * take 1.2 m, and a body's half that, 0.6 m, for how far a blade must reach to touch it.
+ * A Husk dummy's footprint as the page reads it from the shipped GLB (labs/combat/footprint.ts, held there by
+ * tests/unit/labs/footprint.test.ts): a core of 0.80 m about its root and a head holding its mandibles, a round end
+ * 0.70 m across about a point 0.6 m ahead, reaching 1.30 m. The layout checks below take those.
+ */
+const HUSK_CORE = 0.796;
+/**
+ * A Husk dummy's reach about its root as the page reads it from the drawn bounds (play.ts groundReach), 1.17 to 1.22 m
+ * on the GPU for the three dummies' turns: what the arena's opening camera keeps in frame, and what spaces the dummies
+ * from each other. The layout checks take 1.2 m.
  */
 const MEASURED_HUSK_REACH = 1.2;
-const HUSK_REACH = MEASURED_HUSK_REACH / 2;
+const HUSK_FRONT = 1.299;
+const HUSK_HEAD = { from: 0.6, to: 0.6, radius: 0.699 };
 /**
  * How far across the ground from his root each hit's blade tip reaches at its strike, from his build's own measure of
- * each combo clip (the sidecar's strike_blade_tip, Blender's -y ahead): 1.144, 1.484 and 1.352 m. The shortest must reach
- * the middle dummy's body from where W stops him, and the longest must not reach a neighbour's from there. It read the
- * attack clip's 1.12 m while placeholders warped that clip for every hit.
+ * each combo clip (the sidecar's strike_blade_tip, Blender's -y ahead): the Quaternius hits 1.258, 1.712 and 1.619 m, the
+ * hand-keyed ones 1.136, 1.450 and 1.356 m. It read the attack clip's 1.12 m while placeholders warped that clip for
+ * every hit.
  */
 const combo = (JSON.parse(readFileSync('public/assets/commanders/commander_pip.meta.json', 'utf8')) as { notes: { combo: Record<string, { checks: { strike_blade_tip: { x: number; y: number } } }> } }).notes
   .combo;
@@ -80,17 +88,32 @@ describe('the combat arena layout', () => {
       { lateral: expect.closeTo(0, 9), ahead: expect.closeTo(3, 9) },
       { lateral: expect.closeTo(2.4764, 4), ahead: expect.closeTo(1.6933, 4) },
     ]);
-    // Walked straight at the middle one, he stops at its reach and his body's, 1.45 m along, where every hit's blade at
-    // its strike (Pip's sidecar, strike_blade_tip) reaches its body; from there a step of under a metre brings a neighbour
-    // within the longest blade's reach of its body, and no swing from there reaches a neighbour unstepped.
-    const stand = { lateral: 0, ahead: ARENA_DUMMY_DISTANCE - MEASURED_HUSK_REACH - PLAY_BODY_RADIUS };
-    expect(stand.ahead).toBeCloseTo(1.45, 9);
-    expect(BLADE_REACHES).toEqual([expect.closeTo(1.144, 3), expect.closeTo(1.484, 3), expect.closeTo(1.352, 3)]);
-    expect(ARENA_DUMMY_DISTANCE - stand.ahead - HUSK_REACH).toBeLessThan(Math.min(...BLADE_REACHES));
-    const next = Math.hypot(frame[2]!.lateral - stand.lateral, frame[2]!.ahead - stand.ahead);
-    expect(next).toBeCloseTo(2.4883, 4);
-    expect(next - (Math.max(...BLADE_REACHES) + HUSK_REACH)).toBeGreaterThan(0);
-    expect(next - (Math.max(...BLADE_REACHES) + HUSK_REACH)).toBeLessThan(1);
+    // Walked straight at the middle one, he stops where his reach in a swing (PIP_STRIKE_REACH) meets its head, 0.70 m
+    // along; every hit's blade at its strike (Pip's sidecar, strike_blade_tip) reaches past his fists into its head or
+    // body there. Phase B stopped him at its round reach widened by his body, 1.45 m along, where his fists and belly
+    // already touched the head and every lunge carried them into it.
+    const stand = { lateral: 0, ahead: ARENA_DUMMY_DISTANCE - HUSK_FRONT - PIP_STRIKE_REACH };
+    expect(stand.ahead).toBeCloseTo(0.701, 9);
+    expect(BLADE_REACHES).toEqual([1.258, 1.712, 1.619, 1.136, 1.45, 1.356].map((reach) => expect.closeTo(reach, 3)));
+    expect(Math.min(...BLADE_REACHES)).toBeGreaterThan(PIP_STRIKE_REACH);
+    // The neighbours face the spawn too, so their heads reach toward him: from where he stands, the right one's head is
+    // 1.39 m from his root, outside the forehand's 1.26 m and every hand-keyed blade's, inside the backhand's 1.71 m and
+    // the spin finisher's 1.62 m. Those two wide swings at the middle one may catch a neighbour's head now that the head
+    // counts as the body; a step of under a metre brings it within the shortest blade's reach.
+    const spawn2 = { x: 0, z: 0 };
+    const right = frame[2]!;
+    const toSpawn = Math.hypot(right.lateral - spawn2.x, right.ahead - spawn2.z);
+    const neighbour = {
+      x: right.lateral,
+      z: right.ahead,
+      radius: HUSK_CORE,
+      head: { dirX: -right.lateral / toSpawn, dirZ: -right.ahead / toSpawn, ...HUSK_HEAD },
+    };
+    const gap = obstacleGap(neighbour, stand.lateral, stand.ahead);
+    expect(gap).toBeCloseTo(1.387, 3);
+    expect(gap).toBeGreaterThan(BLADE_REACHES[0]!);
+    expect(gap).toBeLessThan(Math.max(...BLADE_REACHES));
+    expect(gap - Math.min(...BLADE_REACHES)).toBeLessThan(1);
   });
 
   it('reads where a point stands from a body, its bearing positive to the body\'s right', () => {

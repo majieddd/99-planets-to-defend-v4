@@ -93,11 +93,14 @@ describe('the Asset World registry', () => {
       expect.stringContaining('"husk" has a clip "leap"'),
       expect.stringContaining('reason for "bulwark/leap", which is no clip the manifest lists'),
     ]);
-    // The shipped registry loops every shipped clip but Pip's three combo hits, which Play Pip shows in their chain.
-    expect(Object.keys(CLIPS_NOT_SHOWN).sort()).toEqual(['commander_pip/attack_1', 'commander_pip/attack_2', 'commander_pip/attack_3']);
-    // Without those reasons, the three hits are gaps by name.
+    // The shipped registry loops every shipped clip but Pip's combo clips (both swing sets' hits and the recoveries), his
+    // guard idle and his block, which Play Pip shows in their chain or keeps for M1.
+    const unshown = ['attack_1', 'attack_2', 'attack_3', 'attack_1_hand', 'attack_2_hand', 'attack_3_hand', 'attack_1_rec', 'attack_2_rec', 'block', 'idle_guard'];
+    expect(Object.keys(CLIPS_NOT_SHOWN).sort()).toEqual(unshown.map((clip) => `commander_pip/${clip}`).sort());
+    // Without those reasons, they are gaps by name, in the manifest's order.
+    const order = manifest.assets.find((entry) => entry.name === 'commander_pip')!.animations.map((clip) => clip.name).filter((clip) => unshown.includes(clip));
     expect(coverageGaps(manifest, MEMBERS, NON_PLACEABLE, {})).toEqual(
-      ['attack_1', 'attack_2', 'attack_3'].map((hit) => expect.stringContaining(`"commander_pip" has a clip "${hit}"`)),
+      order.map((hit) => expect.stringContaining(`"commander_pip" has a clip "${hit}"`)),
     );
     const withoutIdle = MEMBERS.filter((m) => m.name !== 'husk_idle');
     expect(coverageGaps(manifest, withoutIdle)).toEqual([expect.stringContaining('"husk" has a clip "idle"')]);

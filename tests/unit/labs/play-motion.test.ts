@@ -1,7 +1,6 @@
 import { Group, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import {
-  blendRunWeight,
   clampToArea,
   clearance,
   FREE_MOTION,
@@ -36,7 +35,7 @@ import {
   type Vec3,
 } from '../../../src/labs/world/playMotion';
 import { DEFAULT_COMBAT_FEEL } from '../../../src/labs/world/combatFeel';
-import { COMBO_HITS, COMBO_READY, comboPhase, stepCombo, swingMotion } from '../../../src/labs/world/combo';
+import { COMBO_READY, comboPhase, HAND_HITS, stepCombo, swingMotion, type ComboState } from '../../../src/labs/world/combo';
 import { MEMBERS, toTangent } from '../../../src/labs/world/registry';
 import { DEFAULT_DIALS } from '../../../src/render/defaults';
 import { createPaintUniforms } from '../../../src/render/materials/painted';
@@ -440,25 +439,26 @@ describe('a swing holding him back (stepMotion)', () => {
     // At a pace kept of 0.1, from a sprint, attack_1's ceiling is 0.56 m/s. Frame by frame through its wind-up, as the
     // page runs it (the combo first, then his movement), he must stand at or under it on the first active frame.
     const feel = { ...DEFAULT_COMBAT_FEEL, moveScale: 0.1 };
-    const hit = COMBO_HITS[0]!;
+    // The hand-keyed forehand, whose 0.15 s wind-up is the short one this was found on.
+    const hit = HAND_HITS[0]!;
     const ceiling = 0.1 * PLAY_SPRINT_SPEED;
     const stopRate = PLAY_WALK_SPEED / PLAY_SECONDS_TO_STOP;
-    let combo = stepCombo(COMBO_READY, true, DT, feel).state;
+    let combo = stepCombo(COMBO_READY, true, DT, feel, DT, HAND_HITS).state;
     let state: MotionState = { x: 0, z: 0, yaw: 0, speed: PLAY_SPRINT_SPEED, drive: PLAY_SPRINT_SPEED };
     let previous = state.drive;
-    while (comboPhase(combo) === 'windup') {
-      state = stepMotion(state, moveDirection(sprintKey, 0, 1), true, DT, [], R, swingMotion(combo, feel));
+    while (comboPhase(combo, HAND_HITS) === 'windup') {
+      state = stepMotion(state, moveDirection(sprintKey, 0, 1), true, DT, [], R, swingMotion(combo, feel, HAND_HITS));
       // Never faster than the deadline needs: the drive comes down in steps no larger than the remaining gap allows.
       expect(previous - state.drive).toBeLessThanOrEqual(Math.max(stopRate * DT, previous - ceiling) + 1e-12);
       previous = state.drive;
-      combo = stepCombo(combo, false, DT, feel).state;
+      combo = stepCombo(combo, false, DT, feel, DT, HAND_HITS).state;
     }
     expect(combo.hit!.time).toBeGreaterThanOrEqual(hit.activeFrom);
     expect(state.drive).toBeLessThanOrEqual(ceiling + 1e-9);
     // At the stop rate alone, which is what the wind-up had, 5.6 m/s fell only to 1.6 m/s in its 0.15 s.
     expect(PLAY_SPRINT_SPEED - stopRate * hit.activeFrom).toBeCloseTo(1.6, 9);
     // In the active frames he holds the ceiling with the key held.
-    const active = stepMotion(state, moveDirection(sprintKey, 0, 1), true, DT, [], R, swingMotion(combo, feel));
+    const active = stepMotion(state, moveDirection(sprintKey, 0, 1), true, DT, [], R, swingMotion(combo, feel, HAND_HITS));
     expect(active.drive).toBeCloseTo(ceiling, 9);
     // At the default 0.4 the stop rate gets there first, so the deadline changes nothing: a frame of the stop rate.
     const atDefault = stepMotion({ x: 0, z: 0, yaw: 0, speed: PLAY_WALK_SPEED, drive: PLAY_WALK_SPEED }, moveDirection(walkKey, 0, 1), false, DT, [], R, {
@@ -470,10 +470,30 @@ describe('a swing holding him back (stepMotion)', () => {
     expect(atDefault.drive).toBeCloseTo(PLAY_WALK_SPEED - stopRate * DT, 12);
   });
 
-  it("holds the run's weight only while it is told to, and otherwise follows his speed", () => {
-    expect(blendRunWeight(0.8, 0, true)).toBe(0.8);
-    expect(blendRunWeight(0.8, 0, false)).toBe(0);
-    expect(blendRunWeight(0.8, 0.6, false)).toBe(runWeight(0.6));
+  it("follows his speed with the run's weight, the finisher included now that it slows him rather than stopping him", () => {
+    expect(runWeight(0)).toBe(0);
     expect(runWeight(0.6)).toBeCloseTo(0.5, 12);
+    expect(runWeight(5)).toBe(1);
+  });
+
+  it('keeps the finisher at a reduced pace, under the light hits, a held key giving a speed of at most the finisher pace', () => {
+    // The owner's rule for the last swing: he slows down rather than stopping. From a walk, W held through the finisher's
+    // active frames keeps a speed above 0 and at most finisherPace of the walk, 0.48 m/s at the default 0.15.
+    const feel = { ...DEFAULT_COMBAT_FEEL };
+    const finisher = HAND_HITS[2]!;
+    let combo: ComboState = { ...COMBO_READY, next: 3 };
+    combo = stepCombo(combo, true, DT, feel, DT, HAND_HITS).state;
+    let state: MotionState = { x: 0, z: 0, yaw: 0, speed: PLAY_WALK_SPEED, drive: PLAY_WALK_SPEED };
+    const speeds: number[] = [];
+    while (combo.hit && combo.hit.time < finisher.activeTo) {
+      state = stepMotion(state, moveDirection(walkKey, 0, 1), false, DT, [], R, swingMotion(combo, feel, HAND_HITS));
+      if (combo.hit.time >= finisher.activeFrom) speeds.push(state.speed);
+      combo = stepCombo(combo, false, DT, feel, DT, HAND_HITS).state;
+    }
+    expect(speeds.length).toBeGreaterThan(3);
+    for (const speed of speeds) {
+      expect(speed).toBeGreaterThan(0);
+      expect(speed).toBeLessThanOrEqual(feel.finisherPace * PLAY_WALK_SPEED + 1e-9);
+    }
   });
 });

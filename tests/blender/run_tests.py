@@ -517,9 +517,25 @@ def test_commander_pip_combo_sources_are_checked_before_anything_is_baked(tmp):
             assert word in str(error), error
         else:
             raise AssertionError(f'COMBO_SOURCE {bad} was taken')
-    # The shipped sources pass against the repository, and hand-keyed hits need no file at all.
+    # The shipped sources pass against the repository (the Quaternius library is committed beside its licence), and
+    # hand-keyed hits need no file at all.
     pip.check_combo_sources(ROOT)
+    assert pip.COMBO_SOURCE == 'quaternius' and pip.COMPARE_SOURCE == {hit: 'hand' for hit in pip.COMBO}, (pip.COMBO_SOURCE, pip.COMPARE_SOURCE)
+    assert (ROOT / pip.QUATERNIUS['file']).is_file() and (ROOT / pip.QUATERNIUS['file']).with_name('License.txt').is_file()
     pip.check_combo_sources(tmp, {hit: 'hand' for hit in pip.COMBO})
+    # The library selected where it is not committed stops the build, naming the file; any other word is refused.
+    try:
+        pip.check_combo_sources(tmp, 'quaternius')
+    except FileNotFoundError as error:
+        assert 'UAL2_Standard_RM.glb' in str(error), error
+    else:
+        raise AssertionError('the Quaternius source was taken without its file')
+    try:
+        pip.check_combo_sources(tmp, 'mixamo')
+    except ValueError as error:
+        assert "'quaternius'" in str(error) and 'mixamo' in str(error), error
+    else:
+        raise AssertionError('an unknown combo source was taken')
     # Two hits selecting UniMate with no generation committed: both files are named at once, before anything is baked.
     picks = {'attack_1': 'unimate', 'attack_2': 'hand', 'attack_3': 'unimate'}
     try:
@@ -558,9 +574,10 @@ def test_commander_pip_combo_sources_are_checked_before_anything_is_baked(tmp):
 
 def test_commander_pip_hand_keys_rise_inside_each_clip(tmp):
     from recipes import commander_pip as pip
+    # The hand-keyed keys belong to the comparison set's entries (attack_1_hand ...), which keep the combo's old numbers.
     timings = json.loads((ROOT / 'src' / 'shared' / 'timings.json').read_text(encoding='utf-8'))
     for hit in pip.COMBO:
-        strike, end, _ = pip.combo_timing(timings, hit)
+        strike, end, _ = pip.combo_timing(timings, hit, pip.COMPARE_SUFFIX)
         times = pip.hand_key_times(hit, strike, end)
         assert times[0] == 1.0 and abs(times[-1] - end) < 1e-9 and all(b > a for a, b in zip(times, times[1:])), (hit, times)
     g = pip.GUARD_SPEC
@@ -577,11 +594,22 @@ def test_commander_pip_hand_keys_rise_inside_each_clip(tmp):
 
 def test_commander_pip_combo_timing_reads_each_cancel_from_timings_json(tmp):
     from recipes import commander_pip as pip
-    # The shipped file: the light hits cancel at 0.30 s, frame 10 from 1 at 30 fps, the finisher not at all.
+    # The shipped file: the hand-keyed light hits cancel at 0.30 s, frame 10 from 1 at 30 fps, the Quaternius ones at
+    # 0.367 s, frame 12.01, and neither finisher at all.
     timings = json.loads((ROOT / 'src' / 'shared' / 'timings.json').read_text(encoding='utf-8'))
-    frames = {hit: pip.combo_timing(timings, hit) for hit in pip.COMBO}
+    frames = {hit: pip.combo_timing(timings, hit, pip.COMPARE_SUFFIX) for hit in pip.COMBO}
     assert [abs(frames[hit][2] - 10.0) < 1e-9 for hit in ('attack_1', 'attack_2')] == [True, True], frames
     assert frames['attack_3'][2] is None, frames
+    library = {hit: pip.combo_timing(timings, hit) for hit in pip.COMBO}
+    assert [abs(library[hit][2] - (1 + 0.367 * 30)) < 1e-9 for hit in ('attack_1', 'attack_2')] == [True, True], library
+    assert library['attack_3'][2] is None, library
+    # A missing comparison entry is named by its own key.
+    try:
+        pip.combo_timing({'commanders': {pip.NAME: {}}}, 'attack_1', pip.COMPARE_SUFFIX)
+    except ValueError as error:
+        assert 'attack_1_hand entry' in str(error), error
+    else:
+        raise AssertionError('a missing attack_1_hand entry was taken')
     assert not hasattr(pip, 'COMBO_CANCEL'), 'the recipe keeps a cancel table of its own again'
     # Another set's numbers come through the file alone: a 0.7 s hit striking at 0.32 s and cancelling at 0.45 s.
     other = {'commanders': {pip.NAME: {'attack_1': {'duration': 0.7, 'strike': 0.32, 'activeFrom': 0.26, 'activeTo': 0.4, 'cancel': 0.45}}}}
@@ -671,6 +699,46 @@ def test_charforge_leg_ik_moves_the_ankle_by_a_step_and_keeps_the_foot_level(tmp
         assert 'Left leg' in str(error) and 'beyond' in str(error), error
     else:
         raise AssertionError('an ankle out of reach was taken')
+
+
+def test_charforge_match_points_a_regripped_blade_where_the_old_grip_pointed(tmp):
+    """The comparison set's wrist turn (pose_rotations 'match', lib/motion.py solve with {'held', 'aim'}): a hand carrying a
+    blade axis turned 36.6 degrees from the one its keys were written for is turned at the wrist so the new axis points
+    where the old one points as the hand stands, by the smallest turn; the hand's head stays where it was."""
+    import math
+    from mathutils import Matrix, Vector
+    from lib import charforge
+    P = charforge.P
+    data = bpy.data.armatures.new('arm')
+    arm = bpy.data.objects.new('arm', data)
+    bpy.context.scene.collection.objects.link(arm)
+    scene.select_only([arm])
+    bpy.ops.object.mode_set(mode='EDIT')
+    fore = data.edit_bones.new(P + 'RightForeArm')
+    fore.head, fore.tail = (0, 0, 1.0), (-0.25, 0, 1.0)
+    hand = data.edit_bones.new(P + 'RightHand')
+    hand.head, hand.tail = (-0.25, 0, 1.0), (-0.33, 0, 1.0)
+    hand.parent = fore
+    bpy.ops.object.mode_set(mode='OBJECT')
+    old = Vector((-0.3, -0.2, 0.93)).normalized()
+    new = (Matrix.Rotation(math.radians(36.6), 3, Vector((0.0, 1.0, 0.0))) @ old).normalized()
+    ops = [('turn', P + 'RightForeArm', (0.0, 0.0, 1.0), 0.7), ('match', P + 'RightHand', tuple(new), tuple(old))]
+    pose = charforge.pose_rotations(arm, ops)
+    for pb in arm.pose.bones:
+        pb.rotation_mode = 'QUATERNION'
+        pb.rotation_quaternion = pose[pb.name]
+    bpy.context.view_layer.update()
+    pb = arm.pose.bones[P + 'RightHand']
+    carried = (pb.matrix @ arm.data.bones[pb.name].matrix_local.inverted()).to_3x3()
+    # Where the old axis pointed with only the forearm turned: the forearm's turn carries it.
+    want = Matrix.Rotation(0.7, 3, Vector((0.0, 0.0, 1.0))) @ old
+    assert (carried @ new - want).length < 1e-5, (tuple(carried @ new), tuple(want))
+    # The smallest turn: its angle in the hand's own frame is the angle between the two axes (35.8 degrees here, the
+    # 36.6 degree turn about y taken off an axis that leans out of the turn's plane).
+    between = math.degrees(old.angle(new))
+    assert abs(math.degrees(pose[P + 'RightHand'].angle) - between) < 1e-3, (math.degrees(pose[P + 'RightHand'].angle), between)
+    expected_head = Matrix.Rotation(0.7, 3, Vector((0.0, 0.0, 1.0))) @ (Vector((-0.25, 0, 1.0)) - Vector((0, 0, 1.0))) + Vector((0, 0, 1.0))
+    assert (pb.head - expected_head).length < 1e-6, (tuple(pb.head), tuple(expected_head))
 
 
 def _flat(value, shape=(4, 4)):

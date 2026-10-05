@@ -40,20 +40,25 @@ import type { HitContract } from './combo';
  */
 export const TRAIL_LENGTH_MAX = 0.2;
 export const TRAIL_FPS_MAX = 240;
-/** The blade tip's fastest, metres a second: the finisher's peak of 64 m/s in Pip's sidecar, rounded up. */
-export const TRAIL_TIP_SPEED_MAX = 65;
+/**
+ * The blade tip's fastest, metres a second, on the clock the trail runs on: the Quaternius backhand's peak of 70.8 m/s
+ * in Pip's sidecar (the build's blade speed; the spin finisher 66.7, the forehand 58.0) at the playback speed's 1.6
+ * ceiling, 113 m/s, rounded up. It was 65, the hand-keyed finisher's 64 m/s rounded up, which the backhand passed even
+ * at a speed of 1, so a 0.2 s stroke of it overran the ring and lost its tail.
+ */
+export const TRAIL_TIP_SPEED_MAX = 115;
 /**
  * A fast arc is subsampled between frames so the ribbon curves rather than breaking into straight chords: a sample
- * every TRAIL_SUBSAMPLE_M of the tip's travel, at most TRAIL_SUBSAMPLES_MAX in a frame. The finisher's tip moves up to
- * 64 m/s, about a metre a frame at 60 fps and 3.2 m at the labs' 1/20 s step, so 10 samples a frame keep its chords to
- * 0.1 m at 60 fps.
+ * every TRAIL_SUBSAMPLE_M of the tip's travel, at most TRAIL_SUBSAMPLES_MAX in a frame. At TRAIL_TIP_SPEED_MAX the tip
+ * moves about 1.9 m a frame at 60 fps, so 20 samples a frame keep its chords to 0.1 m there; 10, set for the hand-keyed
+ * 64 m/s, left 0.19 m chords at the fastest.
  */
 export const TRAIL_SUBSAMPLE_M = 0.1;
-export const TRAIL_SUBSAMPLES_MAX = 10;
+export const TRAIL_SUBSAMPLES_MAX = 20;
 /**
  * The most blade samples the ring holds: a stroke of TRAIL_LENGTH_MAX at the tip's fastest takes one sample each
  * TRAIL_SUBSAMPLE_M of its travel plus at most one more a frame (the subsampling rounds up), and at TRAIL_FPS_MAX
- * frames a second that is 0.2 x (650 + 240) = 178, plus the frame before's pose the stroke starts from. It was 128, a
+ * frames a second that is 0.2 x (1,150 + 240) = 278, plus the frame before's pose the stroke starts from. It was 128, a
  * 0.2 s trail at 60 fps, and a 0.2 s trail at 144 Hz needed about 145 (the ring then dropped the stroke's tail early).
  */
 export const TRAIL_CAPACITY = Math.ceil(TRAIL_LENGTH_MAX * (TRAIL_TIP_SPEED_MAX / TRAIL_SUBSAMPLE_M + TRAIL_FPS_MAX)) + 1;

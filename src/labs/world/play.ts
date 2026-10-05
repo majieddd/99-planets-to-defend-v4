@@ -29,35 +29,35 @@ import {
   bufferOpensAt,
   COMBO_READY,
   comboPhase,
-  COMBO_HITS,
   comboWeights,
   contractOf,
   fadeStep,
   FIRST_FADE_STEP,
-  holdsRunWeight,
   stepCombo,
   swingMotion,
+  swingSetContracts,
   type ComboFrame,
   type ComboPhase,
   type ComboState,
   type ComboStep,
   type HitContract,
-  type HitName,
+  type SwingSet,
 } from './combo';
-import { hitClips, splitClip, upperBodyBones, type HitClip, type HitSource } from './comboClips';
+import { hipsBoneName, hitClips, splitClip, splitHips, upperBodyBones, type HitClip, type HitSource } from './comboClips';
 import type { PlacedMember } from './layout';
-import { freshLunge, lungeBodies, resetLunge, rootMotionCurves, ScriptedLunge, stepLunge, type LungeCurve } from './lunge';
+import { freshLunge, resetLunge, rootMotionCurves, ScriptedLunge, stepLunge, type LungeCurve } from './lunge';
 import {
-  blendRunWeight,
   clearance,
   FREE_MOTION,
   groundForward,
   moveDirection,
+  obstacleGap,
   PLAY_BODY_RADIUS,
   PLAY_MIN_MEMBER_REACH,
   PLAY_SPAWN,
   runLoopDistance,
   runTimeScale,
+  runWeight,
   stepMotion,
   type FootSample,
   type MotionState,
@@ -82,6 +82,36 @@ export const PLAY_TARGET_HEIGHT = 1.1;
 export const PLAY_FOLLOW_RATE = 10;
 /** The moments the run clip is sampled at, evenly over one loop, to measure its stride. */
 export const PLAY_STRIDE_SAMPLES = 64;
+/** The guard idle Pip raises in combat (Quaternius's Idle_Shield_Loop), in place of the relaxed idle. */
+export const GUARD_IDLE = 'idle_guard';
+/**
+ * How near a target's footprint (widened by his reach, as he walks round it) his root must come for him to raise his
+ * guard, in metres: within half a metre of where his walk stops at it. At the arena's start he stands 0.82 m from the
+ * middle dummy's footprint and keeps the relaxed idle; one step toward it raises the guard.
+ */
+export const GUARD_NEAR_M = 0.5;
+/** Seconds the guard idle takes to take over from the relaxed idle, or to hand back to it. */
+export const GUARD_BLEND_SECONDS = 0.4;
+/**
+ * Seconds the legs take to follow a change in the share of a clip's root motion he is given (legShare): quick enough to
+ * meet a lunge cut short at a body within a few frames, slow enough that the cut does not snap the legs to the stance.
+ */
+export const LEG_SHARE_SECONDS = 0.08;
+
+/**
+ * The share of a clip's leg motion his legs take, from the share of its root motion he is given: a clip with root motion
+ * places its feet for the travel it records, so a lunge the assist shortens to `planned` of the curve's `reach`, or a
+ * body stops, would slide the planted feet back under him by what was cut (the forehand from contact, 0.75 m of steps
+ * on the spot). Weighing the clip's legs by the share he travels, and the stance by the rest, keeps the feet where they
+ * stand: the clip's feet slide back by what is cut while the stance's feet are carried on by what is kept, and the two
+ * cancel at that weight. Only the legs: the hips stay the clip's (Halves), since they turn his upper body and so aim his
+ * blade. A clip with no root motion (the scripted lunge) keeps its legs whole.
+ */
+export function legShare(curve: LungeCurve | null, planned: number | null, blocked: boolean): number {
+  if (!curve || curve.source !== 'root' || !(curve.reach > 0)) return blocked && curve?.source === 'root' ? 0 : 1;
+  if (blocked) return 0;
+  return planned === null ? 1 : Math.min(1, Math.max(0, planned / curve.reach));
+}
 
 const UP = new Vector3(0, 1, 0);
 const ASSET = 'commander_pip';
@@ -90,6 +120,7 @@ const ASSET = 'commander_pip';
  * assets:check holds the exported clip to: the placeholder hits are warped so this moment lands on each hit's own strike.
  */
 const SOURCE_STRIKE = timings.commanders.commander_pip.attack.strike;
+const SET_NAMES: readonly SwingSet[] = ['quaternius', 'hand'];
 
 /** What the test handle and the evidence read of the play mode. */
 export interface PlayReading {
@@ -98,22 +129,31 @@ export interface PlayReading {
   tangent: number[] | null;
   yaw: number;
   speed: number;
-  /** The run's weight against the idle by his speed (held while the finisher fades in over a stop). */
+  /** The run's weight against the idle by his speed. */
   runWeight: number;
   runTimeScale: number;
   /** The run clip's measured loop: the ground it covers, its length in seconds, and so the ground speed it plays at 1. */
   stride: { loopMetres: number; loopSeconds: number; clipSpeed: number } | null;
-  /** How far he stands outside the nearest member's reach, in metres on the tangent plane (negative inside one). */
+  /** How far he stands outside the nearest obstacle, in metres on the tangent plane (negative inside one). */
   clearance: number | null;
+  /** The swing set the combo plays now, and the sets this build offers. */
+  swingSet: SwingSet;
+  swingSets: SwingSet[];
   /** Whether a hit of the combo is playing, and its clip time, in seconds (null out of a hit). */
   attacking: boolean;
   attackTime: number | null;
   /** The playing hit's own weight, from 0 to 1. */
   attackWeight: number;
-  /** The playing hit's contract: its length, its strike moment and its cancel point, in seconds (null out of a hit). */
+  /** The playing hit's clip and contract: its name, its length, its strike moment and its cancel point (null out of a hit). */
+  attackClip: string | null;
   attackSeconds: number | null;
   strikeAt: number | null;
   cancelAt: number | null;
+  /** The playing hit's playback speed, and the clip time from which the next hit (or the finisher's new chain) may start. */
+  attackSpeed: number | null;
+  opensAt: number | null;
+  /** Whether the playing hit is the finisher. */
+  finisher: boolean;
   /** When a press starts to count during the playing hit (bufferOpensAt), in seconds into it (null out of a hit). */
   bufferOpensAt: number | null;
   /** The strikes since he came out to play, in all, by hit (attack_1 to attack_3), and the hit that struck last. */
@@ -129,17 +169,24 @@ export interface PlayReading {
   sinceEnd: number;
   /** The clip time the hit before had reached when this one began (null for a chain's first hit or out of a hit). */
   chainedAt: number | null;
-  /** The hit fading out under the playing one (0 for none), and its weight. */
+  /** The clip fading out under the playing hit (its hit's step, 0 for none), its weight, and whether it is a recovery clip. */
   outgoingStep: number;
   outgoingWeight: number;
-  /** Where each hit's clip came from, attack_1 to attack_3 (null without a combo), and the playing hit's. */
+  outgoingRecovery: boolean;
+  /** The recovery clip playing after a chain stopped (null for none): its clip, the hit it follows, its time and weight. */
+  recovery: { clip: string; step: number; time: number; weight: number; moved: number } | null;
+  /** The guard idle's share of the idle, from 0 (the relaxed idle) to 1. */
+  guardWeight: number;
+  /** The share of the current clip's leg motion his legs take (legShare), the stance the rest. */
+  legShare: number;
+  /** Where each hit's clip came from, attack_1 to attack_3 of the set playing (null without a combo), and the playing hit's. */
   sources: HitSource[] | null;
   source: HitSource | null;
-  /** Each hit's clip length less its contract's, in seconds, attack_1 to attack_3 (null without a combo; hitClips). */
+  /** Each hit's clip length less its contract's, in seconds (null without a combo; hitClips). */
   clipLengthOff: number[] | null;
   /** Presses dropped since he came out: before a buffer opened, while one was kept, or on a frozen frame. */
   dropped: number;
-  /** The hits' total weight on the upper body and on the lower body, and the run's weight on the legs. */
+  /** The clips' total weight on the upper body and on the lower body, and the run's weight on the legs. */
   upperAttackWeight: number;
   lowerAttackWeight: number;
   legsRunWeight: number;
@@ -158,8 +205,10 @@ export interface PlayReading {
    * chose (an index into the targets, or -1), the turn it adds in degrees, and whether a body or the edge stopped it.
    */
   lunge: { moved: number; planned: number; target: number; turnDeg: number; blocked: boolean; source: LungeCurve['source'] | null; total: number };
-  /** Where each hit's lunge curve comes from, attack_1 to attack_3: its clip's root motion, or the scripted profile. */
+  /** Where each hit's lunge curve comes from, attack_1 to attack_3 of the set playing: its clip's root motion, or the scripted profile. */
   lungeSources: LungeCurve['source'][];
+  /** What the root-motion records said when they were read: a step back noted, a faulty record dropped. */
+  rootMotionNotes: string[];
   /** The sword trail: its samples, its brightest sample's shade and whether it is taking samples. */
   trail: TrailReading;
   /** The blade's base and tip in world space as last drawn, or null without a measured blade. */
@@ -229,8 +278,9 @@ export function worldPlayStart(): PlayStart {
 /**
  * A body's reach across the ground from its root at `at`, from its drawn bounds: their farthest face from the root, and
  * never less than PLAY_MIN_MEMBER_REACH. The patch lies within 7 degrees of level where the members and the arena's
- * dummies stand, so world x and z stand in for the ground's own two directions. Every obstacle he walks round, a member
- * of the Asset World or a training dummy, is read this way and widened by his own PLAY_BODY_RADIUS.
+ * dummies stand, so world x and z stand in for the ground's own two directions. Every member of the Asset World is read
+ * this way and widened by his own PLAY_BODY_RADIUS; a training dummy is met at its footprint instead
+ * (labs/combat/footprint.ts), and this reach only spaces the dummies from each other.
  */
 export function groundReach(at: Vector3, bounds: Box3): number {
   const { min, max } = bounds;
@@ -249,15 +299,17 @@ export interface PipPlay {
   /** False when the page has no Pip to play (a build without the assets). */
   readonly available: boolean;
   /**
-   * The combo's contracts he plays (COMBO_HITS from src/shared/timings.json unless the page hands others), which the
-   * arena's impact reads too, so a hit's active frames, strike and cancel come from one place.
+   * The contracts of the swing set he plays now (combatFeel's swingSet, from src/shared/timings.json), which the arena's
+   * impact and the sounds read too, so a hit's active frames, strike and cancel come from one place. A change of set
+   * takes effect when no hit or recovery clip plays.
    */
   readonly contracts: readonly HitContract[];
   readonly active: boolean;
   /**
    * Puts him out at `start` (the Asset World's, worldPlayStart, by default) among the reaches `obstacles` gives on each
    * update, his face blinking on `seed` and held while `frozen`. `targets` gives what the lunge's assist may turn him
-   * toward (the arena's dummies); the Asset World gives none, so there he lunges straight ahead.
+   * toward and what raises his guard when near (the arena's dummies); the Asset World gives none, so there he lunges
+   * straight ahead and raises his guard only after a hit.
    */
   enter(camera: PerspectiveCamera, controls: OrbitControls, obstacles: ObstacleSource, seed: number, frozen: boolean, start?: PlayStart, targets?: ObstacleSource): void;
   exit(controls: OrbitControls): void;
@@ -279,15 +331,18 @@ export interface PipPlay {
   setFrozen(on: boolean): void;
   reading(): PlayReading;
   /**
-   * His root on the tangent plane, or null when he is not out: one object, rewritten on each call, for a caller that
-   * reads it often (a knocked-back dummy stops at his body on every push), where reading() builds the whole reading.
+   * His root on the tangent plane and his facing, or null when he is not out: one object, rewritten on each call, for a
+   * caller that reads it often (a knocked-back dummy stops at his body on every push), where reading() builds the whole
+   * reading.
    */
-  at(): Readonly<{ x: number; z: number }> | null;
+  at(): Readonly<{ x: number; z: number; yaw: number }> | null;
   /**
    * Writes the blade's base and tip in world space as last drawn into `base` and `tip`, and the point its sweep turns
    * about (his shoulders, BLADE_SWING_PIVOT_M up his up line) into `pivot`; false without a blade.
    */
   blade(base: Vector3, tip: Vector3, pivot?: Vector3): boolean;
+  /** His rig as drawn, or null when he is not out: an evidence reading's (the arena's body gap), not the page's. */
+  rig(): Object3D | null;
 }
 
 /** The first bone whose name ends with one of the names, in the order given: GLTFLoader strips Mixamo's colon. */
@@ -330,29 +385,32 @@ function measureRunLoop(template: Object3D, clip: AnimationClip): PlayReading['s
   return loopMetres === null ? null : { loopMetres, loopSeconds: clip.duration, clipSpeed: loopMetres / clip.duration };
 }
 
-/** A clip's two halves (comboClips.ts, splitClip), or the whole clip as the lower half when the rig has no mask. */
+/**
+ * A clip's halves (comboClips.ts, splitClip), its lower half parted again into its hips and its legs (splitHips), or the
+ * whole clip as the legs when the rig has no mask. The hips carry the upper body and take the lower half's weight; the
+ * legs take it too, less what legShare gives the stance.
+ */
 interface Halves {
   upper: AnimationClip | null;
+  hips: AnimationClip | null;
   lower: AnimationClip;
 }
 
-/** A clip's two actions on the play mixer. */
+/** A clip's actions on the play mixer, one for each part of Halves. */
 interface HalfActions {
   upper: AnimationAction | null;
+  hips: AnimationAction | null;
   lower: AnimationAction;
 }
 
-/**
- * The play prototype's Pip: an instance of his rig of its own, not one of the placed members, which the keys or the
- * thumb pad walk about the patch while the camera follows, and F, a click or the attack button swing his sword through
- * the three-hit combo (combo.ts: the chain, the buffered press, the crossfades, and how each hit slows and turns him).
- * The light hits play on his upper body over the run or the idle, the finisher on his whole body; his clips are split
- * at the spine for it (comboClips.ts). His sword trail goes in `energy`, the page's energy scene (labs/shared/paintedStage.ts),
- * which the pipeline draws over the inked frame. `feel` is the page's one combat feel object, which the panel's sliders write and
- * every frame reads, so a change takes effect on the next frame. Call it before buildAssetWorld: it keeps a copy of his
- * rig in the bind pose, before the world's mixers pose the loaded one, because the face driver reads the jaw's axis
- * from it.
- */
+/** One swing set as Play Pip plays it: its contracts, each hit's clip and halves, and each light hit's recovery clip's halves. */
+interface SetClips {
+  contracts: readonly HitContract[];
+  hits: HitClip[];
+  hitHalves: Halves[];
+  recoveryHalves: (Halves | null)[];
+}
+
 /** What Play Pip is made from (createPipPlay). */
 export interface PipPlayOptions {
   /** The page's loaded assets, of which he takes commander_pip. */
@@ -369,57 +427,127 @@ export interface PipPlayOptions {
   feel: CombatFeel;
   /** The painted materials' shared brush atlas uniform, which the trail paints with (a flat grey without it). */
   brush?: IUniform<Texture | null>;
-  /** The combo's contracts, COMBO_HITS by default: a new set of clips with new numbers drops in here. */
-  contracts?: readonly HitContract[];
   /**
-   * The notes of his model's sidecar (its .meta.json's `notes`), whose `root_motion` gives a hit's lunge curve from its
-   * clip's root motion (lunge.ts, rootMotionCurves); null or absent, each hit takes it from its clip's glTF extras, or
-   * the scripted profile.
+   * Each swing set's contracts, swingSetContracts by default: a new set of clips with new numbers drops in here.
+   */
+  swingSets?: Partial<Record<SwingSet, readonly HitContract[]>>;
+  /**
+   * The notes of his model's sidecar (its .meta.json's `notes`), whose `root_motion` gives a clip's lunge curve from its
+   * root motion (lunge.ts, rootMotionCurves); null or absent, each clip takes it from its glTF extras, or a hit the
+   * scripted profile.
    */
   sidecarNotes?: unknown;
 }
 
+/**
+ * The play prototype's Pip: an instance of his rig of its own, not one of the placed members, which the keys or the
+ * thumb pad walk about the patch while the camera follows, and F, a click or the attack button swing his sword through
+ * the three-hit combo (combo.ts: the chain, the buffered press, the crossfades, and how each hit slows and turns him).
+ * The hits, the light hits' recovery clips and the finisher all play on his upper body over the run or the idle, and on
+ * his legs in the idle's place, so he keeps walking through every swing; his clips are split at the spine for it
+ * (comboClips.ts). In combat he raises his guard (GUARD_IDLE) in place of the relaxed idle. A hit's root motion carries
+ * him as his lunge, combined with his drive and swept against the bodies (lunge.ts). His sword trail goes in `energy`,
+ * the page's energy scene (labs/shared/paintedStage.ts), which the pipeline draws over the inked frame. `feel` is the
+ * page's one combat feel object, which the panel's sliders write and every frame reads, so a change takes effect on the
+ * next frame. Call it before buildAssetWorld: it keeps a copy of his rig in the bind pose, before the world's mixers
+ * pose the loaded one, because the face driver reads the jaw's axis from it.
+ */
 export function createPipPlay(options: PipPlayOptions): PipPlay {
   const { assets, ground, parent, energy, hullMaterial, planetRadius, feel } = options;
   const brush: IUniform<Texture | null> = options.brush ?? { value: flatTexture(128) };
-  const contracts = options.contracts ?? COMBO_HITS;
-  // Each hit's lunge curve from its clip's root motion, where the build records one; the rest take the scripted profile
-  // when they begin. A record with a fault is named and skipped, so its hit lunges by the profile.
-  const extras: Partial<Record<HitName, unknown>> = {};
-  for (const contract of contracts) {
-    const clip = assets.get(ASSET)?.animations.find((each) => each.name === contract.name);
-    const motion = (clip?.userData as { root_motion?: unknown } | undefined)?.root_motion;
-    if (motion !== undefined) extras[contract.name] = motion;
-  }
-  const rootCurves = rootMotionCurves(
-    contracts.map((contract) => contract.name),
-    options.sidecarNotes ?? null,
-    extras,
-    (said) => console.warn(`Play Pip: ${said}`),
-  );
   const asset = assets.get(ASSET);
+  const clipNamed = (name: string): AnimationClip | null => asset?.animations.find((clip) => clip.name === name) ?? null;
   const template = asset ? cloneRig(asset.root) : null;
-  const idleClip = asset?.animations.find((clip) => clip.name === 'idle') ?? null;
-  const runClip = asset?.animations.find((clip) => clip.name === 'run') ?? null;
-  const hits: HitClip[] | null = asset ? hitClips(asset.animations, SOURCE_STRIKE, contracts) : null;
+  const idleClip = clipNamed('idle');
+  const runClip = clipNamed('run');
+  const guardClip = clipNamed(GUARD_IDLE);
   const upperNames = template ? upperBodyBones(template) : null;
   if (template && !upperNames) console.warn('Play Pip: the rig has no spine bone to split the attacks at, so every hit plays on his whole body');
-  const halvesOf = (clip: AnimationClip): Halves => (upperNames ? splitClip(clip, upperNames) : { upper: null, lower: clip });
+  const hipsName = template ? hipsBoneName(template) : null;
+  const halvesOf = (clip: AnimationClip): Halves => {
+    if (!upperNames) return { upper: null, hips: null, lower: clip };
+    const { upper, lower } = splitClip(clip, upperNames);
+    if (!hipsName) return { upper, hips: null, lower };
+    const parted = splitHips(lower, hipsName);
+    return { upper, hips: parted.hips, lower: parted.legs };
+  };
+
+  // Each swing set's clips. A recovery clip timings.json names but the GLB lacks is dropped from its hit's contract,
+  // named in the console, so the chain stops there as a hit without one does rather than weighing a clip that is not
+  // there over the idle, which would let his bones fall toward the bind pose.
+  const sets: Partial<Record<SwingSet, SetClips>> = {};
+  for (const name of SET_NAMES) {
+    if (!asset) break;
+    const given = options.swingSets?.[name] ?? swingSetContracts(name);
+    const contracts = given.map((contract) => {
+      if (contract.recovery === null || clipNamed(contract.recovery)) return contract;
+      console.warn(`Play Pip: ${contract.name}'s recovery clip ${contract.recovery} is not in the GLB, so a chain that stops after it fades to the idle`);
+      return { ...contract, recovery: null, recoveryDuration: null };
+    });
+    // The hand-keyed set plays only from its own clips: warped placeholders of the attack would pass for it unseen.
+    if (name === 'hand' && contracts.some((contract) => !clipNamed(contract.name))) continue;
+    const hits = hitClips(asset.animations, SOURCE_STRIKE, contracts);
+    if (!hits) continue;
+    sets[name] = {
+      contracts,
+      hits,
+      hitHalves: hits.map((hit) => halvesOf(hit.clip)),
+      recoveryHalves: contracts.map((contract) => {
+        const clip = contract.recovery ? clipNamed(contract.recovery) : null;
+        return clip ? halvesOf(clip) : null;
+      }),
+    };
+  }
+  const offered = SET_NAMES.filter((name) => sets[name]);
+  // Each clip's lunge curve from its root motion, where the build records one; a hit without one takes the scripted
+  // profile when it begins. A faulty record is named and skipped; a step back is noted (rootMotionNotes).
+  const rootMotionNotes: string[] = [];
+  const curveNames = offered.flatMap((name) => sets[name]!.contracts.flatMap((contract) => [contract.name, ...(contract.recovery ? [contract.recovery] : [])]));
+  const extras: Record<string, unknown> = {};
+  const durations: Record<string, number> = {};
+  for (const name of curveNames) {
+    const clip = clipNamed(name);
+    if (!clip) continue;
+    durations[name] = clip.duration;
+    const motion = (clip.userData as { root_motion?: unknown } | undefined)?.root_motion;
+    if (motion !== undefined) extras[name] = motion;
+  }
+  const rootCurves = rootMotionCurves(
+    curveNames,
+    options.sidecarNotes ?? null,
+    extras,
+    (said, kind) => {
+      rootMotionNotes.push(said);
+      // A step back is a record as the clip was authored (the Quaternius backhand's 6 cm), so it is noted, not warned.
+      if (kind === 'fault') console.warn(`Play Pip: ${said}`);
+      else console.info(`Play Pip: ${said}`);
+    },
+    durations,
+  );
   const idleHalves = idleClip ? halvesOf(idleClip) : null;
   const runHalves = runClip ? halvesOf(runClip) : null;
-  const hitHalves = hits ? hits.map((hit) => halvesOf(hit.clip)) : null;
+  const guardHalves = guardClip ? halvesOf(guardClip) : null;
   // The blade, read once from the bind-pose copy (blade.ts): its base and tip in the hand's frame, which every copy of
   // the rig shares.
   const bladeMeasure = template ? measureBlade(template) : null;
   if (template && !bladeMeasure) console.warn('Play Pip: the rig has no blade on its right hand, so no sword trail is drawn');
   let stride: PlayReading['stride'] | undefined;
 
+  // The set the combo plays, from the feel, while the build offers it.
+  const wanted = (): SwingSet | null => (sets[feel.swingSet] ? feel.swingSet : (offered[0] ?? null));
+  let setName: SwingSet = wanted() ?? 'quaternius';
+  let set: SetClips | null = sets[setName] ?? null;
+  let contracts: readonly HitContract[] = set ? set.contracts : swingSetContracts(setName);
+
   let root: Object3D | null = null;
   let feet: (Object3D | null)[] = [];
   let mixer: AnimationMixer | null = null;
   let idle: HalfActions | null = null;
+  let guard: HalfActions | null = null;
   let run: HalfActions | null = null;
-  let hitActions: HalfActions[] = [];
+  // Each set's hit actions and recovery actions, by the hit's step; the set not playing stands at no weight.
+  let hitActions: Partial<Record<SwingSet, HalfActions[]>> = {};
+  let recoveryActions: Partial<Record<SwingSet, (HalfActions | null)[]>> = {};
   let face: FaceDriver | null = null;
   let hand: Object3D | null = null;
   let trail: SwordTrail | null = null;
@@ -432,18 +560,20 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
   let obstacles: ObstacleSource = () => noObstacles;
   let targets: ObstacleSource = () => noObstacles;
   // The playing hit's lunge (lunge.ts): its curve taken when the hit begins, planned when the curve first moves, carried
-  // by the curve's metres the hit's time has reached, swept against the bodies' cores a frame's share at a time
-  // (lungeBodies writes them into `coreBodies`, reused).
+  // by the curve's metres the hit's time has reached and swept against the bodies a frame's share at a time. A recovery
+  // clip playing alone carries its own root motion the same way, straight ahead.
   const lunge = freshLunge();
+  const recoveryLunge = freshLunge();
   const lungeAt = { x: 0, z: 0, yaw: 0 };
-  const coreBodies: Obstacle[] = [];
+  const driven = { metres: 0, yaw: 0 };
   // The crescent's look as the feel has it, written into one object each frame.
   const trailLook: TrailLook = { width: 0, brightness: 1 };
   let lungeCurve: LungeCurve | null = null;
+  let recoveryCurve: LungeCurve | null = null;
   const lastClocks: PlayClocks = { combo: 0, motion: 0, frame: 0 };
   let motion: MotionState = { x: 0, z: 0, yaw: 0, speed: 0, drive: 0 };
   let combo: ComboState = COMBO_READY;
-  // The step the hits' fades read: the combo's last moving step, kept through a held clock (fadeStep, combo.ts).
+  // The step the clips' fades read: the combo's last moving step, kept through a held clock (fadeStep, combo.ts).
   let fadeStepNow = FIRST_FADE_STEP;
   let strikes = 0;
   let strikesByStep = [0, 0, 0];
@@ -451,12 +581,18 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
   let dropped = 0;
   let frozen = false;
   let runShare = 0;
-  let weights = { current: 0, outgoing: 0 };
-  let body = bodyWeights(0, 0, false, 0, false);
+  let weights = { current: 0, outgoing: 0, recovery: 0 };
+  let body = bodyWeights(0, 0, 0);
   let swing: SwingMotion = FREE_MOTION;
   let timeScale = 0;
+  // The guard: its share of the idle, and the seconds since combat last called for it (a hit, a recovery clip or a target
+  // near), which feel.guardHold measures out before it hands back to the relaxed idle.
+  let guardWeight = 0;
+  let sinceCombat = Infinity;
+  // The share of the current clip's leg motion his legs take (legShare), eased over LEG_SHARE_SECONDS.
+  let legs = 1;
   const follow = new Vector3();
-  const here = { x: 0, z: 0 };
+  const here = { x: 0, z: 0, yaw: 0 };
   let saved: { minDistance: number; maxDistance: number; maxPolarAngle: number; enablePan: boolean } | null = null;
   const surfaceUp = new Vector3();
   const right = new Vector3();
@@ -487,21 +623,40 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       action.setEffectiveWeight(0);
       return action;
     };
-    return { upper: halves.upper ? make(halves.upper) : null, lower: make(halves.lower) };
+    return { upper: halves.upper ? make(halves.upper) : null, hips: halves.hips ? make(halves.hips) : null, lower: make(halves.lower) };
   }
 
-  function weigh(actions: HalfActions, upper: number, lower: number): void {
+  /**
+   * A clip whose time the combo sets every frame rather than the mixer advancing it, so the pose, the reading and the
+   * strike moment all come from the one clock in combo.ts. With its time scale at 0 the mixer never moves its time, so
+   * its loop mode and clampWhenFinished, which act only on a time the mixer moves, would do nothing, and they are left
+   * off.
+   */
+  function heldActionsOf(on: AnimationMixer, halves: Halves): HalfActions {
+    const actions = actionsOf(on, halves, false);
+    for (const action of [actions.upper, actions.hips, actions.lower]) if (action) action.timeScale = 0;
+    return actions;
+  }
+
+  /** Weighs a clip's parts: its upper half, its hips by the lower half's weight, and its legs by `legs` (the same unless given). */
+  function weigh(actions: HalfActions, upper: number, lower: number, legs = lower): void {
     actions.upper?.setEffectiveWeight(upper);
-    actions.lower.setEffectiveWeight(lower);
+    actions.hips?.setEffectiveWeight(lower);
+    actions.lower.setEffectiveWeight(actions.hips ? legs : lower);
   }
 
-  /** Whether a hit plays on his whole body: a planted hit always, and every hit on a rig the mask could not split. */
-  const planted = (step: ComboStep): boolean => !upperNames || contractOf(step, contracts).planted;
+  function setTime(actions: HalfActions, time: number): void {
+    for (const action of [actions.upper, actions.hips, actions.lower]) if (action) action.time = time;
+  }
 
-  /** Forgets the lunge: a new hit plans its own. */
+  /** Forgets the lunges: a new hit, or a new recovery clip, plans its own. */
   function clearLunge(): void {
     resetLunge(lunge);
     lungeCurve = null;
+  }
+  function clearRecoveryLunge(): void {
+    resetLunge(recoveryLunge);
+    recoveryCurve = null;
   }
 
   /**
@@ -509,24 +664,72 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
    * the feel's metres for a light hit or the finisher, fixed for the hit so a slider moved mid-hit lunges the next.
    */
   function curveFor(contract: HitContract): LungeCurve {
-    return rootCurves[contract.name] ?? new ScriptedLunge(contract, contract.planted ? feel.lungeFinisher : feel.lungeLight);
+    return rootCurves[contract.name] ?? new ScriptedLunge(contract, contract.finisher ? feel.lungeFinisher : feel.lungeLight);
   }
 
   /**
-   * Carries the playing hit's lunge (stepLunge, lunge.ts) on top of what his drive moved him: the plant's locked
-   * steering still holds, and only the lunge moves him. A step of 0, a hit-stop, holds the hit's time and so the lunge.
+   * Carries the playing hit's lunge (stepLunge, lunge.ts) on top of what his drive moved him this frame, combined so he
+   * travels the larger of the two along its way, and a recovery clip's root motion while one plays alone. A step of 0, a
+   * hit-stop, holds the clips' times and so the lunges.
    */
-  function carryLunge(): void {
+  function carryLunges(): void {
+    driven.metres = motion.speed * lastClocks.motion;
+    driven.yaw = motion.yaw;
     const hit = combo.hit;
-    if (!hit) return;
-    lungeCurve ??= curveFor(contractOf(hit.step, contracts));
+    if (hit) {
+      const contract = contractOf(hit.step, contracts);
+      lungeCurve ??= curveFor(contract);
+      carry(lunge, lungeCurve, hit.time, targets(), (feel.assistTurn * Math.PI) / 180, contract.activeFrom);
+    }
+    const recovery = combo.recovery;
+    const clip = recovery ? contractOf(recovery.step, contracts).recovery : null;
+    // A recovery clip that ended or that a hit took over from is forgotten, so the next one plans afresh.
+    if (!recovery || !clip || !rootCurves[clip]) {
+      if (recoveryCurve) clearRecoveryLunge();
+      return;
+    }
+    recoveryCurve ??= rootCurves[clip]!;
+    carry(recoveryLunge, recoveryCurve, recovery.time, noObstacles, 0);
+  }
+
+  function carry(state: typeof lunge, curve: LungeCurve, time: number, aimAt: readonly Obstacle[], assistTurn: number, turnBy = Infinity): void {
     lungeAt.x = motion.x;
     lungeAt.z = motion.z;
     lungeAt.yaw = motion.yaw;
-    const before = lunge.done;
-    const beforeSide = lunge.sideDone;
-    stepLunge(lunge, lungeCurve, hit.time, lungeAt, targets(), lungeBodies(obstacles(), coreBodies), (feel.assistTurn * Math.PI) / 180, planetRadius);
-    if (lunge.done !== before || lunge.sideDone !== beforeSide) motion = { ...motion, x: lungeAt.x, z: lungeAt.z, yaw: lungeAt.yaw };
+    const before = state.done;
+    const beforeSide = state.sideDone;
+    stepLunge(state, curve, time, lungeAt, aimAt, obstacles(), assistTurn, planetRadius, driven, turnBy);
+    if (state.done !== before || state.sideDone !== beforeSide) motion = { ...motion, x: lungeAt.x, z: lungeAt.z, yaw: lungeAt.yaw };
+  }
+
+  /**
+   * The guard idle's share of the idle on a frame of `dt` seconds: up while a hit or a recovery clip plays or a target's
+   * footprint stands within GUARD_NEAR_M, held for the feel's guardHold after the last of those, then handed back to the
+   * relaxed idle, each way over GUARD_BLEND_SECONDS.
+   */
+  function stepGuard(dt: number): void {
+    if (!guard) {
+      guardWeight = 0;
+      return;
+    }
+    const near = targets().some((target) => obstacleGap(target, motion.x, motion.z) <= GUARD_NEAR_M);
+    if (combo.hit || combo.recovery || near) sinceCombat = 0;
+    else if (dt > 0) sinceCombat += dt;
+    const up = sinceCombat <= feel.guardHold ? 1 : 0;
+    const step = dt > 0 ? dt / GUARD_BLEND_SECONDS : 0;
+    guardWeight = up > guardWeight ? Math.min(up, guardWeight + step) : Math.max(up, guardWeight - step);
+  }
+
+  /** Switches to the swing set the feel asks for, once no hit and no recovery clip of the set playing is showing. */
+  function followSwingSet(): void {
+    const next = wanted();
+    if (!next || next === setName || combo.hit || combo.recovery) return;
+    setName = next;
+    set = sets[next] ?? null;
+    contracts = set ? set.contracts : swingSetContracts(next);
+    combo = COMBO_READY;
+    clearLunge();
+    clearRecoveryLunge();
   }
 
   /**
@@ -537,16 +740,20 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
     motion = { x: start.x, z: start.z, yaw: start.yaw, speed: 0, drive: 0 };
     combo = COMBO_READY;
     clearLunge();
+    clearRecoveryLunge();
     trail?.clear();
     bladeDrawn = false;
     // The fades' step starts afresh with the hits: kept from before, a respawn after a stall carried that stall's step
     // into the first hit's fade (fadeStep).
     fadeStepNow = FIRST_FADE_STEP;
     runShare = 0;
-    weights = { current: 0, outgoing: 0 };
-    body = bodyWeights(0, 0, false, 0, false);
+    weights = { current: 0, outgoing: 0, recovery: 0 };
+    body = bodyWeights(0, 0, 0);
     swing = FREE_MOTION;
     timeScale = 0;
+    guardWeight = 0;
+    sinceCombat = Infinity;
+    legs = 1;
     pose();
     chest(follow);
     const surface = ground.surfaceAt(motion.x, motion.z);
@@ -559,7 +766,9 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
 
   return {
     available: template !== null && idleClip !== null && runClip !== null,
-    contracts,
+    get contracts() {
+      return contracts;
+    },
     get active() {
       return root !== null;
     },
@@ -584,17 +793,16 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       mixer = on;
       idle = actionsOf(on, idleHalves, true);
       weigh(idle, 1, 1);
+      guard = guardHalves ? actionsOf(on, guardHalves, true) : null;
       run = actionsOf(on, runHalves, true);
-      for (const action of [run.upper, run.lower]) if (action) action.timeScale = 0;
-      // Each hit's clip time is set from the combo every frame rather than advanced by the mixer, so the pose, the
-      // reading and the strike moment all come from the one clock in combo.ts. With its time scale at 0 the mixer never
-      // moves a hit's time, so its loop mode and clampWhenFinished, which act only on a time the mixer moves, would do
-      // nothing, and they are left off.
-      hitActions = (hitHalves ?? []).map((halves) => {
-        const actions = actionsOf(on, halves, false);
-        for (const action of [actions.upper, actions.lower]) if (action) action.timeScale = 0;
-        return actions;
-      });
+      for (const action of [run.upper, run.hips, run.lower]) if (action) action.timeScale = 0;
+      hitActions = {};
+      recoveryActions = {};
+      for (const name of offered) {
+        const clips = sets[name]!;
+        hitActions[name] = clips.hitHalves.map((halves) => heldActionsOf(on, halves));
+        recoveryActions[name] = clips.recoveryHalves.map((halves) => (halves ? heldActionsOf(on, halves) : null));
+      }
       strikes = 0;
       strikesByStep = [0, 0, 0];
       lastStrikeStep = null;
@@ -628,8 +836,9 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       root.traverse((child) => (child as SkinnedMesh).isSkinnedMesh && (child as SkinnedMesh).skeleton.dispose());
       root = null;
       feet = [];
-      mixer = idle = run = null;
-      hitActions = [];
+      mixer = idle = guard = run = null;
+      hitActions = {};
+      recoveryActions = {};
       face = null;
       combo = COMBO_READY;
       obstacles = () => noObstacles;
@@ -639,12 +848,14 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       hand = null;
       bladeDrawn = false;
       clearLunge();
+      clearRecoveryLunge();
       if (saved) Object.assign(controls, saved);
       saved = null;
     },
     update(clocks, input, attackAsked, camera, controls) {
       if (!root || !mixer || !idle || !run) return null;
-      const asked = attackAsked && hits !== null;
+      followSwingSet();
+      const asked = attackAsked && set !== null;
       // The press and the combo's step go into the combo first, so this frame's movement already follows the hit it
       // leaves playing. The combo keeps a press on a step of 0, for phase B's hit-stop, so the lab's freeze, which takes
       // no input, drops its presses here. The fades and a hit begun on this frame read the combo's last moving step, so
@@ -675,32 +886,69 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       turn.setFromUnitVectors(UP, surfaceUp).invert();
       forward.applyQuaternion(turn);
       motion = stepMotion(motion, moveDirection(input, forward.x, forward.z), input.sprint, clocks.motion, obstacles(), planetRadius, swing);
-      carryLunge();
+      carryLunges();
       pose();
+      stepGuard(clocks.combo);
 
       // The weights follow the combo on every frame but a frozen one, at the combo's last moving step (fadeStep), so a
-      // held combo clock (phase B's hit-stop), whose hit stands still, draws the same weights as the frame before the
-      // stop, and a hit begun in the stop starts its crossfade from them. They used to be read at the movement's step,
-      // and only while it ran, so a stop that held his movement too, as it must, both froze them and read any hit begun
-      // in it at a step of 0.
+      // held combo clock (phase B's hit-stop), whose clips stand still, draws the same weights as the frame before the
+      // stop, and a hit begun in the stop starts its crossfade from them.
       if (!frozen) weights = comboWeights(combo, fadeStepNow, contracts);
-      // The run keeps its weight while the finisher fades in over his stop (holdsRunWeight says why).
-      runShare = blendRunWeight(runShare, motion.speed, holdsRunWeight(combo, contracts));
+      runShare = runWeight(motion.speed);
       timeScale = stride ? runTimeScale(motion.speed, stride.clipSpeed) : 1;
       const current = combo.hit;
       const outgoing = current ? combo.outgoing : null;
-      body = bodyWeights(runShare, weights.current, current ? planted(current.step) : false, outgoing ? weights.outgoing : 0, outgoing ? planted(outgoing.step) : false);
-      weigh(idle, body.upper.idle, body.lower.idle);
+      const recovery = current ? null : combo.recovery;
+      // A hit, or a recovery clip playing alone, is the current layer; every clip is layered the same way (bodyWeights).
+      const currentWeight = current ? weights.current : recovery ? weights.recovery : 0;
+      body = bodyWeights(runShare, currentWeight, outgoing ? weights.outgoing : 0);
+      // The legs take the share of the clip's root motion he is given, the stance the rest (legShare says why).
+      const wantLegs = current
+        ? legShare(lungeCurve, lunge.plan ? lunge.plan.length : null, lunge.blocked)
+        : recovery
+          ? legShare(recoveryCurve, null, recoveryLunge.blocked)
+          : 1;
+      legs = clocks.combo > 0 ? wantLegs + (legs - wantLegs) * Math.exp(-clocks.combo / LEG_SHARE_SECONDS) : legs;
+      if (!current && !recovery) legs = 1;
+      // The legs' own weights: the clip's legs take legShare of its lower weight and the stance's legs the rest; the hips
+      // keep the lower weights whole, so the clip still turns his upper body as it was built to.
+      const kept = body.lower.current * (1 - legs);
+      const legsCurrent = body.lower.current - kept;
+      const legsIdle = body.lower.idle + kept;
+      // On a rig the mask could not split, every clip plays on his whole body: the lower half is the whole clip.
+      const g = guard ? guardWeight : 0;
+      weigh(idle, body.upper.idle * (1 - g), body.lower.idle * (1 - g), legsIdle * (1 - g));
+      if (guard) weigh(guard, body.upper.idle * g, body.lower.idle * g, legsIdle * g);
       weigh(run, body.upper.run, body.lower.run);
-      for (const action of [run.upper, run.lower]) if (action) action.timeScale = timeScale;
-      hitActions.forEach((actions, index) => {
-        const step = (index + 1) as ComboStep;
-        const isCurrent = current !== null && current.step === step;
-        const isOutgoing = outgoing !== null && outgoing.step === step;
-        const time = isCurrent ? current.time : isOutgoing ? outgoing.time : 0;
-        for (const action of [actions.upper, actions.lower]) if (action) action.time = time;
-        weigh(actions, (isCurrent ? body.upper.current : 0) + (isOutgoing ? body.upper.outgoing : 0), (isCurrent ? body.lower.current : 0) + (isOutgoing ? body.lower.outgoing : 0));
-      });
+      for (const action of [run.upper, run.hips, run.lower]) if (action) action.timeScale = timeScale;
+      for (const name of offered) {
+        const playing = name === setName;
+        hitActions[name]!.forEach((actions, index) => {
+          const step = (index + 1) as ComboStep;
+          const isCurrent = playing && current !== null && current.step === step;
+          const isOutgoing = playing && outgoing !== null && !outgoing.recovery && outgoing.step === step;
+          setTime(actions, isCurrent ? current.time : isOutgoing ? outgoing.time : 0);
+          weigh(
+            actions,
+            (isCurrent ? body.upper.current : 0) + (isOutgoing ? body.upper.outgoing : 0),
+            (isCurrent ? body.lower.current : 0) + (isOutgoing ? body.lower.outgoing : 0),
+            (isCurrent ? legsCurrent : 0) + (isOutgoing ? body.lower.outgoing : 0),
+          );
+        });
+        recoveryActions[name]!.forEach((actions, index) => {
+          if (!actions) return;
+          const step = (index + 1) as ComboStep;
+          const isCurrent = playing && recovery !== null && recovery.step === step;
+          const isOutgoing = playing && outgoing !== null && outgoing.recovery && outgoing.step === step;
+          setTime(actions, isCurrent ? recovery.time : isOutgoing ? outgoing.time : 0);
+          weigh(
+            actions,
+            (isCurrent ? body.upper.current : 0) + (isOutgoing ? body.upper.outgoing : 0),
+            (isCurrent ? body.lower.current : 0) + (isOutgoing ? body.lower.outgoing : 0),
+            (isCurrent ? legsCurrent : 0) + (isOutgoing ? body.lower.outgoing : 0),
+          );
+        });
+      }
       mixer.update(clocks.combo);
       // After the mixer, which would otherwise write any morph or jaw track a clip carries over the face. The blinks run
       // through the swings and hold with the clips, on the combo's clock; so do the idle's and the run's loops, which is
@@ -738,7 +986,11 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       if (!root) return null;
       here.x = motion.x;
       here.z = motion.z;
+      here.yaw = motion.yaw;
       return here;
+    },
+    rig() {
+      return root;
     },
     blade(base, tip, pivot) {
       if (!bladeDrawn) return false;
@@ -751,6 +1003,8 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       const at = root ? root.getWorldPosition(new Vector3()).toArray() : null;
       const hit = combo.hit;
       const contract = hit ? contractOf(hit.step, contracts) : null;
+      const recovery = hit ? null : combo.recovery;
+      const hits = set?.hits ?? null;
       return {
         on: root !== null,
         position: at,
@@ -761,13 +1015,19 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
         runTimeScale: timeScale,
         stride: stride ?? null,
         clearance: root ? clearance(motion.x, motion.z, obstacles()) : null,
+        swingSet: setName,
+        swingSets: [...offered],
         attacking: hit !== null,
         attackTime: hit ? hit.time : null,
         attackWeight: weights.current,
+        attackClip: contract ? contract.name : null,
         attackSeconds: contract ? contract.duration : null,
         strikeAt: contract ? contract.strike : null,
         cancelAt: contract ? contract.cancel : null,
-        bufferOpensAt: contract ? bufferOpensAt(contract, feel.buffer) : null,
+        attackSpeed: hit ? hit.speed : null,
+        opensAt: hit ? hit.opensAt : null,
+        finisher: contract ? contract.finisher : false,
+        bufferOpensAt: hit ? bufferOpensAt(hit.opensAt, feel.buffer) : null,
         strikes,
         strikesByStep: [...strikesByStep],
         lastStrikeStep,
@@ -779,6 +1039,12 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
         chainedAt: hit ? hit.chainedAt : null,
         outgoingStep: hit && combo.outgoing ? combo.outgoing.step : 0,
         outgoingWeight: hit && combo.outgoing ? weights.outgoing : 0,
+        outgoingRecovery: hit !== null && combo.outgoing !== null && combo.outgoing.recovery,
+        recovery: recovery
+          ? { clip: contractOf(recovery.step, contracts).recovery ?? '', step: recovery.step, time: recovery.time, weight: weights.recovery, moved: recoveryLunge.moved }
+          : null,
+        guardWeight,
+        legShare: legs,
         sources: hits ? hits.map((entry) => entry.source) : null,
         source: hit && hits ? hits[hit.step - 1]!.source : null,
         clipLengthOff: hits ? hits.map((entry) => entry.lengthOff) : null,
@@ -799,7 +1065,8 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
           source: lungeCurve ? lungeCurve.source : null,
           total: lungeCurve ? lungeCurve.total : 0,
         },
-        lungeSources: contracts.map((contract) => (rootCurves[contract.name] ? 'root' : 'scripted')),
+        lungeSources: contracts.map((entry) => (rootCurves[entry.name] ? 'root' : 'scripted')),
+        rootMotionNotes: [...rootMotionNotes],
         trail: trail ? trail.stroke.reading(feel.trailLength) : { points: 0, alpha: 0, emitting: false },
         blade: bladeDrawn ? { base: bladeBase.toArray(), tip: bladeTip.toArray() } : null,
       };

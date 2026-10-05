@@ -68,13 +68,16 @@ describe("Play Pip's blade, read from his shipped rig (labs/world/blade.ts)", ()
     const furthest = Math.max(...vertices.map((point) => point.distanceTo(origin)));
     expect(tip.distanceTo(origin)).toBeCloseTo(furthest, 6);
     expect(vertices.some((point) => point.distanceTo(tip) < 1e-6)).toBe(true);
-    // The base stands on the line to the tip, 0.26 m from the hand, past every vertex that sits BLADE_GUARD_OFFSET or
-    // more off that line (the crossguard), and the blade is the 0.7 m from there to the tip.
+    // The base stands on the line to the tip, 0.271 m from the hand, past every vertex that sits BLADE_GUARD_OFFSET or
+    // more off that line (the crossguard), and the blade is the 0.640 m from there to the tip, 0.912 m out. On the
+    // CharForge grip these read 0.255, 0.696 and 0.952 m; the natural grip turned the sword 36.6 degrees about the
+    // mitten's centre (blender/lib/retarget.py regrip_sword), which stands off the hand's origin, so the line from that
+    // origin to the tip now crosses the blade at a small angle and reads it a little shorter.
     const axis = tip.clone().sub(origin).normalize();
     expect(base.clone().sub(origin).normalize().dot(axis)).toBeCloseTo(1, 9);
     expect(base.distanceTo(origin)).toBeGreaterThan(0.2);
     expect(base.distanceTo(origin)).toBeLessThan(0.3);
-    expect(blade.length).toBeCloseTo(0.696, 2);
+    expect(blade.length).toBeCloseTo(0.64, 2);
     for (const point of vertices) {
       const offset = point.clone().sub(origin);
       const along = offset.dot(axis);

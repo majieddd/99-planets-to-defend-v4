@@ -1,7 +1,7 @@
 import GUI, { BooleanController, FunctionController, OptionController, type Controller } from 'lil-gui';
 import type { TierName } from '../../render/quality';
 import { NARROW_SCREEN } from '../style/referenceBoard';
-import { COMBAT_FEEL_KEYS, COMBAT_FEEL_RANGES, combatFeelJson, defaultCombatFeel, isFeelToggle, type CombatFeel } from './combatFeel';
+import { COMBAT_FEEL_KEYS, COMBAT_FEEL_RANGES, combatFeelJson, defaultCombatFeel, isFeelChoice, isFeelToggle, type CombatFeel, type FeelControl } from './combatFeel';
 import { HEART_STAGES } from './layout';
 import { MEMBERS, ZONES, type WorldMember } from './registry';
 import { CHARACTER_FAMILIES, CHARACTERS, OVERVIEW } from './views';
@@ -143,9 +143,11 @@ export function addCombatFeelFolder(gui: GUI, feel: CombatFeel, handlers: Combat
     handlers.onFeel();
   };
   for (const key of COMBAT_FEEL_KEYS) {
-    const control = COMBAT_FEEL_RANGES[key];
-    // A toggle (the sounds' mute) is a checkbox; every other setting a slider on its range and step.
+    const control: FeelControl = COMBAT_FEEL_RANGES[key];
+    // A toggle (the sounds' mute) is a checkbox, a choice (the swing set) a dropdown; every other setting a slider on
+    // its range and step.
     if (isFeelToggle(control)) feelFolder.add(feel, key).name(control.label).onChange(changed);
+    else if (isFeelChoice(control)) feelFolder.add(feel, key, control.choices).name(control.label).onChange(changed);
     else feelFolder.add(feel, key, control.min, control.max, control.step).name(control.label).onChange(changed);
   }
   const readoutControl: Controller = feelFolder.add(readout, 'settings').name('settings');

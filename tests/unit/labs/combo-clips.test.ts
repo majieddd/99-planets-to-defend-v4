@@ -17,8 +17,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { BACKHAND_STRIKE_BEFORE_STRIKE, COMBO_HITS, placeholderAnchors } from '../../../src/labs/world/combo';
-import { CLIP_LENGTH_TOLERANCE, hitClips, PLACEHOLDER_SAMPLES_PER_SECOND, splitClip, upperBodyBones, warpClip, warpSampleTimes } from '../../../src/labs/world/comboClips';
+import { BACKHAND_STRIKE_BEFORE_STRIKE, COMBO_HITS, HAND_HITS, placeholderAnchors } from '../../../src/labs/world/combo';
+import { CLIP_LENGTH_TOLERANCE, hipsBoneName, hitClips, PLACEHOLDER_SAMPLES_PER_SECOND, splitClip, splitHips, upperBodyBones, warpClip, warpSampleTimes } from '../../../src/labs/world/comboClips';
 import timings from '../../../src/shared/timings.json';
 import { assetIO } from '../../../tools/assets/optimize.mjs';
 
@@ -59,7 +59,7 @@ let scene: Group;
 let animations: AnimationClip[];
 /** The shipped clips without the real hits, as a GLB from before they shipped, for the placeholder path. */
 let withoutHits: AnimationClip[];
-const HIT_NAMES = COMBO_HITS.map((hit) => hit.name as string);
+const HIT_NAMES = [...COMBO_HITS, ...HAND_HITS].map((hit) => hit.name);
 
 beforeAll(async () => {
   const io = await assetIO();
@@ -106,6 +106,20 @@ describe("Play Pip's upper-body mask on the shipped rig", () => {
     }
   });
 
+  it("parts each lower half into the hips, which carry the upper body, and the legs, which only stand him", () => {
+    const mask = upperBodyBones(scene)!;
+    const hips = hipsBoneName(scene)!;
+    expect(hips).toBe('mixamorigHips');
+    for (const clip of animations) {
+      const { lower } = splitClip(clip, mask);
+      const parted = splitHips(lower, hips);
+      expect(parted.hips.tracks.length + parted.legs.tracks.length, clip.name).toBe(lower.tracks.length);
+      for (const track of parted.hips.tracks) expect(nodeOf(track.name), `${clip.name} ${track.name}`).toBe('mixamorigHips');
+      for (const track of parted.legs.tracks) expect(LOWER.filter((name) => name !== 'mixamorigHips'), `${clip.name} ${track.name}`).toContain(nodeOf(track.name));
+      expect([parted.hips.duration, parted.legs.duration]).toEqual([clip.duration, clip.duration]);
+    }
+  });
+
   it('weighs the two halves apart on one mixer, so the arms swing while the legs run', () => {
     const mask = upperBodyBones(scene)!;
     const attack = animations.find((clip) => clip.name === 'attack')!;
@@ -132,18 +146,37 @@ describe("Play Pip's upper-body mask on the shipped rig", () => {
 });
 
 describe("Play Pip's combo clips", () => {
-  it("plays the GLB's own attack_1 to attack_3, each within a frame of its contract's length, with no change to the page", () => {
+  it("plays the GLB's own clips for both swing sets, each within a frame of its contract's length, with no change to the page", () => {
     const warned: string[] = [];
-    const hits = hitClips(animations, SOURCE_STRIKE, COMBO_HITS, (text) => warned.push(text))!;
-    expect(hits.map((hit) => [hit.contract.name, hit.source, hit.clip.name])).toEqual([
-      ['attack_1', 'clip', 'attack_1'],
-      ['attack_2', 'clip', 'attack_2'],
-      ['attack_3', 'clip', 'attack_3'],
-    ]);
+    for (const [contracts, names] of [
+      [COMBO_HITS, ['attack_1', 'attack_2', 'attack_3']],
+      [HAND_HITS, ['attack_1_hand', 'attack_2_hand', 'attack_3_hand']],
+    ] as const) {
+      const hits = hitClips(animations, SOURCE_STRIKE, contracts, (text) => warned.push(text))!;
+      expect(hits.map((hit) => [hit.contract.name, hit.source, hit.clip.name])).toEqual(names.map((name) => [name, 'clip', name]));
+      for (const hit of hits) {
+        expect(hit.clip).toBe(animations.find((clip) => clip.name === hit.contract.name));
+        expect(Math.abs(hit.lengthOff), hit.contract.name).toBeLessThanOrEqual(CLIP_LENGTH_TOLERANCE);
+      }
+    }
     expect(warned).toEqual([]);
-    for (const hit of hits) {
-      expect(hit.clip).toBe(animations.find((clip) => clip.name === hit.contract.name));
-      expect(Math.abs(hit.lengthOff), hit.contract.name).toBeLessThanOrEqual(CLIP_LENGTH_TOLERANCE);
+  });
+
+  it('hands each Quaternius light hit over to its recovery clip in the pose they share', () => {
+    // The library splits each light hit at its chain point: Sword_Regular_A ends where Sword_Regular_A_Rec begins, so a
+    // chain that stops there plays on into the recovery with no jump (combo.ts holds the hit's weight to its end for it).
+    // Every bone meets within a millimetre but the sword hand, whose edge roll around the strike (blender/lib/retarget.py
+    // edge_rolls) leaves it 27 mm from the recovery's first pose after the forehand and 17 mm after the backhand: less
+    // than the hand travels in the hit's last frame (78 and 29 mm), so the handover reads as one more frame of the swing.
+    for (const hit of COMBO_HITS.slice(0, 2)) {
+      const rec = animations.find((clip) => clip.name === hit.recovery)!;
+      const own = animations.find((clip) => clip.name === hit.name)!;
+      for (const bone of ['mixamorigRightHand', 'mixamorigLeftHand', 'mixamorigHips', 'mixamorigHead', 'mixamorigLeftToeBase', 'mixamorigRightToeBase']) {
+        // Just short of the end: the mixer's default loop wraps a time of exactly the clip's length back to its start.
+        const gap = handAt(own, own.duration - 1e-4, bone).distanceTo(handAt(rec, 0, bone));
+        const last = handAt(own, own.duration - 1e-4, bone).distanceTo(handAt(own, own.duration - 1 / 30, bone));
+        expect(gap, `${hit.name}'s end to ${hit.recovery}'s start, ${bone}`).toBeLessThan(bone === 'mixamorigRightHand' ? Math.min(0.03, last) : 0.001);
+      }
     }
   });
 
@@ -154,7 +187,7 @@ describe("Play Pip's combo clips", () => {
     // stood 13 to 47 mm from where the hit before left them; the leads now ease in over the clip's first three frames
     // (LAG_RAMP), and read back through the export and the loader every one stands within 0.1 mm of it. A gap of a
     // whole pose, as a hit keyed from the guard would leave, is tens of centimetres.
-    const hits = hitClips(animations, SOURCE_STRIKE)!;
+    const hits = hitClips(animations, SOURCE_STRIKE, HAND_HITS)!;
     for (const [from, to] of [
       [hits[0]!, hits[1]!],
       [hits[1]!, hits[2]!],
@@ -167,33 +200,36 @@ describe("Play Pip's combo clips", () => {
   });
 
   it("steps the finisher's front boot about 22 cm out and home again inside the clip, its back boot and the light hits' boots still", () => {
-    // The play mode plants him for the finisher, so the step is the clip's alone: it must come back by the clip's end, or
+    // The hand-keyed finisher's step is the clip's alone (it has no root motion): it must come back by the clip's end, or
     // the boot would jump home when the hit fades out. In the rig's frame, at the start, the strike and the end.
-    const hits = hitClips(animations, SOURCE_STRIKE)!;
+    const hits = hitClips(animations, SOURCE_STRIKE, HAND_HITS)!;
     const finisher = hits[2]!;
     const left = (time: number) => handAt(finisher.clip, time, 'mixamorigLeftToeBase');
     const right = (time: number) => handAt(finisher.clip, time, 'mixamorigRightToeBase');
     const out = Math.max(...[0.3, 0.38, 0.45, 0.5].map((time) => left(time).distanceTo(left(0))));
     expect(out).toBeGreaterThan(0.2);
     expect(out).toBeLessThan(0.25);
-    expect(left(finisher.clip.duration).distanceTo(left(0))).toBeLessThan(0.001);
-    expect(Math.max(...[0.2, 0.38, 0.6, finisher.clip.duration].map((time) => right(time).distanceTo(right(0))))).toBeLessThan(0.001);
+    // Read just short of the end: at exactly the clip's length the mixer's default loop wraps back to its first frame,
+    // so this check, read there, compared the first frame with itself and could not fail.
+    const end = finisher.clip.duration - 1e-4;
+    expect(left(end).distanceTo(left(0))).toBeLessThan(0.001);
+    expect(Math.max(...[0.2, 0.38, 0.6, end].map((time) => right(time).distanceTo(right(0))))).toBeLessThan(0.001);
     for (const light of hits.slice(0, 2)) {
       for (const toe of ['mixamorigLeftToeBase', 'mixamorigRightToeBase']) {
-        const moved = Math.max(...[0.1, 0.2, 0.3, light.clip.duration].map((time) => handAt(light.clip, time, toe).distanceTo(handAt(light.clip, 0, toe))));
+        const moved = Math.max(...[0.1, 0.2, 0.3, light.clip.duration - 1e-4].map((time) => handAt(light.clip, time, toe).distanceTo(handAt(light.clip, 0, toe))));
         expect(moved, `${light.contract.name} ${toe}`).toBeLessThan(0.001);
       }
     }
   });
 
-  it('stand placeholders in for attack_1 to attack_3 on a GLB without them, each its contract long, with the strike pose at the contract strike', () => {
+  it('stand placeholders in for the hits on a GLB without them, each its contract long, with the strike pose at the contract strike', () => {
     const animations = withoutHits;
     expect(animations.map((clip) => clip.name)).not.toContain('attack_1');
-    const hits = hitClips(animations, SOURCE_STRIKE)!;
+    const hits = hitClips(animations, SOURCE_STRIKE, HAND_HITS)!;
     expect(hits.map((hit) => [hit.contract.name, hit.source, hit.clip.name])).toEqual([
-      ['attack_1', 'placeholder', 'attack_1'],
-      ['attack_2', 'placeholder', 'attack_2'],
-      ['attack_3', 'placeholder', 'attack_3'],
+      ['attack_1_hand', 'placeholder', 'attack_1_hand'],
+      ['attack_2_hand', 'placeholder', 'attack_2_hand'],
+      ['attack_3_hand', 'placeholder', 'attack_3_hand'],
     ]);
     const attack = animations.find((clip) => clip.name === 'attack')!;
     for (const hit of hits) {
@@ -201,7 +237,7 @@ describe("Play Pip's combo clips", () => {
       expect(hit.clip.tracks.length).toBe(attack.tracks.length);
       // The sword hand stands at the hit's strike where the source's stands at its own strike (the backhand's, a little
       // before it, at the cut's fastest moment).
-      const source = hit.contract.name === 'attack_2' ? SOURCE_STRIKE - BACKHAND_STRIKE_BEFORE_STRIKE : SOURCE_STRIKE;
+      const source = hit.contract.step === 2 ? SOURCE_STRIKE - BACKHAND_STRIKE_BEFORE_STRIKE : SOURCE_STRIKE;
       expect(handAt(hit.clip, hit.contract.strike).distanceTo(handAt(attack, source)), hit.contract.name).toBeLessThan(1e-4);
     }
     // attack_1's cancel point and the backhand's first pose are both in the follow-through, so the crossfade between
@@ -213,12 +249,12 @@ describe("Play Pip's combo clips", () => {
   it("plays a clip the GLB exports under a hit's name instead of a placeholder, so the swap is an asset change alone", () => {
     const animations = withoutHits;
     const attack = animations.find((clip) => clip.name === 'attack')!;
-    const real = new AnimationClip('attack_2', 0.55, attack.tracks);
-    const hits = hitClips([...animations, real], SOURCE_STRIKE)!;
+    const real = new AnimationClip('attack_2_hand', 0.55, attack.tracks);
+    const hits = hitClips([...animations, real], SOURCE_STRIKE, HAND_HITS)!;
     expect(hits.map((hit) => hit.source)).toEqual(['placeholder', 'clip', 'placeholder']);
     expect(hits[1]!.clip).toBe(real);
     // With neither the hit's own clip nor an attack clip to warp, there is no combo.
-    expect(hitClips(animations.filter((clip) => clip.name !== 'attack'), SOURCE_STRIKE)).toBeNull();
+    expect(hitClips(animations.filter((clip) => clip.name !== 'attack'), SOURCE_STRIKE, HAND_HITS)).toBeNull();
   });
 
   it("names a GLB hit clip whose length misses its contract by more than a frame, and keeps the miss for the reading", () => {
@@ -229,13 +265,13 @@ describe("Play Pip's combo clips", () => {
       warned.push(text);
     };
     // Within a frame at 30 fps of its 0.55 s contract, as assets:check allows: kept quietly, its small miss still read.
-    const close = hitClips([...animations, new AnimationClip('attack_2', 0.55 + CLIP_LENGTH_TOLERANCE * 0.9, attack.tracks)], SOURCE_STRIKE, COMBO_HITS, warn)!;
+    const close = hitClips([...animations, new AnimationClip('attack_2_hand', 0.55 + CLIP_LENGTH_TOLERANCE * 0.9, attack.tracks)], SOURCE_STRIKE, HAND_HITS, warn)!;
     expect(warned).toEqual([]);
     expect(close[1]!.lengthOff).toBeCloseTo(CLIP_LENGTH_TOLERANCE * 0.9, 9);
     // 0.15 s long: named, with its length and the miss, and the miss kept.
-    const long = hitClips([...animations, new AnimationClip('attack_2', 0.7, attack.tracks)], SOURCE_STRIKE, COMBO_HITS, warn)!;
+    const long = hitClips([...animations, new AnimationClip('attack_2_hand', 0.7, attack.tracks)], SOURCE_STRIKE, HAND_HITS, warn)!;
     expect(warned).toHaveLength(1);
-    expect(warned[0]).toContain('attack_2 is 0.700 s long, +0.150 s off its 0.55 s contract');
+    expect(warned[0]).toContain('attack_2_hand is 0.700 s long, +0.150 s off its 0.55 s contract');
     expect(long[1]!.lengthOff).toBeCloseTo(0.15, 6);
     expect(long.map((hit) => hit.lengthOff)).toEqual([0, long[1]!.lengthOff, 0]);
   });
@@ -243,7 +279,7 @@ describe("Play Pip's combo clips", () => {
   it("keeps each warped track's interpolation, and reads a glTF cubic spline track at its value's own size", () => {
     // A stepped track stays stepped: built linear, it slid between the warp's samples where its source held.
     const stepped = new AnimationClip('steps', 1, [new NumberKeyframeTrack('.steps', [0, 0.5], [0, 1], InterpolateDiscrete)]);
-    const anchors = placeholderAnchors(COMBO_HITS[0]!, 1, 0.4);
+    const anchors = placeholderAnchors(HAND_HITS[0]!, 1, 0.4);
     expect(warpClip(stepped, 'steps_warped', anchors, 0.55).tracks[0]!.getInterpolation()).toBe(InterpolateDiscrete);
     const linear = new AnimationClip('ramp', 1, [new NumberKeyframeTrack('.ramp', [0, 1], [0, 1])]);
     expect(warpClip(linear, 'ramp_warped', anchors, 0.55).tracks[0]!.getInterpolation()).toBe(InterpolateLinear);
@@ -268,7 +304,7 @@ describe("Play Pip's combo clips", () => {
   it('samples a warp at an even rate and at its anchors, and maps each sample through the warp', () => {
     // A track whose value is its own time shows the source time each sample was read at.
     const identity = new AnimationClip('ramp', 1, [new NumberKeyframeTrack('.ramp', [0, 1], [0, 1])]);
-    const contract = COMBO_HITS[0]!;
+    const contract = HAND_HITS[0]!;
     const anchors = placeholderAnchors(contract, 1, 0.4);
     const warped = warpClip(identity, 'ramp_warped', anchors, contract.duration);
     const times = Array.from(warped.tracks[0]!.times);

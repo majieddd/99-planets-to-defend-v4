@@ -95,9 +95,10 @@ describe('the shipped Pip through GLTFLoader', () => {
     const jaw = scene.getObjectByName(JAW_BONE_NAME) as Bone;
     expect(jaw.isBone).toBe(true);
     expect(jaw.parent?.name).toBe('mixamorigHead');
-    // The exporter writes the clips in name order; the attack and the combo's three hits, authored in the recipe, each
-    // last their contract to a frame.
-    expect(clips).toEqual(['attack', 'attack_1', 'attack_2', 'attack_3', 'idle', 'run']);
+    // The exporter writes the clips in name order: the attack, both swing sets' hits (Quaternius's attack_1 to attack_3
+    // and the hand-keyed attack_1_hand to attack_3_hand), the light hits' recoveries, the block, the guard idle, the
+    // idle and the run; every clip timings.json times lasts its contract to a frame.
+    expect(clips).toEqual(['attack', 'attack_1', 'attack_1_hand', 'attack_1_rec', 'attack_2', 'attack_2_hand', 'attack_2_rec', 'attack_3', 'attack_3_hand', 'block', 'idle', 'idle_guard', 'run']);
     for (const [clip, contract] of Object.entries(CONTRACTS)) expect(Math.abs(durations[clip]! - contract.duration), clip).toBeLessThanOrEqual(FRAME);
   });
 

@@ -7,6 +7,7 @@ import {
   defaultCombatFeel,
   feelAddressValue,
   feelFromAddress,
+  isFeelChoice,
   isFeelToggle,
   parseCombatFeel,
   snapFeel,
@@ -23,6 +24,10 @@ describe('the combat feel settings', () => {
       const control = COMBAT_FEEL_RANGES[key];
       if (isFeelToggle(control)) {
         expect(typeof DEFAULT_COMBAT_FEEL[key], key).toBe('boolean');
+        continue;
+      }
+      if (isFeelChoice(control)) {
+        expect(Object.values(control.choices), key).toContain(DEFAULT_COMBAT_FEEL[key]);
         continue;
       }
       const value = DEFAULT_COMBAT_FEEL[key] as number;
@@ -55,6 +60,26 @@ describe('the combat feel settings', () => {
     // A toggle takes a boolean only, and a slider a number only.
     expect(parseCombatFeel('{"mute":1,"volume":true}')).toEqual({ feel: {}, rejected: ['mute', 'volume'] });
     expect(feelAddressValue({ ...defaultCombatFeel(), mute: true })).toBe(combatFeelJson({ ...defaultCombatFeel(), mute: true }));
+  });
+
+  it('carries the swing set as one of its values, the Quaternius set by default, and the phase C knobs at their defaults', () => {
+    expect(DEFAULT_COMBAT_FEEL.swingSet).toBe('quaternius');
+    expect(COMBAT_FEEL_KEYS[0]).toBe('swingSet');
+    expect(COMBAT_FEEL_RANGES.swingSet.choices).toEqual({ quaternius: 'quaternius', 'hand-keyed': 'hand' });
+    const hand = { ...defaultCombatFeel(), swingSet: 'hand' as const };
+    expect(JSON.parse(combatFeelJson(hand))).toMatchObject({ swingSet: 'hand' });
+    expect(parseCombatFeel(combatFeelJson(hand))).toEqual({ feel: hand, rejected: [] });
+    // A word the choice does not offer, or a number, is named and skipped.
+    expect(parseCombatFeel('{"swingSet":"mocap","speed1":0.5}')).toEqual({ feel: {}, rejected: ['swingSet', 'speed1'] });
+    expect(parseCombatFeel('{"swingSet":1}').rejected).toEqual(['swingSet']);
+    // Each hit's playback speed from 0.8 to 1.6 at 1, the finisher's pace and turn under the light hits', its recovery
+    // cut at 0.4 of its window, and the guard held 3 s after combat.
+    for (const key of ['speed1', 'speed2', 'speed3'] as const) {
+      expect([COMBAT_FEEL_RANGES[key].min, COMBAT_FEEL_RANGES[key].max, DEFAULT_COMBAT_FEEL[key]], key).toEqual([0.8, 1.6, 1]);
+    }
+    expect([DEFAULT_COMBAT_FEEL.finisherPace, DEFAULT_COMBAT_FEEL.finisherTurn, DEFAULT_COMBAT_FEEL.recoveryCut, DEFAULT_COMBAT_FEEL.guardHold]).toEqual([0.15, 0.25, 0.4, 3]);
+    expect(COMBAT_FEEL_RANGES.finisherPace.label).toBe('finisher pace kept');
+    expect(COMBAT_FEEL_RANGES.finisherTurn.label).toBe('finisher wind-up turn');
   });
 
   it('writes the address parameter only for a changed feel, as the compact JSON the copy button copies', () => {

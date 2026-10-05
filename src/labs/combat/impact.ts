@@ -3,7 +3,7 @@ import type { Ground } from '../../render/terrain/place';
 import type { CombatFeel } from '../world/combatFeel';
 import { contractOf, type ComboFrame, type ComboStep } from '../world/combo';
 import type { PipPlay, PlayClocks } from '../world/play';
-import { DUMMY_HIT_LOW, DUMMY_HIT_SHARE, DUMMY_HIT_TOP, type DummyHit, type TrainingDummies, type TrainingDummy } from './dummies';
+import { DUMMY_HIT_LOW, DUMMY_HIT_TOP, type DummyHit, type TrainingDummies, type TrainingDummy } from './dummies';
 import { createHitNumbers, type HitNumbers } from './hitNumbers';
 import { SwingHits, sweepHit, sweepSteps, type HitBody } from './hitShape';
 import { HitStop, releaseHeld } from './hitStop';
@@ -129,7 +129,13 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
   const numbers: HitNumbers | null = o.numbers ? createHitNumbers(o.numbers, o.reducedMotion) : null;
   const swingHits = new SwingHits(list.length);
   const reactions: Reaction[] = list.map(() => idleReaction());
-  const bodies: HitBody[] = list.map((dummy) => ({ radius: dummy.reach * DUMMY_HIT_SHARE, low: DUMMY_HIT_LOW, high: DUMMY_HIT_TOP }));
+  // Each dummy's body as the blade meets it: its footprint as it stands, the core and the head (DUMMY_HIT_LOW says why).
+  const bodies: HitBody[] = list.map((dummy) => ({
+    radius: dummy.footprint.core,
+    low: DUMMY_HIT_LOW,
+    high: DUMMY_HIT_TOP,
+    ...(dummy.footprint.head ? { head: { ...dummy.footprint.head } } : {}),
+  }));
   const leans: (BoneLean | null)[] = list.map((dummy) => {
     const bone = dummy.root.getObjectByName(FLINCH_BONE);
     return bone ? new BoneLean(bone) : null;
@@ -182,7 +188,7 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
   // lives as long as the page, so neither listener is ever taken down.
   dummies.onHit((dummy: TrainingDummy, hit: DummyHit) => {
     const pose = dummy.pose();
-    const finisher = contractOf(hit.step, pip.contracts).planted;
+    const finisher = contractOf(hit.step, pip.contracts).finisher;
     startReaction(reactions[dummy.index]!, hit.from.x, hit.from.z, pose.x, pose.z, finisher ? feel.knockbackFinisher : feel.knockbackLight, finisher ? FLINCH_FINISHER_DEG : FLINCH_LIGHT_DEG);
     fresh[dummy.index] = true;
   });
@@ -193,7 +199,7 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
     const dummy = list[index]!;
     const at = pip.at();
     dummy.hit({ step, time, from: { x: at?.x ?? 0, z: at?.z ?? 0 } });
-    const finisher = contractOf(step, pip.contracts).planted;
+    const finisher = contractOf(step, pip.contracts).finisher;
     stop.start(finisher ? feel.hitStopFinisher : feel.hitStopLight);
     held[index] = stop.active;
     struckNow[index] = true;

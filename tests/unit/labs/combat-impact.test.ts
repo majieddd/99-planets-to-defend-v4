@@ -1,7 +1,7 @@
 import { AnimationClip, AnimationMixer, Bone, Object3D, Quaternion, QuaternionKeyframeTrack, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { HitStop, releaseHeld } from '../../../src/labs/combat/hitStop';
-import { HIT_SAMPLES_MAX, segmentToAxis, SwingHits, sweepHit, sweepSteps, swingPoint, type HitBody, type Vec3 } from '../../../src/labs/combat/hitShape';
+import { HIT_SAMPLES_MAX, segmentToAxis, segmentToHead, SwingHits, sweepHit, sweepSteps, swingPoint, type HitBody, type Vec3 } from '../../../src/labs/combat/hitShape';
 import {
   BoneLean,
   FLINCH_FINISHER_DEG,
@@ -85,6 +85,31 @@ describe("the arena's hit test (labs/combat/hitShape.ts)", () => {
     // The same cut with him facing away (the body behind him): missed.
     const away = (angle: number) => turn(angle) + Math.PI;
     expect(cut(near, away(-60 * deg), away(60 * deg), body).s).toBe(-1);
+  });
+
+  it("meets a dummy's head as well as its core: a cut through the head that misses the core connects, at the head", () => {
+    // The Husk's footprint as the blade meets it: a core of 0.8 m and a head, a round end 0.7 m across about 0.6 m ahead
+    // (+z, its facing), across the same band of heights.
+    const husk: HitBody = { radius: 0.8, low: 0.15, high: 2, head: { from: 0.6, to: 0.6, radius: 0.7 } };
+    // Pip 2.3 m in front of it (+z), where his reach meets its head, facing it: his 1.05 m blade stops 0.45 m short of
+    // the core, and the cut misses a core-only body, but crosses the head and connects.
+    const front = v(0, 0, 2.3);
+    const toward = Math.atan2(-front.x, -front.z);
+    expect(cut(front, toward - 60 * deg, toward + 60 * deg, { radius: 0.8, low: 0.15, high: 2 }).s).toBe(-1);
+    const hit = cut(front, toward - 60 * deg, toward + 60 * deg, husk);
+    expect(hit.s).toBeGreaterThanOrEqual(0);
+    // The contact is the blade's point nearest the head's line, on the head.
+    expect(Math.hypot(hit.contact.x, hit.contact.z - 0.6)).toBeLessThanOrEqual(0.7 + 1e-9);
+    // Behind it, 2.3 m back, the head is on its far side and the same cut misses.
+    const back = v(0, 0, -2.3);
+    const aim = Math.atan2(-back.x, -back.z);
+    expect(cut(back, aim - 60 * deg, aim + 60 * deg, husk).s).toBe(-1);
+    // The distance from a blade to the head's line: crossing it, 0; beside it, from its nearer end; out of the band, none.
+    const near = v(0, 0, 0);
+    expect(segmentToHead(v(-1, 1, 0.8), v(1, 1, 0.8), 0.15, 2, 0.6, 1, near)).toBe(0);
+    expect(near.z).toBeCloseTo(0.8, 12);
+    expect(segmentToHead(v(0.5, 1, 2), v(0.5, 1, 3), 0.15, 2, 0.6, 1, near)).toBeCloseTo(Math.hypot(0.5, 1), 12);
+    expect(segmentToHead(v(0, 3, 0.8), v(0, 4, 0.8), 0.15, 2, 0.6, 1, near)).toBe(Infinity);
   });
 
   it('meets a body only inside the arc the blade sweeps, to the edge of its body and no further', () => {
@@ -179,27 +204,30 @@ describe('the hit-stop clock (labs/combat/hitStop.ts)', () => {
     // Pip moving in attack_1 at the reduced pace, its strike just reached: the contact starts the stop.
     const stop = new HitStop();
     const out: PlayClocks = { combo: 0, motion: 0, frame: 0 };
-    let combo: ComboState = { ...COMBO_READY, hit: { step: 1, time: HIT1.strike, struck: true, crossfaded: false, chainedAt: null, fades: { rise: FEEL.fadeIn, fadeOut: FEEL.fadeOut } } };
+    let combo: ComboState = {
+      ...COMBO_READY,
+      hit: { step: 1, time: HIT1.strike, struck: true, crossfaded: false, chainedAt: null, fades: { rise: FEEL.fadeIn, fadeOut: FEEL.fadeOut }, speed: 1, opensAt: HIT1.cancel!, endsAt: HIT1.duration },
+    };
     let motion: MotionState = { x: 0, z: 0, yaw: 0, speed: 1.28, drive: 1.28 };
     let lastStep = DT;
-    const weightBefore = comboWeights(combo, lastStep).current;
+    const weightBefore = comboWeights(combo, lastStep, COMBO_HITS).current;
     stop.start(FEEL.hitStopLight);
     const tight = { ...FEEL, buffer: 0.05 };
     let pressedInStop = false;
     while (stop.active) {
       stop.clocks(DT, out);
       lastStep = fadeStep(lastStep, out.combo);
-      const frame = stepCombo(combo, !pressedInStop, out.combo, tight, lastStep);
+      const frame = stepCombo(combo, !pressedInStop, out.combo, tight, lastStep, COMBO_HITS);
       if (!pressedInStop) expect(frame.press).toBe('queued');
       pressedInStop = true;
       combo = frame.state;
       const before = motion;
-      motion = stepMotion(motion, moveDirection({ right: 0, forward: 1, sprint: false }, 0, 1), false, out.motion, [], R, swingMotion(combo, tight));
+      motion = stepMotion(motion, moveDirection({ right: 0, forward: 1, sprint: false }, 0, 1), false, out.motion, [], R, swingMotion(combo, tight, COMBO_HITS));
       if (out.combo === 0) {
         // Held: his clip time, his place and his weights stand still, so neither his legs nor his body move.
         expect(combo.hit!.time).toBe(HIT1.strike);
         expect([motion.x, motion.z]).toEqual([before.x, before.z]);
-        expect(comboWeights(combo, lastStep).current).toBe(weightBefore);
+        expect(comboWeights(combo, lastStep, COMBO_HITS).current).toBe(weightBefore);
       }
     }
     // The last frame of the stop let the rest of it run: the clip moved on by exactly that much.
@@ -207,7 +235,7 @@ describe('the hit-stop clock (labs/combat/hitStop.ts)', () => {
     // The press made in the stop chains attack_2 at the cancel point.
     let started = null;
     for (let i = 0; i < 20 && started === null; i++) {
-      const frame = stepCombo(combo, false, DT, tight, DT);
+      const frame = stepCombo(combo, false, DT, tight, DT, COMBO_HITS);
       combo = frame.state;
       started = frame.started;
     }

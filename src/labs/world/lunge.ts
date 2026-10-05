@@ -1,43 +1,45 @@
 /**
- * Play Pip (prototype)'s lunge: a short step forward that each hit of the combo carries him through around its strike,
- * on top of whatever his drive does, and the soft target assist that may turn it a little toward a target ahead and cut
- * it short of overrunning. Kept apart from three and the page so the unit test drives it directly; the page sweeps each
- * frame's share against the bodies and the area's edge (sweepMove, playMotion.ts).
+ * Play Pip (prototype)'s lunge: the step forward each hit of the combo carries him through around its strike, on top of
+ * whatever his drive does, and the soft target assist that may turn it a little toward a target ahead and cut it short
+ * of overrunning. Kept apart from three and the page so the unit test drives it directly; the page sweeps each frame's
+ * share against the bodies and the area's edge (sweepMove, playMotion.ts).
  *
  * A hit's lunge follows a curve of metres along his facing by its clip time (LungeCurve): the clip's own root motion when
  * its build records one (rootMotionCurve, read from the sidecar's notes.root_motion or the clip's glTF extras), or the
  * scripted profile otherwise (ScriptedLunge). Pip's hand-keyed hits are authored in place, their boots planted by IK
  * (blender/recipes/commander_pip.py), so they take the scripted profile; Quaternius's sword combo, retargeted onto him,
- * brings per-clip root motion, which comes in by data alone. A clip that drives the lunge by its root motion must then
- * export with no root translation of its own, or the mixer and the lunge would both move him.
+ * brings per-clip root motion (the forehand 0.75 m, the backhand a 6 cm step back, the spin finisher 1.47 m, and the
+ * light hits' recovery clips 0.31 and 0.38 m), which comes in by data alone. A clip that drives the lunge by its root
+ * motion exports with no root translation of its own, or the mixer and the lunge would both move him.
+ *
+ * The lunge and his drive combine without double-moving him (blendRootStep): along the lunge's way he travels the
+ * larger of the two on each frame, never their sum, so a hit swung on the move carries him no further than the faster
+ * of his walk and the clip's own step, and his legs, which run under the swinging arms, keep the walk's pace when it is
+ * the faster. A step back is added as recorded, since it can only slow him.
  */
-import type { HitContract, HitName } from './combo';
-import { groundDistance, groundToTangent, sweepMove, wrapAngle, yawOf, type Obstacle } from './playMotion';
+import type { HitContract } from './combo';
+import { groundDistance, groundToTangent, obstacleGap, sweepMove, wrapAngle, yawOf, type Obstacle } from './playMotion';
 
 /** How long before a hit's strike its scripted lunge begins, and how long after it the lunge ends, in seconds. */
 export const LUNGE_LEAD = 0.12;
 export const LUNGE_TAIL = 0.04;
 /**
- * The assist looks for a target whose root stands within this angle of his facing, either side, and whose reach's
- * edge (its reach widened by his body, as he walks round it) is within ASSIST_RANGE of his root: a target he is already
+ * The assist looks for a target whose root stands within this angle of his facing, either side, and whose edge (its
+ * footprint, widened by his reach, as he walks round it) is within ASSIST_RANGE of his root: a target he is already
  * squaring up to, close enough that a lunge could carry him to it.
  */
 export const ASSIST_CONE_DEG = 40;
 export const ASSIST_RANGE = 1.2;
 /**
- * How far outside a target's core the assisted lunge stops, in metres: striking range, his body (PLAY_BODY_RADIUS) just
- * clear of the target's hump and thorax (its core, the arena's hit body), the blade through the body. 1 cm keeps the
- * last swept step off the core's edge. Measured from the target's whole reach, as it was (0.08 m short of it), the lunge
- * stopped where W already parks him, so in the arena's chain from contact the forehand lunged 0 m, the backhand 0.17 m
- * and the finisher 0.26 m against their 0.35 m and 0.55 m. Measured from the core, a chain from contact has the room the
- * light hits ask, and the finisher, which gets what the two knockbacks of 0.25 m leave after two lunges of 0.35 m, more.
- *
- * The Husk's reach is not its legs: at his hip height its head reaches 1.09 m and its mandibles 1.18 m in front of its
- * root, the legs only 0.55 m at the ground. Head on, his fist and belly therefore pass into its head and mandibles on
- * every lunge from contact (they already touch at contact), which a camera from the side shows and the play camera
- * straight behind him does not; the core keeps his body clear of the hump and thorax.
+ * How far outside a target's footprint the assisted lunge stops, in metres: 1 cm keeps the last swept step off its edge.
+ * The footprint is the Husk's own shape widened by his reach in a swing (labs/combat/footprint.ts), so the lunge stops
+ * where his fists and belly meet its head or body, the blade through it. Phase B stopped the lunge at a round core of
+ * half the dummy's reach, which kept his body off the hump and thorax but put his fist and belly about 0.5 m into the
+ * head and mandibles on the finisher, which reach 1.18 m in front of the root at his hip height.
  */
 export const ASSIST_GAP = 0.01;
+/** How finely the assist reads where the lunge's way meets a target's footprint, in metres (footprintEntry). */
+export const ENTRY_STEP = 0.02;
 
 /** A hit's scripted lunge: the window it runs in, in seconds into the hit's clip. */
 export function lungeWindow(contract: HitContract): { from: number; to: number } {
@@ -58,15 +60,17 @@ export function lungeShare(contract: HitContract, time: number): number {
 }
 
 /**
- * A hit's lunge as a curve of its clip time: `at(time)` is the metres along his facing it has carried him by then, from
- * 0 at the clip's start to `total` at its end, and `side(time)`, when the clip's root motion has a side part, the metres
- * to his right. The lunge plans its length against `total` and scales the curve by that length over `total`, so the
- * assist shortens the whole curve rather than cutting its end.
+ * A lunge as a curve of its clip time: `at(time)` is the metres along his facing it has carried him by then, from 0 at
+ * the clip's start to `total` at its end, and `side(time)`, when the clip's root motion has a side part, the metres to
+ * his right. `reach` is the farthest ahead the curve ever carries him (0 for a curve that only steps back); the lunge
+ * plans its length against it and scales the curve by that length over the reach, so the assist shortens the whole
+ * curve rather than cutting its end.
  */
 export interface LungeCurve {
   at(time: number): number;
   side?(time: number): number;
   readonly total: number;
+  readonly reach: number;
   /** 'root' for a clip's root-motion curve, 'scripted' for the profile. */
   readonly source: 'root' | 'scripted';
 }
@@ -77,10 +81,13 @@ export interface LungeCurve {
  */
 export class ScriptedLunge implements LungeCurve {
   readonly source = 'scripted';
+  readonly reach: number;
   constructor(
     readonly contract: HitContract,
     readonly total: number,
-  ) {}
+  ) {
+    this.reach = Math.max(0, total);
+  }
 
   at(time: number): number {
     return lungeShare(this.contract, time) * this.total;
@@ -98,14 +105,19 @@ export interface RootMotion {
   side?: number[];
 }
 
+/** One frame at the clips' 30 fps: how far a record's last sample may stand from its clip's end. */
+export const ROOT_MOTION_END_TOLERANCE = 1 / 30;
+
 const isFiniteList = (value: unknown): value is number[] => Array.isArray(value) && value.every((entry) => typeof entry === 'number' && Number.isFinite(entry));
 
 /**
  * What is wrong with a root-motion record, or nothing: an object; `times` a list of two or more finite numbers starting
- * at 0 and rising strictly; `forward` a finite list as long, starting at 0; `side`, if given, the same. The lunge falls
- * back to the scripted profile on any fault, and the page names it.
+ * at 0 and rising strictly, its last within a frame of its clip's length (`clipDuration`, when known); `forward` a
+ * finite list as long, starting at 0; `side`, if given, the same. The lunge falls back to the scripted profile on any
+ * fault, and the page names it. A record that ended short of its clip used to be taken as it was, and its last sample
+ * then held him still through the rest of the clip while its feet, placed for the travel, slid.
  */
-export function rootMotionFaults(value: unknown): string[] {
+export function rootMotionFaults(value: unknown, clipDuration?: number): string[] {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return ['not an object with times and forward'];
   const { times, forward, side } = value as Record<string, unknown>;
   const faults: string[] = [];
@@ -117,6 +129,10 @@ export function rootMotionFaults(value: unknown): string[] {
         faults.push(`times must rise strictly (${times[i - 1]} then ${times[i]})`);
         break;
       }
+    }
+    const last = times[times.length - 1]!;
+    if (clipDuration !== undefined && Number.isFinite(clipDuration) && Math.abs(last - clipDuration) > ROOT_MOTION_END_TOLERANCE) {
+      faults.push(`its last sample at ${last} s misses the clip's ${clipDuration.toFixed(3)} s by more than a frame`);
     }
   }
   const length = Array.isArray(times) ? times.length : -1;
@@ -147,7 +163,10 @@ export function sampleTrack(times: readonly number[], values: readonly number[],
   return values[lo]! + (values[hi]! - values[lo]!) * u;
 }
 
-/** A valid root-motion record (rootMotionFaults finds nothing) as a lunge curve; its total is its last forward sample. */
+/**
+ * A valid root-motion record (rootMotionFaults finds nothing) as a lunge curve: its total is its last forward sample,
+ * its reach its farthest forward sample (0 when it never moves ahead).
+ */
 export function rootMotionCurve(motion: RootMotion): LungeCurve {
   const times = [...motion.times];
   const forward = [...motion.forward];
@@ -155,35 +174,47 @@ export function rootMotionCurve(motion: RootMotion): LungeCurve {
   return {
     source: 'root',
     total: forward[forward.length - 1]!,
+    reach: Math.max(0, ...forward),
     at: (time) => sampleTrack(times, forward, time),
     ...(side ? { side: (time: number) => sampleTrack(times, side, time) } : {}),
   };
 }
 
+/** How a record's travel is reported: a fault drops it (the scripted profile stands in), a note keeps it. */
+export type RootMotionReport = 'fault' | 'note';
+
 /**
- * Each hit's root-motion curve, from the sidecar's `notes.root_motion` (`sidecar`, the parsed notes or null) and, for a
- * hit the sidecar does not name, the clip's glTF extras (`extras`, by clip name: GLTFLoader puts them in the clip's
- * userData). A record with a fault is named through `report` and left out, so that hit falls back to the scripted
- * profile.
+ * Each clip's root-motion curve, from the sidecar's `notes.root_motion` (`sidecar`, the parsed notes or null) and, for a
+ * clip the sidecar does not name, the clip's glTF extras (`extras`, by clip name: GLTFLoader puts them in the clip's
+ * userData); where both name a clip the sidecar's is taken, since the build writes it beside the GLB it measured. A
+ * record with a fault (rootMotionFaults, its clip's length from `durations`) is named through `report` and left out, so
+ * that clip falls back to the scripted profile. A record whose total is not ahead of 0 (a step back, or a clip in place)
+ * is kept and noted: phase B planned a lunge from the total, so a total of 0 or less scaled the curve to nothing and the
+ * step was dropped without a word; the lunge now plans from the curve's reach and plays a step back as recorded.
  */
 export function rootMotionCurves(
-  names: readonly HitName[],
+  names: readonly string[],
   sidecar: unknown,
-  extras: Readonly<Partial<Record<HitName, unknown>>>,
-  report: (said: string) => void,
-): Partial<Record<HitName, LungeCurve>> {
+  extras: Readonly<Record<string, unknown>>,
+  report: (said: string, kind: RootMotionReport) => void,
+  durations: Readonly<Record<string, number>> = {},
+): Record<string, LungeCurve> {
   const recorded = typeof sidecar === 'object' && sidecar !== null ? (sidecar as { root_motion?: unknown }).root_motion : undefined;
   const fromSidecar = typeof recorded === 'object' && recorded !== null ? (recorded as Record<string, unknown>) : {};
-  const curves: Partial<Record<HitName, LungeCurve>> = {};
+  const curves: Record<string, LungeCurve> = {};
   for (const name of names) {
     const [value, where] = name in fromSidecar ? [fromSidecar[name], 'the sidecar'] : [extras[name], "the clip's glTF extras"];
     if (value === undefined) continue;
-    const faults = rootMotionFaults(value);
+    const faults = rootMotionFaults(value, durations[name]);
     if (faults.length) {
-      report(`${name}'s root motion in ${where} is invalid (${faults.join('; ')}); its lunge falls back to the scripted profile`);
+      report(`${name}'s root motion in ${where} is invalid (${faults.join('; ')}); its lunge falls back to the scripted profile`, 'fault');
       continue;
     }
-    curves[name] = rootMotionCurve(value as RootMotion);
+    const curve = rootMotionCurve(value as RootMotion);
+    if (!(curve.total > 0)) {
+      report(`${name}'s root motion in ${where} ends ${curve.total.toFixed(3)} m along his facing, not ahead of where it began; it plays as recorded and the assist has nothing to shorten`, 'note');
+    }
+    curves[name] = curve;
   }
   return curves;
 }
@@ -192,7 +223,7 @@ export function rootMotionCurves(
 export interface LungePlan {
   /** The way he lunges, as a yaw (place()'s convention: a yaw of y faces (sin y, cos y)). */
   yaw: number;
-  /** How far, in metres along the ground: the curve's total, or less where the assist cuts it. */
+  /** How far ahead at most, in metres along the ground: the curve's reach, or less where the assist cuts it. */
   length: number;
   /** The turn it carries him through over the lunge, in radians, added to his yaw by the same share as the step. */
   turn: number;
@@ -201,14 +232,40 @@ export interface LungePlan {
 }
 
 /**
- * Plans a lunge of `distance` metres from (x, z) facing `yaw`. With an assist turn above 0, the nearest target whose
- * root lies within ASSIST_CONE_DEG of his facing and whose reach's edge is within ASSIST_RANGE draws it: he turns
- * toward its root by at most `assistTurn` radians over the lunge, and the lunge stops ASSIST_GAP outside the target's
- * core (its `core`, or its reach where it has none), never longer than `distance`, and not at all if he is already that
- * close. With no such target, or an assist turn of 0, he lunges straight ahead by the whole distance.
+ * How far along a way (dirX, dirZ) from (x, z) a target's footprint begins (obstacleGap at 0 or below), read in steps of
+ * ENTRY_STEP and narrowed between the last step outside and the first inside, up to `limit` metres; Infinity when it
+ * does not begin within that, and 0 from a start already inside.
  */
-export function planLunge(x: number, z: number, yaw: number, distance: number, targets: readonly Obstacle[], assistTurn: number): LungePlan {
-  const plan: LungePlan = { yaw, length: Math.max(0, distance), turn: 0, target: -1 };
+export function footprintEntry(x: number, z: number, dirX: number, dirZ: number, target: Obstacle, limit: number): number {
+  if (obstacleGap(target, x, z) <= 0) return 0;
+  let outside = 0;
+  for (let s = ENTRY_STEP; s < limit + ENTRY_STEP; s += ENTRY_STEP) {
+    const at = Math.min(s, limit);
+    if (obstacleGap(target, x + dirX * at, z + dirZ * at) > 0) {
+      outside = at;
+      if (at >= limit) break;
+      continue;
+    }
+    let inside = at;
+    for (let i = 0; i < 12; i++) {
+      const mid = (outside + inside) / 2;
+      if (obstacleGap(target, x + dirX * mid, z + dirZ * mid) > 0) outside = mid;
+      else inside = mid;
+    }
+    return inside;
+  }
+  return Infinity;
+}
+
+/**
+ * Plans a lunge reaching `reach` metres ahead from (x, z) facing `yaw`. With an assist turn above 0, the nearest target
+ * whose root lies within ASSIST_CONE_DEG of his facing and whose footprint is within ASSIST_RANGE draws it: he turns
+ * toward its root by at most `assistTurn` radians, and the lunge stops ASSIST_GAP outside its footprint along the turned
+ * way (footprintEntry), never further than `reach`, and not at all if he is already that close. With no such target, or
+ * an assist turn of 0, he lunges straight ahead by the whole reach.
+ */
+export function planLunge(x: number, z: number, yaw: number, reach: number, targets: readonly Obstacle[], assistTurn: number): LungePlan {
+  const plan: LungePlan = { yaw, length: Math.max(0, reach), turn: 0, target: -1 };
   if (!(assistTurn > 0) || plan.length === 0) return plan;
   const cone = (ASSIST_CONE_DEG * Math.PI) / 180;
   let best = Infinity;
@@ -216,7 +273,7 @@ export function planLunge(x: number, z: number, yaw: number, distance: number, t
     const dx = target.x - x;
     const dz = target.z - z;
     const apart = Math.hypot(dx, dz);
-    const edge = apart - target.radius;
+    const edge = obstacleGap(target, x, z);
     if (edge > ASSIST_RANGE || apart < 1e-9) return;
     const off = wrapAngle(yawOf(dx, dz) - yaw);
     if (Math.abs(off) > cone || edge >= best) return;
@@ -224,8 +281,12 @@ export function planLunge(x: number, z: number, yaw: number, distance: number, t
     plan.target = index;
     plan.turn = Math.sign(off) * Math.min(Math.abs(off), assistTurn);
     plan.yaw = wrapAngle(yaw + plan.turn);
-    plan.length = Math.min(Math.max(0, distance), Math.max(0, apart - (target.core ?? target.radius) - ASSIST_GAP));
   });
+  if (plan.target >= 0) {
+    const target = targets[plan.target]!;
+    const entry = footprintEntry(x, z, Math.sin(plan.yaw), Math.cos(plan.yaw), target, Math.max(0, reach) + ASSIST_GAP);
+    plan.length = Math.min(Math.max(0, reach), Math.max(0, entry - ASSIST_GAP));
+  }
   return plan;
 }
 
@@ -259,29 +320,26 @@ export interface LungeStep {
 }
 
 /**
- * The bodies a lunge is swept against: each obstacle's core, where it has one, so the Husk's leg tips, which stop his
- * walk at the ground, are no wall at the height his body lunges through, and only its hump and thorax stop the lunge.
- * Written into `into`, one entry per obstacle, reused, so a frame builds nothing.
+ * What a lunge's step adds along its way once his drive has moved him `driven` metres along it this frame: for a step
+ * ahead, only what the drive did not already cover, so he travels the larger of the two and never their sum (a light hit
+ * swung at the walk's 0.4 pace, 1.28 m/s, against the forehand's root motion, which peaks near 4.5 m/s, moves at the
+ * clip's speed while it is the faster and at the walk's after); a step back in full, since it only slows him. Summed, as
+ * phase B's scripted lunge was, a hit on the move carried him its whole lunge on top of the walk, and with the
+ * Quaternius clips' 0.75 m and 1.47 m of travel he would have surged through every swing.
  */
-export function lungeBodies(obstacles: readonly Obstacle[], into: Obstacle[]): Obstacle[] {
-  into.length = obstacles.length;
-  for (let i = 0; i < obstacles.length; i++) {
-    const from = obstacles[i]!;
-    const body = (into[i] ??= { x: 0, z: 0, radius: 0 });
-    body.x = from.x;
-    body.z = from.z;
-    body.radius = from.core ?? from.radius;
-  }
-  return into;
+export function blendRootStep(step: number, driven: number): number {
+  return step > 0 ? Math.max(0, step - Math.max(0, driven)) : step;
 }
 
 /**
- * Carries a hit's lunge along `curve` by what `time` has reached since the last call, on top of what his drive moved him
- * to (x, z, yaw): planned when the curve first moves (planLunge, over `targets` with `assistTurn` radians, its length at
- * most the curve's total) from where he stands and faces then, scaled by the plan's length over the curve's total, and
- * swept against `bodies` (lungeBodies of the obstacles) and the area's edge (sweepMove), stopping for the rest of the hit
- * at the first that holds it. The turn the assist plans goes on by the share of the total carried. Writes the new place
- * and facing into `at` and keeps its own count in `state`. A time that has not moved (a hit-stop) carries nothing.
+ * Carries a lunge along `curve` by what `time` has reached since the last call, on top of what his drive moved him to
+ * (x, z, yaw): planned when the curve first moves (planLunge, over `targets` with `assistTurn` radians, reaching at most
+ * the curve's reach) from where he stands and faces then, scaled by the plan's length over the curve's reach, combined
+ * with the drive (blendRootStep; `driven` is the metres and the way his drive moved him this frame), and swept against
+ * `obstacles` (each dummy's footprint widened by his reach, as his walk is) and the area's edge (sweepMove), stopping
+ * for the rest of the hit at the first that holds it. The turn the assist plans goes on by the share of the reach
+ * carried. Writes the new place and facing into `at` and keeps its own count in `state`. A time that has not moved (a
+ * hit-stop) carries nothing.
  */
 export function stepLunge(
   state: LungeState,
@@ -289,29 +347,36 @@ export function stepLunge(
   time: number,
   at: LungeStep,
   targets: readonly Obstacle[],
-  bodies: readonly Obstacle[],
+  obstacles: readonly Obstacle[],
   assistTurn: number,
   planetRadius: number,
+  driven: { metres: number; yaw: number } = { metres: 0, yaw: 0 },
+  turnBy = Infinity,
 ): void {
   const forward = curve.at(time);
   const side = curve.side ? curve.side(time) : 0;
   if (forward === state.done && side === state.sideDone) return;
-  state.plan ??= planLunge(at.x, at.z, at.yaw, curve.total, targets, assistTurn);
+  state.plan ??= planLunge(at.x, at.z, at.yaw, curve.reach, targets, assistTurn);
   const plan = state.plan;
-  const scale = curve.total > 0 ? plan.length / curve.total : 0;
-  const ahead = (forward - state.done) * scale;
+  const scale = curve.reach > 0 ? plan.length / curve.reach : 1;
+  const along = (forward - state.done) * scale;
   const right = (side - state.sideDone) * scale;
   state.done = forward;
   state.sideDone = side;
-  const share = curve.total > 0 ? Math.min(1, Math.max(0, forward / curve.total)) : 1;
+  // The turn goes on with the curve's progress, and is whole by `turnBy` (a hit's active frames, where his facing locks)
+  // whatever the curve has done. It followed the curve alone, so the scripted lunge, whose curve runs to 0.04 s past
+  // the strike, went on turning him through the active frames his facing is locked for, and a root-motion curve that
+  // had not moved far by then left the turn part done at the strike.
+  const share = Math.max(curve.reach > 0 ? Math.min(1, Math.max(0, forward / curve.reach)) : 1, Math.min(1, Math.max(0, time / turnBy)));
   const turn = (share - state.turned) * plan.turn;
   state.turned = share;
+  const ahead = blendRootStep(along, driven.metres * Math.cos(wrapAngle(driven.yaw - plan.yaw)));
   if (!state.blocked && (ahead !== 0 || right !== 0)) {
     // His right, facing (sin yaw, cos yaw) on a y-up frame, is (-cos yaw, sin yaw).
     const dx = Math.sin(plan.yaw) * ahead - Math.cos(plan.yaw) * right;
     const dz = Math.cos(plan.yaw) * ahead + Math.sin(plan.yaw) * right;
     const [tx, tz] = groundToTangent(at.x, at.z, dx, dz, planetRadius);
-    const swept = sweepMove(at.x, at.z, tx, tz, bodies);
+    const swept = sweepMove(at.x, at.z, tx, tz, obstacles);
     state.moved += groundDistance(at.x, at.z, swept.x, swept.z, planetRadius);
     state.blocked = swept.blocked;
     at.x = swept.x;

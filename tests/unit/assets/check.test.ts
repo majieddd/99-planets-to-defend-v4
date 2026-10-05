@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { comboWindowFailures, comboWindowsNote, evaluateAsset, fileFailures, timedClips } from '../../../tools/assets/check.mjs';
+import { comboSets, comboWindowFailures, comboWindowsNote, evaluateAsset, fileFailures, rootMotionFailures, rootMotionNote, timedClips } from '../../../tools/assets/check.mjs';
 
 const budgets = {
   xeno: { tris: 9000, bones: 24, texture: 1024, ink: true, animations: ['idle', 'walk', 'attack'] },
@@ -332,5 +332,108 @@ describe("the combo's windows against timings.json and the sidecar", () => {
     // A model with no windows and no combo (Bulwark, the Husk) has nothing to hold.
     expect(comboWindowFailures({ ...model, name: 'bulwark' }, { commanders: { bulwark: { attack: { duration: 0.85, strike: 0.34 } } } }, { notes: {} })).toEqual([]);
     expect(comboWindowsNote({ ...model, name: 'bulwark' }, windows(), { notes: {} })).toBeNull();
+  });
+});
+
+describe('two swing sets, the recovery keys and the root motion against the sidecar', () => {
+  const model = { name: 'commander_pip', family: 'commanders', kind: 'model', animations: [] as { name: string; duration: number; exportedDuration: number | null; strike: number | null }[] };
+  const entries = (overrides: Record<string, Record<string, unknown>> = {}) => ({
+    commanders: {
+      commander_pip: {
+        attack_1: { duration: 0.433, strike: 0.267, activeFrom: 0.217, activeTo: 0.347, cancel: 0.367, recovery: 'attack_1_rec', ...overrides['attack_1'] },
+        attack_2: { duration: 0.533, strike: 0.267, activeFrom: 0.217, activeTo: 0.347, cancel: 0.367, ...overrides['attack_2'] },
+        attack_3: { duration: 2, strike: 0.667, activeFrom: 0.617, activeTo: 0.747, cancel: null, recoverFrom: 0.767, recoverTo: 1.633, ...overrides['attack_3'] },
+        attack_1_rec: { duration: 0.967, strike: null },
+        attack_1_hand: { duration: 0.55, strike: 0.2, activeFrom: 0.15, activeTo: 0.28, cancel: 0.3 },
+        attack_2_hand: { duration: 0.55, strike: 0.2, activeFrom: 0.15, activeTo: 0.28, cancel: 0.3 },
+        attack_3_hand: { duration: 0.85, strike: 0.38, activeFrom: 0.33, activeTo: 0.46, cancel: null, ...overrides['attack_3_hand'] },
+      },
+    },
+  });
+  const sidecar = {
+    notes: {
+      combo: {
+        attack_1: { set: 'quaternius', cancel: 0.367 },
+        attack_2: { set: 'quaternius', cancel: 0.367 },
+        attack_3: { set: 'quaternius', cancel: null },
+        attack_1_hand: { set: 'hand', cancel: 0.3 },
+        attack_2_hand: { set: 'hand', cancel: 0.3 },
+        attack_3_hand: { set: 'hand', cancel: null },
+      },
+    },
+  };
+
+  it("reads each set's last hit as its finisher, and names both sets on the pass line", () => {
+    expect([...comboSets(sidecar.notes.combo)].map(([set, hits]) => [set, hits])).toEqual([
+      ['quaternius', ['attack_1', 'attack_2', 'attack_3']],
+      ['hand', ['attack_1_hand', 'attack_2_hand', 'attack_3_hand']],
+    ]);
+    expect(comboWindowFailures(model, entries(), sidecar)).toEqual([]);
+    const note = comboWindowsNote(model, entries(), sidecar)!;
+    expect(note).toContain('quaternius: attack_1 0 < 0.217 < 0.267 < 0.347 <= 0.367 < 0.433 then attack_1_rec 0.967 s');
+    expect(note).toContain('attack_3 0 < 0.617 < 0.667 < 0.747 <= 2 (finisher, cancel null, recovery cut 0.747 <= 0.767 < 1.633 <= 2)');
+    expect(note).toContain('hand: attack_1_hand');
+    // Read as one set, as before the sets had names, attack_3 would be a light hit missing its cancel.
+    const unnamed = { notes: { combo: Object.fromEntries(Object.entries(sidecar.notes.combo).map(([k, v]) => [k, { cancel: v.cancel }])) } };
+    expect(comboWindowFailures(model, entries(), unnamed)).toContain('attack_3, a light hit, needs a cancel in seconds, not null');
+  });
+
+  it("holds the finisher's cuttable recovery in order, both keys or neither, and on the finisher alone", () => {
+    expect(comboWindowFailures(model, entries({ attack_3: { recoverFrom: 0.7 } }), sidecar)).toEqual([
+      'attack_3 recovery out of order: want activeTo 0.747 <= recoverFrom 0.7 < recoverTo 1.633 <= duration 2',
+    ]);
+    expect(comboWindowFailures(model, entries({ attack_3: { recoverTo: 2.1 } }), sidecar)).toHaveLength(1);
+    expect(comboWindowFailures(model, entries({ attack_3: { recoverTo: 0.767 } }), sidecar)).toHaveLength(1);
+    expect(comboWindowFailures(model, entries({ attack_3_hand: { recoverFrom: 0.5 } }), sidecar)).toEqual([
+      'attack_3_hand gives recoverFrom without recoverTo: the cuttable recovery needs both or neither',
+    ]);
+    expect(comboWindowFailures(model, entries({ attack_2: { recoverFrom: 0.4, recoverTo: 0.5 } }), sidecar)).toEqual([
+      'attack_2, a light hit, takes no recoverFrom or recoverTo: its recovery ends at its cancel point or in its recovery clip',
+    ]);
+  });
+
+  it('names a recovery clip only on a light hit, and only one timings.json times', () => {
+    expect(comboWindowFailures(model, entries({ attack_2: { recovery: 'attack_2_rec' } }), sidecar)).toEqual(['attack_2 names the recovery clip attack_2_rec, which timings.json does not time']);
+    expect(comboWindowFailures(model, entries({ attack_3: { recovery: 'attack_1_rec' } }), sidecar)).toEqual([
+      'attack_3, the finisher, names a recovery clip (attack_1_rec); its recovery is the end of its own clip',
+    ]);
+    expect(comboWindowFailures(model, entries({ attack_1: { recovery: 3 } }), sidecar)).toEqual(['attack_1 recovery 3 is not a clip name']);
+  });
+
+  it('holds a clip with no strike to none exported, where a missing strike used to pass as NaN', () => {
+    const rec = (strike: number | null | undefined) => ({ name: 'attack_1_rec', duration: 0.967, exportedDuration: 0.967, strike, loop: false });
+    const pip = (strike: number | null | undefined) => ({ ...husk(), name: 'commander_pip', family: 'commanders', morphs: [], animations: [...['idle', 'run'].map((name) => ({ name, duration: 1, exportedDuration: 1, strike: null })), { name: 'attack', duration: 0.85, exportedDuration: 0.85, strike: 0.34 }, rec(strike)] });
+    const timed = { commanders: { commander_pip: { attack: { duration: 0.85, strike: 0.34 }, attack_1_rec: { duration: 0.967, strike: null } } } };
+    const budgets = { commanders: { tris: 24000, bones: 32, texture: 1024, ink: true, animations: ['idle', 'run', 'attack'] } };
+    expect(evaluateAsset(pip(null), budgets, timed)).toEqual([]);
+    expect(evaluateAsset(pip(0.2), budgets, timed)).toEqual(['attack_1_rec strike 0.2 != timings null (no strike)']);
+    const noStrikeKey = { commanders: { commander_pip: { attack: { duration: 0.85 }, attack_1_rec: { duration: 0.967, strike: null } } } };
+    expect(evaluateAsset(pip(null), budgets, noStrikeKey)).toEqual(['attack strike 0.34 != timings undefined']);
+    expect(timedClips(pip(null), timed)).toEqual(['attack 0.85 s, strike 0.34 s', 'attack_1_rec 0.967 s, no strike']);
+  });
+
+  it("holds each root-motion record to a clip the model exports, rising from 0 and ending within a frame of the clip", () => {
+    const withClips = { ...model, animations: [{ name: 'attack_1', duration: 0.4333, exportedDuration: 0.4333, strike: 0.267 }] };
+    const ok = { notes: { root_motion: { attack_1: { times: [0, 0.2, 0.4333], forward: [0, 0.5, 0.75], side: [0, 0.01, 0.04] } } } };
+    expect(rootMotionFailures(withClips, ok)).toEqual([]);
+    expect(rootMotionNote(withClips, ok)).toBe('root motion attack_1 0.75 m forward over 0.433 s');
+    expect(rootMotionFailures(withClips, { notes: { root_motion: { attack_9: ok.notes.root_motion.attack_1 } } })).toEqual(['root motion for attack_9, which the model does not export']);
+    expect(rootMotionFailures(withClips, { notes: { root_motion: { attack_1: { times: [0, 0.2, 0.3], forward: [0, 0.5, 0.75] } } } })).toEqual([
+      'attack_1 root motion ends at 0.3 s, more than a frame from its 0.433 s clip',
+    ]);
+    expect(rootMotionFailures(withClips, { notes: { root_motion: { attack_1: { times: [0, 0.3, 0.2], forward: [0, 0.5, 0.75] } } } })).toEqual([
+      'attack_1 root motion times must be two or more finite numbers rising from 0',
+    ]);
+    expect(rootMotionFailures(withClips, { notes: { root_motion: { attack_1: { times: [0, 0.2, 0.4333], forward: [0, 0.5] } } } })).toEqual([
+      'attack_1 root motion forward must be 3 finite numbers from 0',
+    ]);
+    // No record, or a model with none: nothing to hold.
+    expect(rootMotionFailures(withClips, { notes: {} })).toEqual([]);
+    expect(rootMotionNote(withClips, { notes: {} })).toBeNull();
+    // The committed sidecar against the committed manifest.
+    const manifest = JSON.parse(readFileSync('public/assets/manifest.json', 'utf8')) as { assets: { name: string }[] };
+    const shipped = manifest.assets.find((entry) => entry.name === 'commander_pip')!;
+    const meta = JSON.parse(readFileSync('public/assets/commanders/commander_pip.meta.json', 'utf8')) as object;
+    expect(rootMotionFailures(shipped, meta)).toEqual([]);
   });
 });

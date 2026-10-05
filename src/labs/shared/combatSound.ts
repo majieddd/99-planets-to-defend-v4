@@ -54,10 +54,14 @@ export const WHOOSH_PEAK_SHARE = 0.92;
 /** The share of the peak the wind-up's first half rises to before the cut's rush: a quiet draw, then the swing. */
 export const WHOOSH_WINDUP_LEVEL = 0.12;
 
-/** A hit's whoosh, from its voice and its contract: it peaks a little before the strike and dies away after it. */
-export function whooshParams(step: ComboStep, contract: HitContract): WhooshParams {
+/**
+ * A hit's whoosh, from its voice and its contract, at the hit's playback `speed` (the feel's per-hit speed): it peaks a
+ * little before the strike and dies away after it, both in real seconds, so a hit played faster whooshes faster.
+ */
+export function whooshParams(step: ComboStep, contract: HitContract, speed = 1): WhooshParams {
   const voice = WHOOSH_VOICES[step];
-  return { rise: Math.max(0.02, contract.strike * WHOOSH_PEAK_SHARE), ...voice };
+  const rate = speed > 0 && Number.isFinite(speed) ? speed : 1;
+  return { ...voice, rise: Math.max(0.02, (contract.strike * WHOOSH_PEAK_SHARE) / rate), fall: voice.fall / rate };
 }
 
 /** An impact: a tonal thunk falling in pitch, a short metallic click and a noise transient, on the contact frame. */
@@ -132,7 +136,11 @@ export function masterGain(feel: { mute: boolean; volume: number }): number {
 
 /** The quietest a gain envelope reaches: exponential ramps cannot reach 0. */
 const SILENT = 1e-4;
-/** Seconds of noise the noise buffer holds, enough for the longest sound, read from a random offset each time. */
+/**
+ * Seconds of noise the noise buffer holds. Each noise source loops it, so a sound may last longer than the buffer: the
+ * Quaternius finisher's whoosh rises over 0.61 s and falls over 0.30 s, 1.14 s at the slowest playback speed (0.8),
+ * which a one-shot read of a 1 s buffer cut off before its tail. Looping keeps the buffer small however slow the swing.
+ */
 export const NOISE_SECONDS = 1;
 /** The seed the noise buffer is filled from, so every load and the offline renders sound alike. */
 export const NOISE_SEED = 4411;
@@ -158,11 +166,16 @@ export function makeNoiseBuffer(ctx: BaseAudioContext, seed = NOISE_SEED): Audio
   return buffer;
 }
 
-/** A noise source started `when`, read from `offset` seconds into the buffer, stopped `seconds` later. */
+/**
+ * A noise source started `when`, read from `offset` seconds into the looping buffer, stopped `seconds` later. It was
+ * read once from an offset clamped to leave `seconds` of buffer, so a sound longer than the buffer was cut off.
+ */
 function noiseSource(ctx: BaseAudioContext, noise: AudioBuffer, when: number, seconds: number, offset: number): AudioBufferSourceNode {
   const source = ctx.createBufferSource();
   source.buffer = noise;
-  source.start(when, Math.max(0, Math.min(NOISE_SECONDS - seconds, offset)), seconds);
+  source.loop = true;
+  const length = noise.duration > 0 ? noise.duration : NOISE_SECONDS;
+  source.start(when, ((offset % length) + length) % length, seconds);
   return source;
 }
 
@@ -268,8 +281,8 @@ export interface SoundReading {
 }
 
 export interface CombatSound {
-  /** A swing begins: its whoosh, peaking near its strike. */
-  whoosh(step: ComboStep, contract: HitContract): void;
+  /** A swing begins: its whoosh, peaking near its strike, at the hit's playback `speed`. */
+  whoosh(step: ComboStep, contract: HitContract, speed?: number): void;
   /** A hit connects: its impact, now. */
   impact(finisher: boolean): void;
   /** A swing ended having met nothing: the whiff, now. */
@@ -348,9 +361,9 @@ export function createCombatSound(o: CombatSoundOptions): CombatSound {
   };
 
   return {
-    whoosh(step, contract) {
+    whoosh(step, contract, speed = 1) {
       const live = ready('whoosh');
-      if (live) scheduleWhoosh(live.ctx, live.master, live.noise, whooshParams(step, contract), live.ctx.currentTime, noiseOffset);
+      if (live) scheduleWhoosh(live.ctx, live.master, live.noise, whooshParams(step, contract, speed), live.ctx.currentTime, noiseOffset);
     },
     impact(finisher) {
       const live = ready('impact');

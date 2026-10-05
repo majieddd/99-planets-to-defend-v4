@@ -10,9 +10,15 @@
  * COMBAT_FEEL_RANGES; the folder, the readout, the copy button and the address parameter follow those three tables, so
  * nothing else changed for them. The hit-stops' defaults are the blueprint's (Numbers, Combat feel: 55 ms and 90 ms);
  * the rest are lab numbers with rows of their own (Numbers, Combat arena).
+ *
+ * Phase C added the swing set (a choice between the Quaternius hits and the hand-keyed ones), each hit's playback speed,
+ * the finisher's pace, turn and recovery cut, and how long the guard stays up after a hit, the same way.
  */
+import { DEFAULT_SWING_SET, type SwingSet } from './combo';
 
 export interface CombatFeel {
+  /** Which swing set the combo plays: Quaternius's retargeted sword combo, or the hand-keyed hits (combo.ts, SWING_SETS). */
+  swingSet: SwingSet;
   /** Seconds one hit of the chain crossfades into the next. */
   crossfade: number;
   /** Seconds the first hit of a chain takes to take over from the idle and run. */
@@ -27,6 +33,21 @@ export interface CombatFeel {
   moveScale: number;
   /** The share of his turn rate he keeps during a light hit's wind-up. */
   windupTurn: number;
+  /** The share of his pace he keeps from the finisher's start to its recovery cut. */
+  finisherPace: number;
+  /** The share of his turn rate he keeps during the finisher's wind-up and its recovery up to the cut. */
+  finisherTurn: number;
+  /**
+   * Where the finisher's recovery is cut, as a share of its cuttable window (0 its start, 1 its end): from there he moves
+   * and turns freely and a press starts a new chain. A finisher with no window plays its recovery out.
+   */
+  recoveryCut: number;
+  /** Each hit's playback speed, the first, the second and the finisher: its clip time moves by the step times this. */
+  speed1: number;
+  speed2: number;
+  speed3: number;
+  /** Seconds the guard stays up after a hit or a recovery ends, or after a target was last near, before the relaxed idle. */
+  guardHold: number;
   /** Seconds a light hit's contact holds his clips, his movement and the struck dummy, while the view goes on. */
   hitStopLight: number;
   /** Seconds the finisher's contact holds them. */
@@ -59,6 +80,7 @@ export interface CombatFeel {
 
 /** The defaults, the one place they are set. Frozen so a slider writes a copy, never these. */
 export const DEFAULT_COMBAT_FEEL: Readonly<CombatFeel> = Object.freeze({
+  swingSet: DEFAULT_SWING_SET,
   crossfade: 0.1,
   fadeIn: 0.07,
   fadeOut: 0.2,
@@ -66,6 +88,13 @@ export const DEFAULT_COMBAT_FEEL: Readonly<CombatFeel> = Object.freeze({
   reset: 0.3,
   moveScale: 0.4,
   windupTurn: 0.5,
+  finisherPace: 0.15,
+  finisherTurn: 0.25,
+  recoveryCut: 0.4,
+  speed1: 1,
+  speed2: 1,
+  speed3: 1,
+  guardHold: 3,
   hitStopLight: 0.055,
   hitStopFinisher: 0.09,
   lungeLight: 0.35,
@@ -96,20 +125,43 @@ export interface FeelToggle {
   label: string;
 }
 
+/**
+ * A setting's dropdown: each choice's name in the panel and the value it stands for, and the setting's name. A choice
+ * takes one of the values, in the panel and in `?feel=` alike.
+ */
+export interface FeelChoice {
+  choices: Readonly<Record<string, string>>;
+  label: string;
+}
+
+/** Any setting's control: a slider, a checkbox or a dropdown. */
+export type FeelControl = FeelRange | FeelToggle | FeelChoice;
+
 /** The settings that are numbers, each with a slider. */
 export type NumericFeelKey = { [K in keyof CombatFeel]: CombatFeel[K] extends number ? K : never }[keyof CombatFeel];
 
 /** Whether a setting is a toggle (a checkbox) rather than a number on a slider. */
-export function isFeelToggle(control: FeelRange | FeelToggle): control is FeelToggle {
+export function isFeelToggle(control: FeelControl): control is FeelToggle {
   return 'toggle' in control;
 }
 
+/** Whether a setting is a choice (a dropdown). */
+export function isFeelChoice(control: FeelControl): control is FeelChoice {
+  return 'choices' in control;
+}
+
 /**
- * Each setting's slider, in the order the folder shows them. The ranges also bound what `?feel=` may set. The crossfade
- * stops at 0.25 s, under the light hits' 0.30 s cancel point, so a hit has always finished fading in by the time the next
- * one can take over from it, and no more than two hits ever show at once (combo.ts, startHit).
+ * Each setting's control, in the order the folder shows them. The ranges also bound what `?feel=` may set. The crossfade
+ * stops at 0.25 s, under every light hit's cancel point (0.367 s for the Quaternius hits, 0.30 s for the hand-keyed ones,
+ * in clip seconds as the fades are), so a hit has always finished fading in by the time the next one can take over from
+ * it, and no more than two clips ever show at once (combo.ts, startHit). The playback speeds run from 0.8 to 1.6: the
+ * Quaternius hits strike in a chain at 0.27, 0.63 and 1.40 s against the hand-keyed 0.20, 0.50 and 0.98 s, and 1.6 brings
+ * their finisher's 0.67 s wind-up near the hand-keyed one's 0.38 s.
  */
-export const COMBAT_FEEL_RANGES: { readonly [K in keyof CombatFeel]: CombatFeel[K] extends boolean ? FeelToggle : FeelRange } = {
+export const COMBAT_FEEL_RANGES: {
+  readonly [K in keyof CombatFeel]: CombatFeel[K] extends boolean ? FeelToggle : CombatFeel[K] extends string ? FeelChoice : FeelRange;
+} = {
+  swingSet: { choices: { quaternius: 'quaternius', 'hand-keyed': 'hand' }, label: 'swing set' },
   crossfade: { min: 0.02, max: 0.25, step: 0.01, label: 'crossfade between hits (s)' },
   fadeIn: { min: 0.02, max: 0.15, step: 0.01, label: 'first hit fade in (s)' },
   fadeOut: { min: 0.05, max: 0.4, step: 0.01, label: 'last hit fade out (s)' },
@@ -117,6 +169,13 @@ export const COMBAT_FEEL_RANGES: { readonly [K in keyof CombatFeel]: CombatFeel[
   reset: { min: 0, max: 1, step: 0.05, label: 'chain reset after a hit (s)' },
   moveScale: { min: 0, max: 1, step: 0.05, label: 'pace kept in a light hit' },
   windupTurn: { min: 0, max: 1, step: 0.05, label: 'turn rate kept in the wind-up' },
+  finisherPace: { min: 0, max: 1, step: 0.05, label: 'finisher pace kept' },
+  finisherTurn: { min: 0, max: 1, step: 0.05, label: 'finisher wind-up turn' },
+  recoveryCut: { min: 0, max: 1, step: 0.05, label: 'finisher recovery cut (share of its window)' },
+  speed1: { min: 0.8, max: 1.6, step: 0.05, label: 'hit 1 playback speed' },
+  speed2: { min: 0.8, max: 1.6, step: 0.05, label: 'hit 2 playback speed' },
+  speed3: { min: 0.8, max: 1.6, step: 0.05, label: 'finisher playback speed' },
+  guardHold: { min: 0, max: 10, step: 0.5, label: 'guard held after combat (s)' },
   hitStopLight: { min: 0, max: 0.15, step: 0.005, label: 'hit-stop on a light hit (s)' },
   hitStopFinisher: { min: 0, max: 0.2, step: 0.005, label: 'hit-stop on the finisher (s)' },
   lungeLight: { min: 0, max: 0.8, step: 0.05, label: 'lunge on a light hit (m)' },
@@ -157,20 +216,26 @@ function decimals(step: number): number {
  * panel and pastes back to us, and which `?feel=` takes in return.
  */
 export function combatFeelJson(feel: CombatFeel): string {
-  const out: Record<string, number | boolean> = {};
+  const out: Record<string, number | boolean | string> = {};
   for (const key of COMBAT_FEEL_KEYS) {
-    const control = COMBAT_FEEL_RANGES[key];
+    const control: FeelControl = COMBAT_FEEL_RANGES[key];
     const value = feel[key];
-    out[key] = isFeelToggle(control) ? Boolean(value) : Number((value as number).toFixed(decimals(control.step)));
+    if (isFeelToggle(control)) out[key] = Boolean(value);
+    else if (isFeelChoice(control)) out[key] = String(value);
+    else out[key] = Number((value as number).toFixed(decimals(control.step)));
   }
   return JSON.stringify(out);
 }
 
-/** Whether a value may be given to a setting: true or false for a toggle, a finite number within range for a slider. */
+/**
+ * Whether a value may be given to a setting: true or false for a toggle, one of its values for a choice, a finite number
+ * within range for a slider.
+ */
 export function acceptFeel(key: string, value: unknown): key is keyof CombatFeel {
   if (!Object.prototype.hasOwnProperty.call(COMBAT_FEEL_RANGES, key)) return false;
-  const control = COMBAT_FEEL_RANGES[key as keyof CombatFeel];
+  const control: FeelControl = COMBAT_FEEL_RANGES[key as keyof CombatFeel];
   if (isFeelToggle(control)) return typeof value === 'boolean';
+  if (isFeelChoice(control)) return typeof value === 'string' && Object.values(control.choices).includes(value);
   return typeof value === 'number' && Number.isFinite(value) && value >= control.min && value <= control.max;
 }
 
@@ -183,8 +248,9 @@ export function snapFeel(key: NumericFeelKey, value: number): number {
 
 /**
  * Reads pasted settings, such as the readout's JSON: every key it names that is a setting, with a number within that
- * setting's range, is taken, put on its slider's step, and each other key, or a value out of range, is named in
- * `rejected`. Text that is not a JSON object takes nothing and is named as a whole, so a mistyped address opens the
+ * setting's range, is taken, put on its slider's step; a toggle takes true or false and a choice one of its values, as
+ * given; and each other key, or a value out of range or of the wrong kind (a number for a toggle, a word a choice does
+ * not offer), is named in `rejected`. Text that is not a JSON object takes nothing and is named as a whole, so a mistyped address opens the
  * defaults rather than a broken feel. A value between two steps used to be taken as it was, so the slider, which can
  * show only its steps, drew one value while the play code read another (`?feel={"crossfade":0.123}` played 0.123 s
  * under a slider at 0.12).
@@ -202,6 +268,7 @@ export function parseCombatFeel(text: string): { feel: Partial<CombatFeel>; reje
   for (const [key, value] of Object.entries(parsed)) {
     if (!acceptFeel(key, value)) rejected.push(key);
     else if (typeof value === 'boolean') (feel as Record<string, boolean>)[key] = value;
+    else if (typeof value === 'string') (feel as Record<string, string>)[key] = value;
     else (feel as Record<string, number>)[key] = snapFeel(key as NumericFeelKey, value as number);
   }
   return { feel, rejected };

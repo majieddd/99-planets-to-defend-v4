@@ -2,7 +2,8 @@ import { AnimationClip, CylinderGeometry, Group, Mesh, MeshBasicMaterial, Object
 import { describe, expect, it } from 'vitest';
 import { arenaSpawn, ARENA_DUMMY_NAMES, dummyHomes } from '../../../src/labs/combat/arena';
 import { createTrainingDummies, type TrainingDummies } from '../../../src/labs/combat/dummies';
-import { PLAY_AREA_RADIUS, PLAY_BODY_RADIUS } from '../../../src/labs/world/playMotion';
+import { PIP_STRIKE_REACH } from '../../../src/labs/combat/footprint';
+import { obstacleGap, PLAY_AREA_RADIUS } from '../../../src/labs/world/playMotion';
 import type { Ground } from '../../../src/render/terrain/place';
 
 /**
@@ -29,11 +30,22 @@ function arena(pip: { x: number; z: number } | null = arenaSpawn()): TrainingDum
 const apart = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.hypot(a.x - b.x, a.z - b.z);
 
 describe("the training dummies' knockback seam", () => {
-  it('reads each reach from the drawn bounds and keeps one obstacle list that follows every move', () => {
+  it('reads each reach from the drawn bounds, its footprint from its posed vertices, and keeps one obstacle list that follows every move', () => {
     const dummies = arena();
     for (const dummy of dummies.list) expect(dummy.reach).toBeCloseTo(1.2, 2);
+    // The stand-in's top ring stands in the footprint's band: its core is the ring, 1.2 m, and the ring's front holds its
+    // head, a round end about HEAD_FROM.
+    for (const dummy of dummies.list) {
+      expect(dummy.footprint.core).toBeCloseTo(1.2, 2);
+      expect(dummy.footprint.head).not.toBeNull();
+    }
     const list = dummies.obstacles();
-    expect(list.map((obstacle) => obstacle.radius)).toEqual(dummies.list.map((dummy) => dummy.reach + PLAY_BODY_RADIUS));
+    // Each obstacle is its footprint widened by his reach in a swing, the head along the dummy's facing.
+    expect(list.map((obstacle) => obstacle.radius)).toEqual(dummies.list.map((dummy) => dummy.footprint.core + PIP_STRIKE_REACH));
+    for (const [i, obstacle] of list.entries()) {
+      const yaw = dummies.list[i]!.home.yaw;
+      expect(obstacle.head).toMatchObject({ dirX: expect.closeTo(Math.sin(yaw), 12), dirZ: expect.closeTo(Math.cos(yaw), 12), radius: dummies.list[i]!.footprint.head!.radius + PIP_STRIKE_REACH });
+    }
     const pushed = dummies.push(1, 0.3, 0);
     // The same list, moved with the dummy, so Pip reads it every frame with nothing built for him.
     expect(dummies.obstacles()).toBe(list);
@@ -60,11 +72,14 @@ describe("the training dummies' knockback seam", () => {
     const pip = arenaSpawn();
     const dummies = arena(pip);
     const [left, middle, right] = dummies.list;
-    // The middle dummy driven 2 m straight at Pip, 3 m off, stands off him by its reach and his body, as he walks round it.
+    // The middle dummy driven 2 m straight at Pip, 3 m off, stops where his root meets its footprint widened by his reach,
+    // as his walk does: within a sweep step's rounding of its edge, and never inside it.
     const towardPip = { x: pip.x - middle!.home.x, z: pip.z - middle!.home.z };
     const length = Math.hypot(towardPip.x, towardPip.z);
     const atPip = dummies.push(1, (towardPip.x / length) * 2, (towardPip.z / length) * 2);
-    expect(apart(atPip, pip)).toBeCloseTo(middle!.reach + PLAY_BODY_RADIUS, 9);
+    const gap = obstacleGap(dummies.obstacles()[1]!, pip.x, pip.z);
+    expect(gap).toBeGreaterThanOrEqual(-1e-9);
+    expect(gap).toBeLessThan(1e-6);
     // Its yaw is kept: a knockback moves a dummy and does not turn it.
     expect(atPip.yaw).toBe(middle!.home.yaw);
     // The left dummy driven at the middle one, now by Pip, stops body to body, both reaches apart.
@@ -85,7 +100,9 @@ describe("the training dummies' knockback seam", () => {
     const pip = arenaSpawn();
     const dummies = arena(pip);
     const middle = dummies.list[1]!;
-    const contact = middle.reach + PLAY_BODY_RADIUS;
+    // Head on, facing him, its footprint reaches its head's front and his reach: the round end about HEAD_FROM.
+    const head = middle.footprint.head!;
+    const contact = Math.max(middle.footprint.core, head.to + head.radius) + PIP_STRIKE_REACH;
     // Stood touching him on the line from his spawn to its home, then driven 3 m straight at him.
     const toward = { x: pip.x - middle.home.x, z: pip.z - middle.home.z };
     const length = Math.hypot(toward.x, toward.z);

@@ -8,19 +8,23 @@ import {
   COMBO_READY,
   COMBO_STEP_FLOOR,
   comboContracts,
-  comboPhase,
-  comboWeights,
-  contractOf,
+  comboPhase as comboPhaseOf,
+  comboWeights as comboWeightsOf,
+  contractOf as contractIn,
   fadeStep,
   FINISHER_FROM_BEFORE_STRIKE,
   FIRST_FADE_STEP,
+  HAND_HITS,
+  hitContract,
   hitFades,
-  holdsRunWeight,
-  longestComboStep,
+  longestComboStep as longestComboStepOf,
   ownWeight,
   placeholderAnchors,
-  stepCombo,
-  swingMotion,
+  recoveryCut,
+  stepCombo as stepComboOf,
+  swingMotion as swingMotionOf,
+  SWING_SETS,
+  swingSetContracts,
   warpTime,
   type ComboFrame,
   type ComboState,
@@ -33,7 +37,21 @@ import { FREE_MOTION } from '../../../src/labs/world/playMotion';
 import timings from '../../../src/shared/timings.json';
 
 const FEEL: CombatFeel = { ...DEFAULT_COMBAT_FEEL };
-const [HIT1, HIT2, HIT3] = COMBO_HITS as [(typeof COMBO_HITS)[number], (typeof COMBO_HITS)[number], (typeof COMBO_HITS)[number]];
+/**
+ * Most of the chain's rules are held here on the hand-keyed set (HAND_HITS), whose numbers these tests were written
+ * against and which keeps them unchanged under its own names; the Quaternius set, the default, has its own tests below
+ * (recovery clips, the finisher's recovery cut, the playback speeds). Every function takes the contracts it plays.
+ */
+const [HIT1, HIT2, HIT3] = HAND_HITS as [HitContract, HitContract, HitContract];
+const stepCombo = (state: ComboState, pressed: boolean, dt: number, feel: CombatFeel = FEEL, weightStep = dt, hits: readonly HitContract[] = HAND_HITS): ComboFrame =>
+  stepComboOf(state, pressed, dt, feel, weightStep, hits);
+const comboWeights = (state: ComboState, weightStep: number, hits: readonly HitContract[] = HAND_HITS) => comboWeightsOf(state, weightStep, hits);
+const comboPhase = (state: ComboState, hits: readonly HitContract[] = HAND_HITS) => comboPhaseOf(state, hits);
+const contractOf = (step: ComboStep, hits: readonly HitContract[] = HAND_HITS) => contractIn(step, hits);
+const swingMotion = (state: ComboState, feel: CombatFeel, hits: readonly HitContract[] = HAND_HITS) => swingMotionOf(state, feel, hits);
+const longestComboStep = (hits: readonly HitContract[] = HAND_HITS) => longestComboStepOf(hits);
+/** Where a hit's buffer opens: before its cancel point, or the finisher's recovery cut (its end, with no window). */
+const bufferOf = (contract: HitContract, buffer: number, feel: CombatFeel = FEEL): number => bufferOpensAt(contract.cancel ?? recoveryCut(contract, feel.recoveryCut), buffer);
 // The source attack clip the placeholders are warped from: 25 frames at 30 fps, striking at 0.34 s (timings.json).
 const SOURCE_SECONDS = 25 / 30;
 const SOURCE_STRIKE = 0.34;
@@ -49,7 +67,7 @@ interface Frame extends ComboFrame {
  * Runs frames of the combo from a state: `dts` gives each frame's step (repeating its last), and `press` says whether a
  * frame presses, from the state the frame starts from. Stops after `count` frames.
  */
-function play(from: ComboState, count: number, dts: readonly number[], press: (state: ComboState, index: number) => boolean, feel = FEEL, hits: readonly HitContract[] = COMBO_HITS): Frame[] {
+function play(from: ComboState, count: number, dts: readonly number[], press: (state: ComboState, index: number) => boolean, feel = FEEL, hits: readonly HitContract[] = HAND_HITS): Frame[] {
   const frames: Frame[] = [];
   let state = from;
   for (let i = 0; i < count; i++) {
@@ -63,13 +81,13 @@ function play(from: ComboState, count: number, dts: readonly number[], press: (s
 }
 
 /** Presses on the first frame, and then once in each hit as soon as its buffer is open, until three hits have begun. */
-function chainPresser(feel = FEEL, hits: readonly HitContract[] = COMBO_HITS) {
+function chainPresser(feel = FEEL) {
   let pressedIn = new Set<ComboStep>();
   return (state: ComboState, index: number): boolean => {
     if (index === 0) return true;
     const hit = state.hit;
     if (!hit || pressedIn.has(hit.step) || hit.step === 3) return false;
-    if (hit.time >= bufferOpensAt(contractOf(hit.step, hits), feel.buffer)) {
+    if (hit.time >= bufferOpensAt(hit.opensAt, feel.buffer)) {
       pressedIn = new Set([...pressedIn, hit.step]);
       return true;
     }
@@ -77,47 +95,76 @@ function chainPresser(feel = FEEL, hits: readonly HitContract[] = COMBO_HITS) {
   };
 }
 
-/** A hit playing at a time, with the fades it would have taken on from FEEL as it began. */
-const hitAt = (step: ComboStep, time: number, fields: Partial<HitPlay> = {}): HitPlay => {
+/** A hit of `hits` playing at a time, with the fades, speed and opening it would have taken on from FEEL as it began. */
+const hitAt = (step: ComboStep, time: number, fields: Partial<HitPlay> = {}, hits: readonly HitContract[] = HAND_HITS): HitPlay => {
   const crossfaded = fields.crossfaded ?? false;
-  return { step, time, struck: false, crossfaded, chainedAt: null, fades: hitFades(crossfaded, FEEL), ...fields };
+  const contract = contractIn(step, hits);
+  const fades = hitFades(crossfaded, FEEL);
+  const opensAt = contract.cancel ?? recoveryCut(contract, FEEL.recoveryCut);
+  const endsAt = contract.finisher && contract.recoverFrom !== null ? Math.min(contract.duration, opensAt + fades.fadeOut) : contract.duration;
+  return { step, time, struck: false, crossfaded, chainedAt: null, fades, speed: 1, opensAt, endsAt, ...fields };
 };
 
 const startedSteps = (frames: readonly Frame[]): ComboStep[] => frames.filter((frame) => frame.started !== null).map((frame) => frame.started!);
 const struckSteps = (frames: readonly Frame[]): ComboStep[] => frames.filter((frame) => frame.struck !== null).map((frame) => frame.struck!);
 
 describe('the combo contracts', () => {
-  it('strike inside their active frames, cancel only after them, and leave the finisher without a cancel and planted', () => {
-    for (const hit of COMBO_HITS) {
+  it('strike inside their active frames, cancel only after them, and leave each finisher without a cancel, closing the chain', () => {
+    for (const hit of [...COMBO_HITS, ...HAND_HITS]) {
       expect(hit.strike, hit.name).toBeGreaterThan(hit.activeFrom);
       expect(hit.strike, hit.name).toBeLessThan(hit.activeTo);
       expect(hit.activeTo, hit.name).toBeLessThan(hit.cancel ?? hit.duration);
     }
-    expect([HIT1, HIT2].map((hit) => [hit.duration, hit.strike, hit.cancel, hit.planted])).toEqual([
-      [0.55, 0.2, 0.3, false],
-      [0.55, 0.2, 0.3, false],
+    // The hand-keyed hits keep the values they had as the combo, under their own names.
+    expect([HIT1, HIT2].map((hit) => [hit.name, hit.duration, hit.strike, hit.cancel, hit.finisher])).toEqual([
+      ['attack_1_hand', 0.55, 0.2, 0.3, false],
+      ['attack_2_hand', 0.55, 0.2, 0.3, false],
     ]);
-    expect([HIT3.duration, HIT3.strike, HIT3.cancel, HIT3.planted]).toEqual([0.85, 0.38, null, true]);
-    // The crossfade's ceiling is under the light hits' cancel point, so only two hits ever show at once.
-    expect(COMBAT_FEEL_RANGES.crossfade.max).toBeLessThan(HIT1.cancel!);
+    expect([HIT3.name, HIT3.duration, HIT3.strike, HIT3.cancel, HIT3.finisher, HIT3.recoverFrom, HIT3.recovery]).toEqual(['attack_3_hand', 0.85, 0.38, null, true, null, null]);
+    // The Quaternius set, the default: its own lengths, strikes and cancels, the light hits' recovery clips and the
+    // finisher's cuttable recovery.
+    expect(COMBO_HITS.map((hit) => [hit.name, hit.duration, hit.strike, hit.cancel, hit.finisher, hit.recovery, hit.recoveryDuration])).toEqual([
+      ['attack_1', 0.433, 0.267, 0.367, false, 'attack_1_rec', 0.967],
+      ['attack_2', 0.533, 0.267, 0.367, false, 'attack_2_rec', 1.033],
+      ['attack_3', 2, 0.667, null, true, null, null],
+    ]);
+    expect([COMBO_HITS[2]!.recoverFrom, COMBO_HITS[2]!.recoverTo]).toEqual([0.767, 1.633]);
+    expect(swingSetContracts('quaternius')).toBe(COMBO_HITS);
+    expect(swingSetContracts('hand')).toBe(HAND_HITS);
+    expect(SWING_SETS.hand).toEqual(HAND_HITS.map((hit) => hit.name));
+    // The crossfade's ceiling is under every light hit's cancel point, so only two clips ever show at once.
+    for (const hit of [HIT1, COMBO_HITS[0]!]) expect(COMBAT_FEEL_RANGES.crossfade.max).toBeLessThan(hit.cancel!);
   });
 
   it("take every number of each hit from its entry in src/shared/timings.json, the file assets:check and the recipe read", () => {
-    for (const hit of COMBO_HITS) {
-      const entry = timings.commanders.commander_pip[hit.name];
+    const entries = timings.commanders.commander_pip as unknown as Record<string, HitTiming>;
+    for (const hit of [...COMBO_HITS, ...HAND_HITS]) {
+      const entry = entries[hit.name]!;
       expect([hit.duration, hit.strike, hit.activeFrom, hit.activeTo, hit.cancel], hit.name).toEqual([entry.duration, entry.strike, entry.activeFrom, entry.activeTo, entry.cancel]);
     }
-    // The values the lab kept in its own constants until the windows moved to the shared file, unchanged: the active
-    // frames 50 ms before each strike to 80 ms after it, the light hits cancelling at 0.30 s, the finisher not at all.
-    expect(COMBO_HITS.map((hit) => [hit.activeFrom, hit.activeTo, hit.cancel])).toEqual([
+    // The hand-keyed values the lab kept in its own constants until the windows moved to the shared file, unchanged:
+    // the active frames 50 ms before each strike to 80 ms after it, the light hits cancelling at 0.30 s.
+    expect(HAND_HITS.map((hit) => [hit.activeFrom, hit.activeTo, hit.cancel])).toEqual([
       [0.15, 0.28, 0.3],
       [0.15, 0.28, 0.3],
       [0.33, 0.46, null],
     ]);
-    for (const hit of COMBO_HITS) {
+    for (const hit of [...COMBO_HITS, ...HAND_HITS]) {
       expect(hit.strike - hit.activeFrom, hit.name).toBeCloseTo(0.05, 12);
       expect(hit.activeTo - hit.strike, hit.name).toBeCloseTo(0.08, 12);
     }
+  });
+
+  it('refuse a timing with a number that is not finite, naming the hit and the key', () => {
+    // A NaN strike or a key left out compared false everywhere, so the hit never struck and never landed.
+    const good: HitTiming = { duration: 0.5, strike: 0.2, activeFrom: 0.15, activeTo: 0.28, cancel: 0.3 };
+    expect(() => hitContract('attack_1', 1, { ...good, strike: Number.NaN })).toThrow(/attack_1's strike must be a finite number/);
+    expect(() => hitContract('attack_1', 1, { ...good, activeTo: undefined })).toThrow(/attack_1's activeTo/);
+    expect(() => hitContract('attack_1', 1, { ...good, cancel: Number.POSITIVE_INFINITY })).toThrow(/attack_1's cancel/);
+    expect(() => hitContract('attack_3', 3, { ...good, cancel: null, recoverFrom: 0.3 })).toThrow(/attack_3's recoverTo/);
+    expect(() => hitContract('attack_1', 1, { ...good, recovery: 'missing_rec' }, {})).toThrow(/missing_rec's duration/);
+    expect(() => comboContracts({ attack_1: good, attack_2: good })).toThrow(/no entry for attack_3/);
+    expect(hitContract('attack_1', 1, good).finisher).toBe(false);
   });
 
   it('drive the chain from any set of contracts handed in: Quaternius-like 0.7 s hits chain, strike and plant by their own numbers', () => {
@@ -129,12 +176,12 @@ describe('the combo contracts', () => {
       attack_3: { duration: 1.1, strike: 0.5, activeFrom: 0.44, activeTo: 0.6, cancel: null },
     };
     const hits = comboContracts(timing);
-    expect(hits.map((hit) => [hit.name, hit.planted])).toEqual([
+    expect(hits.map((hit) => [hit.name, hit.finisher])).toEqual([
       ['attack_1', false],
       ['attack_2', false],
       ['attack_3', true],
     ]);
-    const frames = play(COMBO_READY, 200, [1 / 60], chainPresser(FEEL, hits), FEEL, hits);
+    const frames = play(COMBO_READY, 200, [1 / 60], chainPresser(FEEL), FEEL, hits);
     expect(startedSteps(frames)).toEqual([1, 2, 3]);
     expect(struckSteps(frames)).toEqual([1, 2, 3]);
     // Each kept press starts the next hit exactly at this set's own cancel point, the frame's overshoot carried in.
@@ -156,7 +203,7 @@ describe('the combo contracts', () => {
     expect(lastFinisher.state.hit!.time).toBeGreaterThan(1.1 - 1 / 60 - 1e-9);
     // The phases, the hold on his movement and the weights read this set's windows: attack_1 is still in its wind-up
     // at 0.25 s, where the shipped light hits are already past their active frames.
-    const at = (time: number): ComboState => ({ ...COMBO_READY, hit: hitAt(1, time) });
+    const at = (time: number): ComboState => ({ ...COMBO_READY, hit: hitAt(1, time, {}, hits) });
     expect(comboPhase(at(0.25), hits)).toBe('windup');
     expect(comboPhase(at(0.3), hits)).toBe('active');
     expect(comboPhase(at(0.41), hits)).toBe('recovery');
@@ -166,14 +213,14 @@ describe('the combo contracts', () => {
     expect(swingMotion(at(0.46), FEEL, hits)).toBe(FREE_MOTION);
     // Full weight until this set's 0.45 s cancel point, however long the fade out.
     expect(comboWeights(at(0.449), 1 / 60, hits).current).toBe(1);
-    expect(holdsRunWeight({ ...COMBO_READY, hit: hitAt(3, 0.01) }, hits)).toBe(true);
     expect(longestComboStep(hits)).toBe(0.3);
   });
 
   it('strike after their first moment, and the step cap stays above 0 for a contract that does not', () => {
     // A strike at 0 made longestComboStep 0, and the combo then moved no time on any frame.
-    for (const hit of COMBO_HITS) expect(hit.strike, hit.name).toBeGreaterThan(0);
-    expect(longestComboStep()).toBe(Math.min(...COMBO_HITS.map((hit) => hit.strike)));
+    for (const hit of [...COMBO_HITS, ...HAND_HITS]) expect(hit.strike, hit.name).toBeGreaterThan(0);
+    expect(longestComboStep()).toBe(Math.min(...HAND_HITS.map((hit) => hit.strike)));
+    expect(longestComboStepOf(COMBO_HITS)).toBe(0.267);
     const atZero = [{ ...HIT1, strike: 0, activeFrom: 0, activeTo: 0.08 }, HIT2, HIT3];
     expect(longestComboStep(atZero)).toBe(COMBO_STEP_FLOOR);
     expect(COMBO_STEP_FLOOR).toBeCloseTo(1 / 120, 12);
@@ -217,7 +264,7 @@ describe('the fades through a held clock', () => {
     const begun = stepCombo(state, true, 0, FEEL, fade);
     expect(begun.started).toBe(2);
     expect(begun.state.outgoing!.weight).toBe(drawn);
-    expect(comboWeights(begun.state, fade)).toEqual({ current: 0, outgoing: drawn });
+    expect(comboWeights(begun.state, fade)).toEqual({ current: 0, outgoing: drawn, recovery: 0 });
     // Read at the movement's step, 0 in a stop that holds him too, the outgoing hit took a weight the frame before never
     // drew (0.5 against 0.417 here), and the pose jumped by the difference on the stop's first frame.
     const atZero = stepCombo(state, true, 0, FEEL, 0).state.outgoing!.weight;
@@ -234,9 +281,9 @@ describe('the combo chain', () => {
     const begin = stepCombo(COMBO_READY, true, 1 / 60, FEEL);
     expect(begin.press).toBe('started');
     expect(begin.started).toBe(1);
-    expect(begin.state.hit).toMatchObject({ step: 1, time: 1 / 60, struck: false, crossfaded: false, chainedAt: null, fades: { rise: FEEL.fadeIn, fadeOut: FEEL.fadeOut } });
+    expect(begin.state.hit).toMatchObject({ step: 1, time: 1 / 60, struck: false, crossfaded: false, chainedAt: null, fades: { rise: FEEL.fadeIn, fadeOut: FEEL.fadeOut }, speed: 1, opensAt: HIT1.cancel });
     // The buffer opens 0.2 s before the cancel point, 0.10 s into a light hit.
-    expect(bufferOpensAt(HIT1, FEEL.buffer)).toBeCloseTo(0.1, 12);
+    expect(bufferOf(HIT1, FEEL.buffer)).toBeCloseTo(0.1, 12);
     const inWindow: ComboState = { ...begin.state, hit: { ...begin.state.hit!, time: 0.12 } };
     const kept = stepCombo(inWindow, true, 1 / 60, FEEL);
     expect(kept.press).toBe('queued');
@@ -259,7 +306,7 @@ describe('the combo chain', () => {
     expect(second.press).toBe('dropped');
     expect(second.state.queued).toBe(true);
     // A buffer of 0.3 s keeps a press from the light hit's start.
-    expect(bufferOpensAt(HIT1, 0.3)).toBe(0);
+    expect(bufferOf(HIT1, 0.3)).toBe(0);
     expect(stepCombo(early, true, 1 / 60, { ...FEEL, buffer: 0.3 }).press).toBe('queued');
   });
 
@@ -346,7 +393,7 @@ describe('the combo chain', () => {
     const nextChain = frames.findIndex((frame, index) => index > finisherStart && frame.started === 1);
     // Every press in the finisher before its buffer opens is dropped; the first inside it is kept; it never cancels.
     const during = frames.slice(finisherStart + 1, nextChain);
-    const open = bufferOpensAt(HIT3, FEEL.buffer);
+    const open = bufferOf(HIT3, FEEL.buffer);
     expect(open).toBeCloseTo(0.65, 12);
     for (const frame of during) {
       const time = frame.before.hit!.time;
@@ -403,7 +450,7 @@ describe('the combo chain', () => {
     const states: ComboState[] = [
       COMBO_READY,
       { ...COMBO_READY, hit: hitAt(1, 0.12) },
-      { ...COMBO_READY, hit: hitAt(2, 0.05, { crossfaded: true, chainedAt: 0.3 }), outgoing: { step: 1, time: 0.35, weight: 1 }, queued: true },
+      { ...COMBO_READY, hit: hitAt(2, 0.05, { crossfaded: true, chainedAt: 0.3 }), outgoing: { step: 1, time: 0.35, weight: 1, speed: 1, recovery: false }, queued: true },
       { ...COMBO_READY, next: 2, sinceEnd: 0.1 },
     ];
     for (const state of states) {
@@ -451,7 +498,7 @@ describe('the combo chain', () => {
     // in, is dropped as before; the same press in the stop that the strike's contact begins is kept.
     const tight = { ...FEEL, buffer: 0.05 };
     const atStrike: ComboState = { ...COMBO_READY, hit: hitAt(1, HIT1.strike, { struck: true }) };
-    expect(bufferOpensAt(HIT1, tight.buffer)).toBeCloseTo(0.25, 12);
+    expect(bufferOf(HIT1, tight.buffer)).toBeCloseTo(0.25, 12);
     expect(stepCombo(atStrike, true, 1 / 60, tight).press).toBe('dropped');
     const inStop = stepCombo(atStrike, true, 0, tight, 1 / 60);
     expect(inStop.press).toBe('queued');
@@ -480,7 +527,7 @@ describe('the combo chain', () => {
 
   it('plays each hit with the fades it began with, so a slider moved mid-hit changes the next hit and not this one', () => {
     // attack_2 halfway through its 0.10 s crossfade; the crossfade dragged to 0.25 s leaves its weights as they were.
-    const crossfading: ComboState = { ...COMBO_READY, hit: hitAt(2, 0.05, { crossfaded: true, chainedAt: 0.3 }), outgoing: { step: 1, time: 0.35, weight: 1 } };
+    const crossfading: ComboState = { ...COMBO_READY, hit: hitAt(2, 0.05, { crossfaded: true, chainedAt: 0.3 }), outgoing: { step: 1, time: 0.35, weight: 1, speed: 1, recovery: false } };
     const edited = { ...FEEL, crossfade: 0.25, fadeIn: 0.15, fadeOut: 0.4 };
     expect(comboWeights(crossfading, 1 / 60).current).toBeCloseTo(0.5, 12);
     const next = stepCombo(crossfading, false, 1 / 60, edited).state;
@@ -529,32 +576,25 @@ describe('the combo weights', () => {
         [1, 0],
         [0.25, 0.3],
       ] as const) {
-        for (const plants of [
-          [false, false],
-          [true, false],
-          [false, true],
-        ] as const) {
-          const { upper, lower } = bodyWeights(run, current, plants[0], outgoing, plants[1]);
-          const label = `${run} ${current} ${outgoing} ${plants}`;
-          expect(upper.idle + upper.run + upper.current + upper.outgoing, label).toBeCloseTo(1, 12);
-          expect(lower.idle + lower.run + lower.current + lower.outgoing, label).toBeCloseTo(1, 12);
-        }
+        const { upper, lower } = bodyWeights(run, current, outgoing);
+        const label = `${run} ${current} ${outgoing}`;
+        expect(upper.idle + upper.run + upper.current + upper.outgoing, label).toBeCloseTo(1, 12);
+        expect(lower.idle + lower.run + lower.current + lower.outgoing, label).toBeCloseTo(1, 12);
       }
     }
-    // Running, a light hit leaves the legs to the run; standing, it swings the whole body; the finisher always does.
-    expect(bodyWeights(1, 1, false, 0, false).lower).toEqual({ idle: 0, run: 1, current: 0, outgoing: 0 });
-    expect(bodyWeights(0, 1, false, 0, false).lower.current).toBe(1);
-    expect(bodyWeights(1, 1, true, 0, false).lower.current).toBe(1);
-    // At half the run's weight a light hit takes only the idle's half of the legs, and the run keeps its own half, where
-    // it used to keep run squared, a quarter, with a quarter of idle stance under the jog.
-    expect(bodyWeights(0.5, 1, false, 0, false).lower).toEqual({ idle: 0, run: 0.5, current: 0.5, outgoing: 0 });
-    // Half a light hit at half the run: run 0.5, hit 0.25, idle 0.25; a planted hit at half weight takes its half whole.
-    expect(bodyWeights(0.5, 0.5, false, 0, false).lower).toEqual({ idle: 0.25, run: 0.5, current: 0.25, outgoing: 0 });
-    expect(bodyWeights(0.5, 0.5, true, 0, false).lower).toEqual({ idle: 0.25, run: 0.25, current: 0.5, outgoing: 0 });
-    // Mid-crossfade from a light hit into the planted finisher, the shares still sum to 1 and follow the run continuously.
-    let previous = bodyWeights(0, 0.4, true, 0.6, false).lower;
+    // Running, any clip leaves the legs to the run, the finisher too now that it slows him rather than planting him;
+    // standing, it swings the whole body.
+    expect(bodyWeights(1, 1, 0).lower).toEqual({ idle: 0, run: 1, current: 0, outgoing: 0 });
+    expect(bodyWeights(0, 1, 0).lower.current).toBe(1);
+    // At half the run's weight a clip takes only the idle's half of the legs, and the run keeps its own half, where it
+    // used to keep run squared, a quarter, with a quarter of idle stance under the jog.
+    expect(bodyWeights(0.5, 1, 0).lower).toEqual({ idle: 0, run: 0.5, current: 0.5, outgoing: 0 });
+    // Half a clip at half the run: run 0.5, clip 0.25, idle 0.25.
+    expect(bodyWeights(0.5, 0.5, 0).lower).toEqual({ idle: 0.25, run: 0.5, current: 0.25, outgoing: 0 });
+    // Mid-crossfade, the shares still sum to 1 and follow the run continuously.
+    let previous = bodyWeights(0, 0.4, 0.6).lower;
     for (let run = 0.01; run <= 1 + 1e-9; run += 0.01) {
-      const lower = bodyWeights(run, 0.4, true, 0.6, false).lower;
+      const lower = bodyWeights(run, 0.4, 0.6).lower;
       expect(lower.idle + lower.run + lower.current + lower.outgoing).toBeCloseTo(1, 12);
       for (const key of ['idle', 'run', 'current', 'outgoing'] as const) expect(Math.abs(lower[key] - previous[key])).toBeLessThan(0.011);
       previous = lower;
@@ -563,7 +603,7 @@ describe('the combo weights', () => {
 });
 
 describe('how a hit holds him back', () => {
-  it('slows a light hit from its start to its cancel point, locks his facing from its active frames, and plants the finisher', () => {
+  it('slows a light hit from its start to its cancel point, locks his facing in its active frames, and slows the finisher further without planting him', () => {
     const at = (step: ComboStep, time: number): ComboState => ({ ...COMBO_READY, hit: hitAt(step, time) });
     expect(swingMotion(COMBO_READY, FEEL)).toBe(FREE_MOTION);
     // In the wind-up his drive must reach the hit's share by its active frames, 0.1 s on from 0.05 s in.
@@ -572,22 +612,25 @@ describe('how a hit holds him back', () => {
     // Between the active frames and the cancel point the pace stays reduced, so a chain runs at one even pace.
     expect(swingMotion(at(2, 0.29), FEEL)).toEqual({ moveScale: FEEL.moveScale, turnScale: 0, cap: false });
     expect(swingMotion(at(2, 0.31), FEEL)).toBe(FREE_MOTION);
-    for (const time of [0.01, 0.38, 0.84]) expect(swingMotion(at(3, time), FEEL)).toEqual({ moveScale: 0, turnScale: 0, cap: true });
+    // The finisher keeps finisherPace (0.15, under the light hits' 0.4) and turns at finisherTurn (0.25, under their
+    // 0.5) in its wind-up and its recovery, its facing locked only in its active frames; it never plants him.
+    expect(FEEL.finisherPace).toBe(0.15);
+    expect(FEEL.finisherTurn).toBe(0.25);
+    expect(FEEL.finisherPace).toBeLessThan(FEEL.moveScale);
+    expect(FEEL.finisherTurn).toBeLessThan(FEEL.windupTurn);
+    expect(swingMotion(at(3, 0.01), FEEL)).toEqual({ moveScale: 0.15, turnScale: 0.25, cap: false, settleBy: expect.closeTo(HIT3.activeFrom - 0.01, 12) });
+    expect(swingMotion(at(3, 0.38), FEEL)).toEqual({ moveScale: 0.15, turnScale: 0, cap: true });
+    expect(swingMotion(at(3, 0.84), FEEL)).toEqual({ moveScale: 0.15, turnScale: 0.25, cap: false });
     expect([comboPhase(at(1, 0.1)), comboPhase(at(1, 0.2)), comboPhase(at(1, 0.4)), comboPhase(COMBO_READY)]).toEqual(['windup', 'active', 'recovery', 'ready']);
-    // The run's weight holds only while the planted finisher fades in over his stop.
-    expect(holdsRunWeight(at(3, 0.05))).toBe(true);
-    expect(holdsRunWeight({ ...COMBO_READY, hit: hitAt(3, 0.08, { crossfaded: true }) })).toBe(true);
-    expect(holdsRunWeight(at(3, 0.2))).toBe(false);
-    expect(holdsRunWeight(at(1, 0.01))).toBe(false);
   });
 });
 
 describe('the placeholder warps', () => {
   it("land the source's strike on each hit's contract strike, anchored at the hit's start, strike and end", () => {
-    for (const hit of COMBO_HITS) {
+    for (const hit of HAND_HITS) {
       const anchors = placeholderAnchors(hit, SOURCE_SECONDS, SOURCE_STRIKE);
       expect(anchors.map(([time]) => time), hit.name).toEqual([0, hit.strike, hit.duration]);
-      const struck = hit.name === 'attack_2' ? SOURCE_STRIKE - BACKHAND_STRIKE_BEFORE_STRIKE : SOURCE_STRIKE;
+      const struck = hit.step === 2 ? SOURCE_STRIKE - BACKHAND_STRIKE_BEFORE_STRIKE : SOURCE_STRIKE;
       expect(warpTime(anchors, hit.strike), hit.name).toBeCloseTo(struck, 12);
       for (const [, source] of anchors) {
         expect(source).toBeGreaterThanOrEqual(0);
@@ -611,5 +654,121 @@ describe('the placeholder warps', () => {
     expect(warpTime(placeholderAnchors(HIT1, SOURCE_SECONDS, SOURCE_STRIKE), 0.1)).toBeCloseTo(0.17, 12);
     expect(warpTime(placeholderAnchors(HIT1, SOURCE_SECONDS, SOURCE_STRIKE), -1)).toBe(0);
     expect(warpTime(placeholderAnchors(HIT1, SOURCE_SECONDS, SOURCE_STRIKE), 9)).toBe(SOURCE_SECONDS);
+  });
+});
+
+describe('the Quaternius set: recovery clips, the recovery cut and the playback speeds', () => {
+  const Q = COMBO_HITS;
+  const [Q1, , Q3] = Q as [HitContract, HitContract, HitContract];
+  const runQ = (from: ComboState, count: number, dt: number, press: (state: ComboState, index: number) => boolean, feel = FEEL) => play(from, count, [dt], press, feel, Q);
+
+  it('chains its strikes at 0.27, 0.63 and 1.40 s on presses kept in each buffer', () => {
+    const dt = 1 / 600;
+    const frames = runQ(COMBO_READY, 1200, dt, chainPresser(FEEL));
+    expect(startedSteps(frames)).toEqual([1, 2, 3]);
+    const at = frames.flatMap((frame, i) => (frame.struck !== null ? [(i + 1) * dt] : []));
+    // Each within two of these 1/600 s frames of the sum of the cancels and the strike.
+    for (const [i, want] of [0.267, 0.367 + 0.267, 0.367 + 0.367 + 0.667].entries()) expect(Math.abs(at[i]! - want)).toBeLessThan(2 * dt + 1e-9);
+  });
+
+  it("hands a light hit over to its recovery clip when the chain stops there, at full weight, and plays it at the hit's speed", () => {
+    const dt = 1 / 60;
+    // The forehand holds its whole weight to its very end, where its recovery takes over in the pose they share.
+    expect(ownWeight(Q1, Q1.duration - dt, hitFades(false, FEEL), dt)).toBe(1);
+    const fast = { ...FEEL, speed1: 1.25 };
+    const frames = runQ(COMBO_READY, 120, dt, (_s, i) => i === 0, fast);
+    const end = frames.findIndex((frame) => frame.state.hit === null);
+    const handed = frames[end]!.state;
+    expect(handed.recovery).toMatchObject({ step: 1, speed: 1.25, fadeOut: FEEL.fadeOut });
+    expect(handed.recovery!.time).toBeCloseTo(frames[end - 1]!.state.hit!.time + dt * 1.25 - Q1.duration, 12);
+    expect(comboWeights(handed, dt, Q)).toEqual({ current: 0, outgoing: 0, recovery: 1 });
+    // It plays at the hit's speed, fades back to the idle over its last fadeOut, and ends: 0.967 s of clip at 1.25.
+    const after = runQ(handed, 60, dt, () => false, fast);
+    const gone = after.findIndex((frame) => frame.state.recovery === null);
+    expect((gone + 1) * dt).toBeCloseTo((Q1.recoveryDuration! - handed.recovery!.time) / 1.25, 1);
+    expect(comboWeights(after[gone - 2]!.state, dt, Q).recovery).toBeLessThan(1);
+    // The hand-keyed hits have no recovery clip: they fade to the idle as before.
+    const hand = play(COMBO_READY, 60, [dt], (_s, i) => i === 0);
+    expect(hand.every((frame) => frame.state.recovery === null)).toBe(true);
+  });
+
+  it('starts the next hit over a recovery clip with a crossfade from it, and the chain continues inside the reset', () => {
+    const dt = 1 / 60;
+    const frames = runQ(COMBO_READY, 40, dt, (_s, i) => i === 0);
+    const end = frames.findIndex((frame) => frame.state.recovery !== null);
+    const recovering = frames[end + 2]!.state;
+    expect(recovering.sinceEnd).toBeLessThan(FEEL.reset);
+    const next = stepComboOf(recovering, true, dt, FEEL, dt, Q);
+    expect(next.started).toBe(2);
+    expect(next.state.recovery).toBeNull();
+    expect(next.state.outgoing).toMatchObject({ step: 1, recovery: true, weight: 1 });
+    expect(next.state.hit).toMatchObject({ step: 2, crossfaded: true });
+    // Past the reset a press over the recovery starts a new chain from the forehand, still crossfaded from it.
+    const later = runQ(frames[end]!.state, 30, dt, () => false).at(-1)!.state;
+    expect(later.recovery).not.toBeNull();
+    expect(stepComboOf(later, true, dt, FEEL, dt, Q).state.hit).toMatchObject({ step: 1, crossfaded: true });
+  });
+
+  it("cuts the finisher's recovery where the feel says: free from the cut, a kept press starts a new chain there, and it fades out from it", () => {
+    const dt = 1 / 120;
+    // The cut at 0.4 of its 0.767 to 1.633 s window: 1.1134 s.
+    const cut = recoveryCut(Q3, FEEL.recoveryCut);
+    expect(FEEL.recoveryCut).toBe(0.4);
+    expect(cut).toBeCloseTo(0.767 + 0.4 * (1.633 - 0.767), 12);
+    expect(recoveryCut(Q3, 0)).toBe(0.767);
+    expect(recoveryCut(Q3, 1)).toBe(1.633);
+    // A finisher with no window, the hand-keyed one, plays out to its end.
+    expect(recoveryCut(HIT3, 0)).toBe(HIT3.duration);
+    const finisher: ComboState = { ...COMBO_READY, hit: hitAt(3, 0.9, { struck: true }, Q) };
+    expect(finisher.hit!.opensAt).toBeCloseTo(cut, 12);
+    expect(finisher.hit!.endsAt).toBeCloseTo(cut + FEEL.fadeOut, 12);
+    expect(swingMotion({ ...COMBO_READY, hit: hitAt(3, cut - 0.01, {}, Q) }, FEEL, Q)).toMatchObject({ moveScale: FEEL.finisherPace });
+    expect(swingMotion({ ...COMBO_READY, hit: hitAt(3, cut + 0.01, {}, Q) }, FEEL, Q)).toBe(FREE_MOTION);
+    // A press 0.15 s before the cut is kept (the buffer is 0.2 s) and starts a new chain exactly at the cut.
+    const kept = stepComboOf({ ...COMBO_READY, hit: hitAt(3, cut - 0.15, { struck: true }, Q) }, true, dt, FEEL, dt, Q);
+    expect(kept.press).toBe('queued');
+    const frames = runQ(kept.state, 40, dt, () => false);
+    const chain = frames.find((frame) => frame.started !== null)!;
+    expect(chain.started).toBe(1);
+    expect(chain.state.hit!.chainedAt).toBeCloseTo(cut, 12);
+    // It crossfades from the finisher at full weight: the finisher holds its weight to the cut.
+    expect(chain.state.outgoing).toMatchObject({ step: 3, recovery: false, weight: 1 });
+    // A press past the cut starts the new chain at once; without one the finisher fades out from the cut and ends.
+    expect(stepComboOf({ ...COMBO_READY, hit: hitAt(3, cut + 0.05, { struck: true }, Q) }, true, dt, FEEL, dt, Q).started).toBe(1);
+    const out = runQ({ ...COMBO_READY, hit: hitAt(3, cut - 0.05, { struck: true }, Q) }, 60, dt, () => false);
+    const last = out.filter((frame) => frame.state.hit !== null).at(-1)!;
+    expect(last.state.hit!.time).toBeLessThan(cut + FEEL.fadeOut);
+    expect(comboWeights(last.state, dt, Q).current).toBeLessThan(0.1);
+    expect(out.at(-1)!.state.hit).toBeNull();
+    expect(out.at(-1)!.state.next).toBe(1);
+  });
+
+  it('advances each hit by the step times its speed, so every window stays in clip seconds and the chain keeps its rhythm', () => {
+    const dt = 1 / 600;
+    const fast = { ...FEEL, speed1: 1.6, speed2: 1.6, speed3: 1.6 };
+    const slow = { ...FEEL, speed1: 0.8, speed2: 0.8, speed3: 0.8 };
+    for (const [feel, rate] of [
+      [fast, 1.6],
+      [slow, 0.8],
+    ] as const) {
+      const frames = runQ(COMBO_READY, 3000, dt, chainPresser(feel), feel);
+      expect(startedSteps(frames)).toEqual([1, 2, 3]);
+      const at = frames.flatMap((frame, i) => (frame.struck !== null ? [(i + 1) * dt] : []));
+      // In real seconds every moment divides by the speed: 0.267, 0.633 and 1.40 s at 1, so 0.167, 0.396, 0.875 at 1.6.
+      expect(at[0]).toBeCloseTo(0.267 / rate, 2);
+      expect(at[1]).toBeCloseTo((0.367 + 0.267) / rate, 2);
+      expect(at[2]).toBeCloseTo((0.367 + 0.367 + 0.667) / rate, 2);
+      // In clip seconds each kept press still starts the next hit at the cancel point, the overshoot carried at the new speed.
+      for (const frame of frames.filter((f) => f.started === 2 || f.started === 3)) {
+        expect(frame.state.hit!.chainedAt).toBe(0.367);
+        expect(frame.state.hit!.speed).toBe(rate);
+        expect(frame.state.hit!.time).toBeLessThanOrEqual(dt * rate + 1e-12);
+      }
+      // The wind-up's deadline is real seconds: the clip time left over the speed.
+      expect(swingMotion({ ...COMBO_READY, hit: hitAt(1, 0.1, { speed: rate }, Q) }, feel, Q).settleBy).toBeCloseTo((Q1.activeFrom - 0.1) / rate, 12);
+    }
+    // A slider moved mid-hit applies from the next hit: the speed is fixed when a hit begins.
+    const begun = stepComboOf(COMBO_READY, true, dt, fast, dt, Q).state;
+    expect(stepComboOf(begun, false, dt, slow, dt, Q).state.hit!.speed).toBe(1.6);
   });
 });

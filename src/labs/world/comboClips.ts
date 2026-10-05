@@ -1,5 +1,5 @@
 import { AnimationClip, InterpolateBezier, PropertyBinding, type Interpolant, type InterpolationModes, type KeyframeTrack, type Object3D } from 'three';
-import { COMBO_HITS, placeholderAnchors, warpTime, type HitContract, type WarpAnchors } from './combo';
+import { placeholderAnchors, warpTime, type HitContract, type WarpAnchors } from './combo';
 
 /**
  * The bone the upper-body mask starts from: Play Pip's attacks play on this bone and everything under it, while the hips
@@ -77,6 +77,31 @@ export function splitClip(clip: AnimationClip, upper: ReadonlySet<string>): { up
   return { upper: new AnimationClip(`${clip.name}_upper`, clip.duration, above), lower: new AnimationClip(`${clip.name}_lower`, clip.duration, below) };
 }
 
+/**
+ * The bone the lower half's hips are, by the end of its name: the hips carry the spine, so a clip's hips turn and lean
+ * the whole upper body with them, where the legs below only stand him. Play Pip weighs a clip's legs apart from its
+ * hips (splitHips) when a lunge is cut short (play.ts legShare): swapped with the legs, the hips of the stance took the
+ * forehand's whole hip turn out from under the swinging arms, and its blade struck 0.8 m out to his right, where the
+ * build measured it 0.75 m to his left.
+ */
+export const HIPS_BONE = 'Hips';
+
+/** The name of a rig's hips bone (HIPS_BONE), or null without one. */
+export function hipsBoneName(root: Object3D): string | null {
+  let name: string | null = null;
+  root.traverse((node) => {
+    if (!name && (node as Object3D & { isBone?: boolean }).isBone && node.name.endsWith(HIPS_BONE)) name = node.name;
+  });
+  return name;
+}
+
+/** Splits a lower half into its hips' tracks and the legs' (every other track), each the clip's whole length. */
+export function splitHips(lower: AnimationClip, hips: string): { hips: AnimationClip; legs: AnimationClip } {
+  const own = lower.tracks.filter((track) => trackNode(track) === hips);
+  const rest = lower.tracks.filter((track) => trackNode(track) !== hips);
+  return { hips: new AnimationClip(`${lower.name}_hips`, lower.duration, own), legs: new AnimationClip(`${lower.name}_legs`, lower.duration, rest) };
+}
+
 /** The moments a warped clip is sampled at: evenly at PLACEHOLDER_SAMPLES_PER_SECOND, and each anchor's hit time exactly. */
 export function warpSampleTimes(anchors: WarpAnchors, duration: number): number[] {
   const times = new Set<number>();
@@ -123,10 +148,10 @@ export function warpClip(source: AnimationClip, name: string, anchors: WarpAncho
 export const CLIP_LENGTH_TOLERANCE = 1 / 30;
 
 /**
- * Each hit's clip, in the contracts' order: the GLB's own clip named for the hit (attack_1, attack_2 or attack_3) when it
- * exports one, so the swap to the real clips is an asset change alone, and otherwise a placeholder warped from the
- * `attack` clip (placeholderAnchors) with the source's strike at `sourceStrike`. Null when there is neither for some
- * hit, and the page then has no combo to play.
+ * Each hit's clip, in the contracts' order: the GLB's own clip of the hit's name (attack_1, or attack_1_hand for the
+ * hand-keyed set) when it exports one, so the swap to the real clips is an asset change alone, and otherwise a
+ * placeholder warped from the `attack` clip (placeholderAnchors) with the source's strike at `sourceStrike`. Null when
+ * there is neither for some hit, and the page then has no combo to play.
  *
  * The combo's clock runs each hit to its contract, whatever its clip's length, so a GLB clip that misses its contract
  * by more than CLIP_LENGTH_TOLERANCE is named in the console (`warn`) and its miss kept in `lengthOff` for the reading:
@@ -136,7 +161,7 @@ export const CLIP_LENGTH_TOLERANCE = 1 / 30;
 export function hitClips(
   animations: readonly AnimationClip[],
   sourceStrike: number,
-  hits: readonly HitContract[] = COMBO_HITS,
+  hits: readonly HitContract[],
   warn: (text: string) => void = (text) => console.warn(text),
 ): HitClip[] | null {
   const attack = animations.find((clip) => clip.name === 'attack') ?? null;

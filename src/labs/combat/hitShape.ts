@@ -2,7 +2,8 @@
  * The combat arena's hit test, kept apart from three and the page so the unit test drives it directly. A hit's shape is
  * the blade itself swept over the frame: the segment from its base to its tip, where it was drawn on the frame before
  * and where it is drawn now, swung between the two about his shoulders and tested at evenly spaced moments against each
- * dummy's body, a vertical cylinder about its root. Only the part of the frame inside the hit's active frames counts (Mechanics, Commander
+ * dummy's body: a vertical cylinder about its root, and its head, a capsule reaching ahead of it, across the same band
+ * of heights (labs/combat/footprint.ts). Only the part of the frame inside the hit's active frames counts (Mechanics, Commander
  * combat: the active frame is where the hit lands), each swing hits each body at most once (SwingHits), and a body that
  * the blade's sweep never meets in the active frames, one that stepped out of the arc before them or stands behind him,
  * is missed and gets nothing at all. This is the blade's own arc rather than a fixed arc of reach and angle per hit,
@@ -16,11 +17,15 @@ export interface Vec3 {
   z: number;
 }
 
-/** A body the blade can meet: a vertical cylinder about the y axis of its own frame, from `low` to `high` up it. */
+/**
+ * A body the blade can meet: a vertical cylinder about the y axis of its own frame, from `low` to `high` up it, and, for
+ * a body with a head, the head across the same band: a capsule along +z (its facing) from `from` to `to`, `radius` across.
+ */
 export interface HitBody {
   radius: number;
   low: number;
   high: number;
+  head?: { from: number; to: number; radius: number };
 }
 
 /** The blade's sweep is tested at a moment every HIT_SAMPLE_M of its fastest end's travel, at most HIT_SAMPLES_MAX. */
@@ -58,6 +63,72 @@ export function segmentToAxis(a: Vec3, b: Vec3, low: number, high: number, near:
   near.y = a.y + dy * t;
   near.z = a.z + dz * t;
   return Math.hypot(near.x, near.z);
+}
+
+/**
+ * The distance across the ground (x and z) from the head's line, the segment from (0, from) to (0, to) on the body's
+ * own ground, to the segment from a to b cut to the height band, and the cut segment's point nearest that line written
+ * into `near`. Infinity, and `near` untouched, when the segment never enters the band. The two segments' closest points
+ * are found by clamping each end's projection onto the other, which is exact for two segments on a plane: the nearest
+ * pair has an end of one of them in it unless they cross, and a crossing is a distance of 0 at the crossing.
+ */
+export function segmentToHead(a: Vec3, b: Vec3, low: number, high: number, from: number, to: number, near: Vec3): number {
+  const dy = b.y - a.y;
+  let t0 = 0;
+  let t1 = 1;
+  if (Math.abs(dy) < 1e-12) {
+    if (a.y < low || a.y > high) return Infinity;
+  } else {
+    const tl = (low - a.y) / dy;
+    const th = (high - a.y) / dy;
+    t0 = Math.max(0, Math.min(tl, th));
+    t1 = Math.min(1, Math.max(tl, th));
+    if (t0 > t1) return Infinity;
+  }
+  // The cut blade, p to q on the ground, and the head's line, (0, from) to (0, to).
+  const px = a.x + (b.x - a.x) * t0;
+  const pz = a.z + (b.z - a.z) * t0;
+  const qx = a.x + (b.x - a.x) * t1;
+  const qz = a.z + (b.z - a.z) * t1;
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  // Crossing: the blade's ground line meets x = 0 between the head's ends.
+  let best = Infinity;
+  let bestU = 0;
+  if ((px <= 0 && qx >= 0) || (px >= 0 && qx <= 0)) {
+    const u = Math.abs(qx - px) > 1e-12 ? px / (px - qx) : 0;
+    const z = pz + (qz - pz) * u;
+    if (z >= lo && z <= hi) {
+      best = 0;
+      bestU = u;
+    }
+  }
+  if (best > 0) {
+    // Each blade end against the head's line, and each head end against the blade.
+    const ex = qx - px;
+    const ez = qz - pz;
+    const length = ex * ex + ez * ez;
+    const consider = (u: number, hx: number, hz: number): void => {
+      const x = px + ex * u;
+      const z = pz + ez * u;
+      const d = Math.hypot(x - hx, z - hz);
+      if (d < best) {
+        best = d;
+        bestU = u;
+      }
+    };
+    consider(0, 0, Math.min(hi, Math.max(lo, pz)));
+    consider(1, 0, Math.min(hi, Math.max(lo, qz)));
+    for (const hz of [lo, hi]) {
+      const u = length > 1e-12 ? Math.min(1, Math.max(0, (-px * ex + (hz - pz) * ez) / length)) : 0;
+      consider(u, 0, hz);
+    }
+  }
+  const t = t0 + (t1 - t0) * bestU;
+  near.x = a.x + (b.x - a.x) * t;
+  near.y = a.y + dy * t;
+  near.z = a.z + (b.z - a.z) * t;
+  return best;
 }
 
 /**
@@ -118,13 +189,15 @@ export function sweepSteps(base0: Vec3, tip0: Vec3, base1: Vec3, tip1: Vec3, fro
 const base: Vec3 = { x: 0, y: 0, z: 0 };
 const tip: Vec3 = { x: 0, y: 0, z: 0 };
 const near: Vec3 = { x: 0, y: 0, z: 0 };
+const nearHead: Vec3 = { x: 0, y: 0, z: 0 };
 
 /**
  * The first moment a blade swept from (base0, tip0) to (base1, tip1) about a pivot moving from pivot0 to pivot1 (his
  * shoulders; swingPoint), all in the body's own frame, touches the body: the share of the sweep, from `from` to `to`
  * (0 is the frame before, 1 now), tested at `steps` + 1 even moments, both ends included. The contact is written into
  * `contact`: the blade's point nearest the body's axis, carried out to the body's surface across the ground, where the
- * cut meets it. -1 when the blade never touches.
+ * cut meets it, or for a cut that meets the head first, the blade's point nearest the head's line. -1 when the blade
+ * never touches.
  */
 export function sweepHit(
   base0: Vec3,
@@ -145,12 +218,20 @@ export function sweepHit(
     swingPoint(base0, base1, pivot0, pivot1, s, base);
     swingPoint(tip0, tip1, pivot0, pivot1, s, tip);
     const distance = segmentToAxis(base, tip, body.low, body.high, near);
-    if (distance > body.radius) continue;
-    const out = distance > 1e-9 ? body.radius / distance : 1;
-    contact.x = near.x * out;
-    contact.y = near.y;
-    contact.z = near.z * out;
-    return s;
+    if (distance <= body.radius) {
+      const out = distance > 1e-9 ? body.radius / distance : 1;
+      contact.x = near.x * out;
+      contact.y = near.y;
+      contact.z = near.z * out;
+      return s;
+    }
+    const head = body.head;
+    if (head && segmentToHead(base, tip, body.low, body.high, head.from, head.to, nearHead) <= head.radius) {
+      contact.x = nearHead.x;
+      contact.y = nearHead.y;
+      contact.z = nearHead.z;
+      return s;
+    }
   }
   return -1;
 }

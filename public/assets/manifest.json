@@ -143,24 +143,73 @@
         },
         {
           "name": "attack_1",
-          "duration": 0.55,
+          "duration": 0.43333333333333335,
           "loop": false,
-          "strike": 0.2,
-          "exportedDuration": 0.5333333611488342
+          "strike": 0.26666666666666666,
+          "exportedDuration": 0.4333333373069763
         },
         {
           "name": "attack_2",
-          "duration": 0.55,
+          "duration": 0.5333333333333333,
           "loop": false,
-          "strike": 0.2,
+          "strike": 0.26666666666666666,
           "exportedDuration": 0.5333333611488342
         },
         {
           "name": "attack_3",
+          "duration": 2,
+          "loop": false,
+          "strike": 0.6666666666666666,
+          "exportedDuration": 2
+        },
+        {
+          "name": "attack_1_hand",
+          "duration": 0.55,
+          "loop": false,
+          "strike": 0.2,
+          "exportedDuration": 0.5333333611488342
+        },
+        {
+          "name": "attack_2_hand",
+          "duration": 0.55,
+          "loop": false,
+          "strike": 0.2,
+          "exportedDuration": 0.5333333611488342
+        },
+        {
+          "name": "attack_3_hand",
           "duration": 0.85,
           "loop": false,
           "strike": 0.38,
           "exportedDuration": 0.8333333134651184
+        },
+        {
+          "name": "attack_1_rec",
+          "duration": 0.9666666666666667,
+          "loop": false,
+          "strike": null,
+          "exportedDuration": 0.9666666388511658
+        },
+        {
+          "name": "attack_2_rec",
+          "duration": 1.0333333333333334,
+          "loop": false,
+          "strike": null,
+          "exportedDuration": 1.0333333015441895
+        },
+        {
+          "name": "block",
+          "duration": 1.2333333333333334,
+          "loop": false,
+          "strike": 0.1,
+          "exportedDuration": 1.2333333492279053
+        },
+        {
+          "name": "idle_guard",
+          "duration": 2.5,
+          "loop": true,
+          "strike": null,
+          "exportedDuration": 2.5
         }
       ],
       "morphs": [
@@ -203,7 +252,7 @@
           "sink": 0
         }
       ],
-      "bytes": 768160
+      "bytes": 941156
     },
     {
       "name": "verdant_kit",

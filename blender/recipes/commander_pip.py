@@ -19,6 +19,25 @@ on lib/motion.py's spline tracks to their own entries in the same file (Mechanic
 the commanders' budget requires a clip of that name, and the Style Lab's cycle plays it.
 Each clip's lowest point is recorded in the sidecar's notes as clip_ground, which a unit test holds to the ground.
 
+With COMBO_SOURCE = 'quaternius' the three hits come instead from the Quaternius Universal Animation Library 2 (CC0,
+blender/sources/quaternius/UAL2_Standard_RM.glb): Sword_Regular_A, B and C at their own timing, with the two light
+hits' recoveries (attack_1_rec, attack_2_rec), a block (Sword_Block, the shield held raised as in the guard) and a
+guard idle (idle_guard, Idle_Shield_Loop), retargeted at build time by lib/retarget.py (build_quaternius). The library's
+root motion is taken out of every clip (the hips keep only their vertical bob) and recorded per clip in the sidecar as
+notes.root_motion, for the game to apply as the lunge. The sword is then held as the library's fist holds it, in
+every clip: the CharForge sword left the fist 141 degrees from the forearm, nearly carrying the arm's line on, and the
+owner found the swings unnatural for it; it now leaves the top of the fist at 104 (regrip_sword). The idle keeps it so;
+the run leans the wrist by one constant turn (clear_carry), which keeps the blade out of his head and gives back the
+run's approved carry.
+
+The hand-keyed hits ship beside the Quaternius ones as a comparison set (COMPARE_SOURCE), named attack_1_hand to
+attack_3_hand with their own timings.json entries, which keep the values they had when they were the combo; the labs'
+swing set control plays one set or the other. Both sets share the one sword mesh, which the regrip has turned in the
+fist, so the comparison set is solved with the axis its keys were written for and the hand then turned at the wrist to
+point the regripped blade the same way (lib/motion.py solve, {'held', 'aim'}): its blade paths stay the ones the owner
+judged, the fist bent as the old grip held the sword. Solved on the new axis alone, the forearm's twist could not reach
+the keyed blade directions, and every hand-keyed strike's tip moved 0.55 m off its path.
+
 The attack is a shield-and-sword cleave. From the guard the torso coils to the right and the sword rises behind the
 right shoulder while the shield comes up in front (a wind-up that reads from the gameplay camera), the cut comes over
 and down in front of the body to the strike, the shield swinging out to the left so the blade passes clear of it, and
@@ -36,7 +55,7 @@ import shutil
 import bpy
 import numpy as np
 
-from lib import anim, charforge, export, ink, motion, scene
+from lib import anim, charforge, export, ink, motion, retarget, scene
 from lib.ctx import AnimRecord, AssetRecord
 
 NAME = 'commander_pip'
@@ -250,12 +269,44 @@ HAND = {
 }
 # The hit each chained hit starts from, at that hit's cancel frame.
 CHAIN = {'attack_2': 'attack_1', 'attack_3': 'attack_2'}
-# Where each hit's motion comes from: 'hand' (HAND above), the default for all three, or 'unimate', a UniMate (CC BY-NC,
-# accepted by the owner) generation stored as joint positions in UNIMATE_DIR/<hit>.json and retargeted at build time.
-# Hand-keyed won against UniMate's text-to-motion for all three hits in the study. No generation is committed, so the
-# UniMate path stays off; selecting it without its file stops the build with that file named (unimate_spec_at).
-COMBO_SOURCE = {'attack_1': 'hand', 'attack_2': 'hand', 'attack_3': 'hand'}
+# Where the combo comes from. The string 'quaternius' takes the three hits, their recoveries, a block and a guard idle
+# from the Quaternius library (QUATERNIUS below, build_quaternius) and regrips the sword for every clip. A dict gives each
+# hit 'hand' (HAND above) or 'unimate', a UniMate (CC BY-NC, accepted by the owner) generation stored as joint positions
+# in UNIMATE_DIR/<hit>.json and retargeted at build time; hand-keyed won against UniMate's text-to-motion for all three
+# hits, and no generation is committed. The hand-keyed set is {'attack_1': 'hand', 'attack_2': 'hand', 'attack_3': 'hand'}.
+COMBO_SOURCE = 'quaternius'
+# The comparison set the Quaternius build also ships, each hit's source as a dict COMBO_SOURCE may give, its clips named
+# with COMPARE_SUFFIX and timed by their own timings.json entries (attack_1_hand ...), so the owner can still play the
+# hand-keyed swings beside the library's; None ships the Quaternius set alone. A dict COMBO_SOURCE (the hand-keyed or
+# UniMate combo as attack_1 to attack_3) ships no comparison set.
+COMPARE_SOURCE = {'attack_1': 'hand', 'attack_2': 'hand', 'attack_3': 'hand'}
+COMPARE_SUFFIX = '_hand'
 UNIMATE_DIR = 'blender/sources/unimate'
+# The Quaternius Universal Animation Library 2, Standard, Unreal-Godot GLB with root motion (CC0, quaternius.com; its
+# licence beside it). `hits` and `extra` name the library clip each exported clip comes from; `grip_clip` is the clip
+# whose fist gives the grip axis (the library closes the same fist through every sword clip); `held_shield` holds a
+# clip's shield arm at another clip's frame, relative to the chest (the block parries with the sword while the shield
+# stays raised as in the guard idle: Sword_Block alone swung the shield behind him); `loops` are exported as loops.
+# Each hit's length and strike are the clip's own, measured here, and timings.json must agree within a frame
+# (build_quaternius stops the build otherwise, naming the numbers to set).
+QUATERNIUS = dict(
+    file='blender/sources/quaternius/UAL2_Standard_RM.glb',
+    grip_clip='Sword_Regular_A',
+    hits={'attack_1': 'Sword_Regular_A', 'attack_2': 'Sword_Regular_B', 'attack_3': 'Sword_Regular_C'},
+    extra={'attack_1_rec': 'Sword_Regular_A_Rec', 'attack_2_rec': 'Sword_Regular_B_Rec', 'block': 'Sword_Block',
+           'idle_guard': 'Idle_Shield_Loop'},
+    held_shield={'block': ('Idle_Shield_Loop', 1)},
+    loops=('idle_guard',),
+    # The CharForge clips the regrip also changes: each takes the smallest constant wrist turn that keeps the sword out
+    # of the body (retarget.clear_carry), and those named here try the regrip's own turn first, which gives back their
+    # approved carry: the run's high fist held the regripped blade upright through his head.
+    carry_as_before=('run',),
+)
+# A light hit's cancel window opens this many frames after its strike (the cut has passed) and stays open until the
+# blade settles below SETTLE_MPS; the sidecar records both for each hit (notes.quaternius), and timings.json's single
+# cancel point is the window's opening.
+CANCEL_AFTER_STRIKE_FRAMES = 3
+SETTLE_MPS = 1.5
 
 
 def _key_time(at, strike_frame, end_frame):
@@ -263,15 +314,17 @@ def _key_time(at, strike_frame, end_frame):
     return {'1': 1.0, 's': strike_frame, 'e': end_frame}[base] + offset
 
 
-def combo_timing(timings, attack):
+def combo_timing(timings, attack, suffix=''):
     """A hit's timing in frames from 1: (strike frame, end frame, cancel frame or None). The length, strike and cancel are
-    its entry under commanders.commander_pip in timings.json, and a missing entry or a missing `cancel` key stops the
-    build, as the attack's does: a cancel of null is the finisher's, which has none."""
-    entry = timings['commanders'][NAME].get(attack)
+    its entry under commanders.commander_pip in timings.json (the hit's name with `suffix`, so the comparison set reads
+    attack_1_hand), and a missing entry or a missing `cancel` key stops the build, as the attack's does: a cancel of null
+    is the finisher's, which has none."""
+    key = attack + suffix
+    entry = timings['commanders'][NAME].get(key)
     if entry is None:
-        raise ValueError(f'src/shared/timings.json has no commanders.{NAME}.{attack} entry, which times that hit of the combo')
+        raise ValueError(f'src/shared/timings.json has no commanders.{NAME}.{key} entry, which times that hit of the combo')
     if 'cancel' not in entry:
-        raise ValueError(f'src/shared/timings.json commanders.{NAME}.{attack} has no cancel (a number, or null for the finisher), '
+        raise ValueError(f'src/shared/timings.json commanders.{NAME}.{key} has no cancel (a number, or null for the finisher), '
                          'which the chained hit after it is keyed from')
     cancel = entry['cancel']
     return 1 + entry['strike'] * anim.FPS, 1 + entry['duration'] * anim.FPS, None if cancel is None else 1 + cancel * anim.FPS
@@ -340,6 +393,12 @@ def check_combo_sources(root, sources=None):
     is not JSON or lacks a key is a ValueError, as is any mix of the two (it was a FileNotFoundError for all of them)."""
     import json
     sources = COMBO_SOURCE if sources is None else sources
+    if sources == 'quaternius':
+        if not (root / QUATERNIUS['file']).is_file():
+            raise FileNotFoundError(f"COMBO_SOURCE is 'quaternius', but {QUATERNIUS['file']} is not in the repository")
+        return
+    if not isinstance(sources, dict):
+        raise ValueError(f"COMBO_SOURCE must be 'quaternius' or give each of {', '.join(COMBO)} 'hand' or 'unimate', not {sources!r}")
     unknown = {k: v for k, v in sources.items() if v not in ('hand', 'unimate')}
     if unknown or set(sources) != set(COMBO):
         raise ValueError(f"COMBO_SOURCE must give each of {', '.join(COMBO)} 'hand' or 'unimate', not {sources}")
@@ -367,33 +426,103 @@ def check_combo_sources(root, sources=None):
         raise (ValueError if invalid else FileNotFoundError)('; '.join(faults))
 
 
-def build_combo(ctx, arm, body, armour, blade):
-    """attack_1 to attack_3 baked in chain order, each checked (the shield pushed clear where the sword would cross it)
-    and measured, and each chained hit started from the pose the hit before it plays at its cancel frame. Returns
-    {hit: (action, strike frame, cancel frame or None, checks, blade speed)}. Stops the build when a hit still sends the
-    blade through the shield or the body after the shield fix's tries: the checks used to be recorded and nothing failed,
-    so only the sidecar test caught it, after the GLB had been written."""
-    check_combo_sources(ctx.root)
+def build_combo(ctx, arm, body, armour, blade, sources=None, suffix=''):
+    """attack_1 to attack_3 baked in chain order from `sources` (COMBO_SOURCE's form, a dict of 'hand' or 'unimate'),
+    each checked (the shield pushed clear where the sword would cross it) and measured, and each chained hit started
+    from the pose the hit before it plays at its cancel frame. Each clip is named, and timed from timings.json, as its
+    hit with `suffix` (the comparison set's attack_1_hand ...). Returns {clip: (action, strike frame, cancel frame or
+    None, checks, blade speed)}. Stops the build when a hit still sends the blade through the shield or the body after
+    the shield fix's tries: the checks used to be recorded and nothing failed, so only the sidecar test caught it, after
+    the GLB had been written."""
+    sources = COMBO_SOURCE if sources is None else sources
+    check_combo_sources(ctx.root, sources)
     timings = ctx.timings()
-    frames = {attack: combo_timing(timings, attack) for attack in COMBO}
+    frames = {attack: combo_timing(timings, attack, suffix) for attack in COMBO}
     played = {}
     out = {}
     for attack in COMBO:
+        name = attack + suffix
         prev = CHAIN.get(attack)
         start = played[prev](frames[prev][2]) if prev else None
-        if COMBO_SOURCE[attack] == 'unimate':
+        if sources[attack] == 'unimate':
             at = unimate_spec_at(ctx, attack, arm, frames, start)
         else:
             at = hand_spec_at(attack, frames, start)
         strike_frame, end_frame, cancel = frames[attack]
-        action = motion.bake(arm, attack, at, end_frame, strike_frame, blade)
-        action, checks, played[attack] = motion.shield_fix(arm, body, armour, action, strike_frame, at, end_frame, blade, attack)
+        action = motion.bake(arm, name, at, end_frame, strike_frame, blade)
+        if action.name != name:
+            raise ValueError(f'{name}: the clip was named {action.name!r}; an action of that name already existed')
+        action, checks, played[attack] = motion.shield_fix(arm, body, armour, action, strike_frame, at, end_frame, blade, name)
         if checks['sword_shield_overlaps'] > 0 or checks['blade_body_overlaps'] > 0:
-            raise ValueError(f"{attack}: the sword still crosses the shield ({checks['sword_shield_overlaps']} overlaps, frames "
+            raise ValueError(f"{name}: the sword still crosses the shield ({checks['sword_shield_overlaps']} overlaps, frames "
                              f"{checks['frames_crossing_shield']}) or the body ({checks['blade_body_overlaps']} overlaps, frames "
                              f"{checks['frames_blade_in_body']}) after the shield fix")
-        out[attack] = (action, strike_frame, cancel, checks, motion.blade_speed(arm, armour, action, strike_frame))
+        out[name] = (action, strike_frame, cancel, checks, motion.blade_speed(arm, armour, action, strike_frame))
     return out
+
+
+def quaternius_library(ctx):
+    """The library's armature and clips in the scene (its mannequin mesh deleted), and its fist's grip axis at rest."""
+    check_combo_sources(ctx.root)
+    src, actions = retarget.import_library(ctx.root / QUATERNIUS['file'])
+    clips = list(QUATERNIUS['hits'].values()) + list(QUATERNIUS['extra'].values()) + [QUATERNIUS['grip_clip']]
+    missing = sorted({c for c in clips if c not in actions})
+    if missing:
+        raise ValueError(f"{QUATERNIUS['file']} has no clip {', '.join(missing)} (has {', '.join(sorted(actions))})")
+    return src, actions, retarget.grip_axis(src, actions[QUATERNIUS['grip_clip']])
+
+
+def build_quaternius(ctx, arm, body, armour, src, actions, grip):
+    """The Quaternius set on the commander (QUATERNIUS): each clip retargeted with its contacts cleared (the shield arm
+    runs ahead or opens where the sword would cross the shield, the sword arm swings off the body, the shield and the
+    blade lifted clear of the ground, the boots stood on it) and, for the hits, the edge rolled onto the cut. Stops the
+    build when a clip still crosses, when a boot or the sword leaves the ground contract, or when a hit's measured
+    length or strike differs from its timings.json entry by more than a frame. Returns (combo, extra, roots, notes):
+    combo as build_combo returns it, {hit: (action, strike frame, cancel frame or None, checks, blade speed)}; extra
+    {clip: (action, strike frame or None)}; roots {clip: [(seconds, forward, side)]}; notes for the sidecar."""
+    entries = ctx.timings()['commanders'][NAME]
+    combo, extra, roots, notes = {}, {}, {}, {}
+    for key, clip in list(QUATERNIUS['hits'].items()) + list(QUATERNIUS['extra'].items()):
+        action = actions[clip]
+        n = int(action.frame_range[1] - action.frame_range[0]) + 1
+        s_i, _seconds, _peak = retarget.strike(src, action, grip)
+        strike_frame = 1 + s_i
+        kw = {}
+        if key in QUATERNIUS['held_shield']:
+            hold, frame = QUATERNIUS['held_shield'][key]
+            kw['shield_pose'] = (actions[hold], frame, np.ones(n))
+        act, root, checks, fixes = retarget.clean_clip(src, action, arm, body, armour, key, strike_frame, edge=key in COMBO, **kw)
+        if act.name != key:
+            raise ValueError(f'{key}: the clip was named {act.name!r}; an action of that name already existed')
+        if checks['sword_shield_overlaps'] > 0 or checks['blade_body_overlaps'] > 0:
+            raise ValueError(f"{key} ({clip}): the sword still crosses the shield (frames {checks['frames_crossing_shield']}) or the "
+                             f"body (frames {checks['frames_blade_in_body']}) after the contact fixes")
+        ground = motion.clip_ground(arm, body, armour, act, checks)
+        if abs(ground['boot_min_z']) > 1e-4 or ground['sword_min_z'] < charforge.BLADE_CLEARANCE_M - 0.0005:
+            raise ValueError(f'{key} ({clip}): lowest boot point {ground["boot_min_z"]} m (want 0 within 0.1 mm), lowest sword point '
+                             f'{ground["sword_min_z"]} m (want {charforge.BLADE_CLEARANCE_M} m or more)')
+        speed = motion.blade_speed(arm, armour, act, strike_frame)
+        duration, strike = (n - 1) / anim.FPS, (strike_frame - 1) / anim.FPS
+        record = dict(clip=clip, duration=round(duration, 3), fixes=fixes, feet=retarget.foot_report(arm, armour, act, root))
+        roots[key] = root
+        if key in COMBO:
+            entry = entries.get(key) or {}
+            if abs(entry.get('duration', -1) - duration) > 1 / anim.FPS or abs(entry.get('strike', -1) - strike) > 1 / anim.FPS:
+                cancel = 'null' if key == COMBO[-1] else round(strike + CANCEL_AFTER_STRIKE_FRAMES / anim.FPS, 3)
+                raise ValueError(f'{key} ({clip}) measures {duration:.3f} s with its strike at {strike:.3f} s, but src/shared/timings.json '
+                                 f'commanders.{NAME}.{key} is {entry}: set it to duration {round(duration, 3)}, strike {round(strike, 3)}, '
+                                 f'activeFrom {round(strike - 0.05, 3)}, activeTo {round(strike + 0.08, 3)}, cancel {cancel}')
+            cancel = entry.get('cancel')
+            cancel_frame = None if cancel is None else 1 + cancel * anim.FPS
+            settle = retarget.settle_frame(arm, armour, act, root, strike_frame, SETTLE_MPS)
+            record.update(strike=round(strike, 3), edge=retarget.edge_alignment(arm, armour, act, root, strike_frame),
+                          cancel_window=[round(strike + CANCEL_AFTER_STRIKE_FRAMES / anim.FPS, 3), round((settle - 1) / anim.FPS, 3)])
+            combo[key] = (act, strike_frame, cancel_frame, checks, speed)
+        else:
+            extra[key] = (act, strike_frame if key == 'block' else None)
+            record.update(checks=checks)
+        notes[key] = record
+    return combo, extra, roots, notes
 
 
 def build(ctx, source=SOURCE, name=NAME):
@@ -438,7 +567,20 @@ def build(ctx, source=SOURCE, name=NAME):
     body.name = body.data.name = 'commander_body'
     armour.name = armour.data.name = 'commander_armour'
     arm.name = 'commander_rig'
+    library = grip = None
+    # The blade's axis on the CharForge grip, before any regrip: the hand-keyed comparison set aims by it.
+    blade_before = blade_axis(armour, arm)
+    if COMBO_SOURCE == 'quaternius':
+        # The sword turns in the fist before any clip is made or measured, so the idle's and the run's ground pass and
+        # the authored attack all see the grip the Quaternius clips are swung with.
+        library = quaternius_library(ctx)
+        grip = retarget.regrip_sword(arm, armour, library[2], blade_axis(armour, arm))
     clips = charforge.retarget_clips(arm, src.actions, shape.scale, s['clips'])
+    carry = {}
+    if grip is not None:
+        for key, action in clips.items():
+            prefer = grip['turn_deg'] if key in QUATERNIUS['carry_as_before'] else 0.0
+            carry[key] = retarget.clear_carry(arm, body, armour, action, prefer_deg=prefer)[0]
     ground = charforge.ground_clips(arm, body, armour, clips)
     blade = blade_axis(armour, arm)
     attack = charforge.make_action_quat(arm, 'attack', attack_keys(arm, blade, strike_frame, end_frame), loc_bones=(P + 'Hips',))
@@ -446,9 +588,26 @@ def build(ctx, source=SOURCE, name=NAME):
     # The authored clips need no offset: their boots are held by IK where they stand in the rest pose, on the ground (the
     # finisher's step lifts one boot and sets it down again on the ground). Each records its lowest boot and sword points.
     ground['attack'] = motion.clip_ground(arm, body, armour, attack, checks)
-    combo = build_combo(ctx, arm, body, armour, blade)
+    extra, roots, q_notes = {}, {}, {}
+    # Each combo clip's set and source for the sidecar (notes.combo): assets:check reads each set's last hit as its
+    # finisher, so the two sets' finishers are told apart by `set`.
+    sets = {}
+    if library is not None:
+        combo, extra, roots, q_notes = build_quaternius(ctx, arm, body, armour, *library)
+        # The library's armature and clips go before the previews and the export, whose ACTIONS mode ships every action.
+        retarget.drop_library(library[0], library[1])
+        sets.update({key: ('quaternius', 'quaternius') for key in combo})
+        if COMPARE_SOURCE is not None:
+            compare = build_combo(ctx, arm, body, armour, {'held': blade, 'aim': blade_before}, COMPARE_SOURCE, COMPARE_SUFFIX)
+            sets.update({key: ('hand', COMPARE_SOURCE[key[:-len(COMPARE_SUFFIX)]]) for key in compare})
+            combo.update(compare)
+    else:
+        combo = build_combo(ctx, arm, body, armour, blade)
+        sets.update({key: ('hand', COMBO_SOURCE[key]) for key in combo})
     for key, (action, _strike, _cancel, combo_checks, _speed) in combo.items():
         ground[key] = motion.clip_ground(arm, body, armour, action, combo_checks)
+    for key, (action, _strike) in extra.items():
+        ground[key] = motion.clip_ground(arm, body, armour, action, q_notes[key]['checks'])
     if ctx.previews_enabled:
         out = ctx.preview_dir(name)
         export.render_views([body, armour], out, name, views=4, size=640)
@@ -458,7 +617,7 @@ def build(ctx, source=SOURCE, name=NAME):
         # build failed after publishing.
         combo_out = out / 'combo'
         combo_out.mkdir(parents=True, exist_ok=True)
-        for action, folder in [(attack, out)] + [(entry[0], combo_out) for entry in combo.values()]:
+        for action, folder in [(attack, out)] + [(entry[0], combo_out) for entry in list(combo.values()) + list(extra.values())]:
             front = export.render_action(arm, [body, armour], action, folder, name, frames=6)
             side = charforge.render_action_side(arm, [body, armour], action, folder, name, frames=6)
             charforge.filmstrip([front, side], folder / f'{name}_{action.name}_strip.png')
@@ -472,10 +631,19 @@ def build(ctx, source=SOURCE, name=NAME):
             AnimRecord('idle', meta['clips']['idle'], True),
             AnimRecord('run', meta['clips']['run'], True),
             AnimRecord('attack', anim.duration(attack), False, strike=(strike_frame - 1) / anim.FPS),
-        ] + [AnimRecord(key, anim.duration(action), False, strike=(sf - 1) / anim.FPS) for key, (action, sf, *_rest) in combo.items()],
+        ] + [AnimRecord(key, anim.duration(action), False, strike=(sf - 1) / anim.FPS) for key, (action, sf, *_rest) in combo.items()]
+        + [AnimRecord(key, anim.duration(action), key in QUATERNIUS['loops'], strike=None if sf is None else (sf - 1) / anim.FPS)
+           for key, (action, sf) in extra.items()],
         notes=dict(source=source, bones=meta['bones'], morphs=meta['meshes']['commander_body']['morphs'],
                    height_m=meta['height_m'], decimation=decimation, morph_transfer=morphs, attack_checks=checks,
                    clip_ground=ground,
-                   combo={key: dict(source=COMBO_SOURCE[key], cancel=None if c is None else round((c - 1) / anim.FPS, 3), checks=chk, blade=spd)
-                          for key, (_action, _sf, c, chk, spd) in combo.items()}),
+                   combo={key: dict(set=sets[key][0], source=sets[key][1],
+                                    cancel=None if c is None else round((c - 1) / anim.FPS, 3), checks=chk, blade=spd)
+                          for key, (_action, _sf, c, chk, spd) in combo.items()},
+                   # Each Quaternius clip's travel, for the game to apply as root motion: times in seconds from 0, and
+                   # forward and side metres (side positive to his right), cumulative from 0. The clips carry none.
+                   **({} if library is None else dict(
+                       root_motion={key: retarget.root_motion_notes(root) for key, root in roots.items()},
+                       quaternius=dict(file=QUATERNIUS['file'], grip=grip, carry_turn_deg=carry, clips=q_notes))),
+                   ),
     )]

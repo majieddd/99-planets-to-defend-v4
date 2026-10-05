@@ -6,6 +6,7 @@ import {
   IMPACT_LIGHT,
   impactParams,
   masterGain,
+  NOISE_SECONDS,
   RESUME_RETRY_FRAMES,
   scheduleImpact,
   scheduleWhiff,
@@ -46,6 +47,7 @@ class Node {
   readonly Q = new Param();
   type = '';
   buffer: unknown = null;
+  loop = false;
   started: number[] = [];
   stopped: number[] = [];
   constructor(readonly kind: string) {}
@@ -122,12 +124,31 @@ describe('the combat sounds (labs/shared/combatSound.ts)', () => {
     expect(w3.gain).toBeGreaterThan(Math.max(w1.gain, w2.gain));
     expect(w3.fall).toBeGreaterThan(Math.max(w1.fall, w2.fall));
     expect(w1.rise).toBeCloseTo(HIT1.strike * WHOOSH_PEAK_SHARE, 12);
-    expect(w3.rise).toBeCloseTo(0.38 * WHOOSH_PEAK_SHARE, 12);
+    expect(w3.rise).toBeCloseTo(HIT3.strike * WHOOSH_PEAK_SHARE, 12);
     for (const step of [1, 2, 3] as const) {
       const v = WHOOSH_VOICES[step];
       expect(v.peakHz).toBeGreaterThan(v.startHz);
       expect(v.peakHz).toBeGreaterThan(v.endHz);
     }
+  });
+
+  it("runs a whoosh at its hit's playback speed, and loops the noise so the slowest finisher keeps its tail", () => {
+    // Every moment of a hit divides by its speed in real seconds, the whoosh's rise to its peak and its fall too.
+    for (const speed of [0.8, 1.6]) {
+      const p = whooshParams(3, HIT3, speed);
+      expect(p.rise, `${speed}`).toBeCloseTo((HIT3.strike * WHOOSH_PEAK_SHARE) / speed, 12);
+      expect(p.fall, `${speed}`).toBeCloseTo(WHOOSH_VOICES[3].fall / speed, 12);
+    }
+    // At 0.8 the Quaternius finisher's whoosh lasts 1.14 s, past the 1 s noise buffer, which a one-shot read cut off.
+    const slow = whooshParams(3, HIT3, 0.8);
+    expect(slow.rise + slow.fall).toBeCloseTo(1.142, 3);
+    expect(slow.rise + slow.fall).toBeGreaterThan(NOISE_SECONDS);
+    const ctx = new FakeContext();
+    const end = scheduleWhoosh(asContext(ctx), ctx.destination as unknown as AudioNode, {} as AudioBuffer, slow, 2);
+    const source = ctx.nodes.find((node) => node.kind === 'source')!;
+    expect(source.loop).toBe(true);
+    expect(source.started).toEqual([2]);
+    expect(end).toBeCloseTo(2 + slow.rise + slow.fall, 12);
   });
 
   it('schedules a whoosh as noise through a band-pass sweeping up to the peak and down, its gain peaking at the strike', () => {

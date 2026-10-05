@@ -5,17 +5,19 @@ import { syncHullMorphs } from '../../render/ink/hull';
 import { place, type Ground } from '../../render/terrain/place';
 import type { ComboStep } from '../world/combo';
 import { groundReach } from '../world/play';
-import { PLAY_BODY_RADIUS, sweepMove, type Obstacle } from '../world/playMotion';
+import { sweepMove, type Obstacle } from '../world/playMotion';
 import { LEAN } from '../world/registry';
 import type { GroundPose } from './arena';
+import { measureFootprint, PIP_STRIKE_REACH, type Footprint, type LocalPoint } from './footprint';
 
 /** The clip a training dummy loops while it waits to be hit. */
 export const DUMMY_IDLE = 'idle';
 /**
- * A dummy's body as the blade meets it (labs/combat/hitShape.ts): a vertical cylinder about its root, this share of its
- * reach across (0.6 m of a 1.2 m reach, the Husk's hump and thorax inside it and its splayed legs and claws outside),
- * from DUMMY_HIT_LOW to DUMMY_HIT_TOP up. Half the reach is also the body the arena's layout test takes for how far a
- * blade must reach to touch one.
+ * A dummy's body as the blade meets it (labs/combat/hitShape.ts): its footprint as it stands (labs/combat/footprint.ts,
+ * without his reach), the core a vertical cylinder about its root and the head a capsule ahead of it, from DUMMY_HIT_LOW
+ * to DUMMY_HIT_TOP up. Phase B's hit body was a cylinder half the reach across (0.6 m of 1.2 m) with no head, so a cut
+ * through the Husk's head and mandibles missed; his walk now stops at the footprint widened by his reach, where only
+ * the blade reaches the body, so the head has to count.
  *
  * The band reaches past the Husk's 1.21 m top to 2 m, a commander's height and a little more, so a hit's shape is its
  * blade's sweep across the ground, as the game's attack shapes are shapes on the ground (Mechanics, Commander combat),
@@ -24,18 +26,13 @@ export const DUMMY_IDLE = 'idle';
  * missed every time, though it reads as a blow to the body from the play camera. The sparks still go on the body: a
  * contact above its top is brought down to it (impact.ts).
  */
-export const DUMMY_HIT_SHARE = 0.5;
 export const DUMMY_HIT_LOW = 0.15;
 export const DUMMY_HIT_TOP = 2;
 /**
- * A dummy's core as an obstacle: this share of its reach across, the hump and thorax the hit body takes, widened by Pip's
- * body. His walk stops at the dummy's whole reach, where W parks him 1.53 m from its root; that reach is the Husk's head
- * and mandibles, 1.09 m and 1.18 m in front of its root at his hip height (its legs reach 0.55 m at the ground), read
- * from its idle in the shipped GLB. A lunge may carry him in past the reach, as far as the core (lunge.ts,
- * lungeBodies), and he then stands inside the reach, neither pushed back out nor let deeper (playMotion.ts,
- * holdingRadius). Measured against the whole reach, the lunge had no room: the forehand moved 0 m from contact.
+ * How many poses of its idle a dummy's footprint is read over, evenly through the loop, so the head's bob is inside it
+ * at every moment of the idle.
  */
-export const DUMMY_CORE_SHARE = 0.5;
+export const FOOTPRINT_POSES = 12;
 
 /**
  * A hit landing on a dummy, as the arena's hit detection reports it (labs/combat/impact.ts): the combo's hit that
@@ -66,9 +63,13 @@ export interface TrainingDummy {
   readonly home: Readonly<GroundPose>;
   /** Its body's reach across the ground from its root, from its drawn bounds at home (play.ts, groundReach). */
   readonly reach: number;
-  /** Its core's radius across the ground, DUMMY_CORE_SHARE of its reach: what a lunge may come up to (lunge.ts). */
-  readonly core: number;
-  /** The top of its drawn bounds above its root at home, in metres: the hit body's top (DUMMY_HIT_SHARE). */
+  /**
+   * Its footprint (labs/combat/footprint.ts) read from its posed vertices over its idle, without his reach: the core and
+   * the head's capsule Pip's walk, lunge and root motion stop at once widened by PIP_STRIKE_REACH, and the body the
+   * blade meets as it is.
+   */
+  readonly footprint: Footprint;
+  /** The top of its drawn bounds above its root at home, in metres: a contact above it is brought down to it (impact.ts). */
   readonly height: number;
   /** Where it stands now. */
   pose(): GroundPose;
@@ -107,8 +108,9 @@ export interface TrainingDummies {
    */
   push(index: number, dx: number, dz: number): GroundPose;
   /**
-   * Each dummy as an obstacle where it stands now: its reach widened by Pip's body, as the Asset World's members are. The
-   * same list every call, kept up to date as the dummies move, so Pip can read it every frame without a list being built.
+   * Each dummy as an obstacle where it stands now: its footprint, core and head, widened by Pip's reach in a swing
+   * (PIP_STRIKE_REACH), which his walk, his lunge and his root motion all stop at. The same list every call, kept up to
+   * date as the dummies move, so Pip can read it every frame without a list being built.
    */
   obstacles(): readonly Obstacle[];
   /**
@@ -136,13 +138,56 @@ function drawnBounds(root: Object3D, hullMaterial: unknown): Box3 {
   return bounds;
 }
 
+/** The posed vertices of a body in its own frame (x right, y up, z ahead), ink hulls left out, added to `into`. */
+function localPoints(root: Object3D, hullMaterial: unknown, into: LocalPoint[]): void {
+  const vertex = new Vector3();
+  root.updateMatrixWorld(true);
+  root.traverseVisible((object) => {
+    const mesh = object as Mesh;
+    if (!mesh.isMesh || mesh.material === hullMaterial) return;
+    const position = mesh.geometry.getAttribute('position');
+    if (!position) return;
+    for (let i = 0; i < position.count; i++) {
+      root.worldToLocal(mesh.getVertexPosition(i, vertex).applyMatrix4(mesh.matrixWorld));
+      into.push({ x: vertex.x, y: vertex.y, z: vertex.z });
+    }
+  });
+}
+
+/**
+ * A footprint as an obstacle at a pose: the core about the root and the head along the facing (a yaw of y faces
+ * (sin y, cos y)), both widened by `widen`; written into `into`, reused. With `reversed` the head points behind the
+ * root instead: the footprint as a point on the other body sees it, which a knocked-back dummy is swept against, since
+ * Pip at q stands outside the dummy's footprint at p exactly where p stands outside the footprint turned about q.
+ */
+export function footprintObstacle(into: Obstacle, x: number, z: number, yaw: number, footprint: Footprint, widen: number, reversed = false): Obstacle {
+  into.x = x;
+  into.z = z;
+  into.radius = footprint.core + widen;
+  const head = footprint.head;
+  if (!head) {
+    delete into.head;
+    return into;
+  }
+  const sign = reversed ? -1 : 1;
+  const out = (into.head ??= { dirX: 0, dirZ: 1, from: 0, to: 0, radius: 0 });
+  out.dirX = Math.sin(yaw) * sign;
+  out.dirZ = Math.cos(yaw) * sign;
+  out.from = head.from;
+  out.to = head.to;
+  out.radius = head.radius + widen;
+  return into;
+}
+
 /**
  * The combat arena's training dummies: one Husk instance per home pose, each a copy of the loaded rig with a skeleton
  * and a mixer of its own, looping its idle. Each idle starts its own share of the loop in (a third apart for three), so
  * the row does not breathe in step, and a reset takes each back to that moment. Each stands plumb on the ground through
- * place(), as the Asset World's characters do (Kit's ground contract, which roots the Husk at its feet), and its reach
- * is read from its drawn bounds at home, with the formula the Asset World's members use. `pip` gives Pip's root on the
- * tangent plane (null while he is not out), which a knocked-back dummy stops at. Null when the Husk has no idle to loop.
+ * place(), as the Asset World's characters do (Kit's ground contract, which roots the Husk at its feet); its reach is
+ * read from its drawn bounds at home, with the formula the Asset World's members use, and spaces the dummies from each
+ * other, and its footprint is read from its posed vertices over its idle (measureFootprint), which Pip meets. `pip`
+ * gives Pip's root on the tangent plane and his facing (null while he is not out), which a knocked-back dummy stops at.
+ * Null when the Husk has no idle to loop.
  */
 export function createTrainingDummies(
   asset: LoadedAsset,
@@ -189,8 +234,16 @@ export function createTrainingDummies(
     const rootAt = root.getWorldPosition(new Vector3());
     const reach = groundReach(rootAt, bounds);
     const height = bounds.max.y - rootAt.y;
-    const core = reach * DUMMY_CORE_SHARE;
-    const obstacle: Obstacle = { x: home.x, z: home.z, radius: reach + PLAY_BODY_RADIUS, core: core + PLAY_BODY_RADIUS };
+    // The footprint over the whole idle, so the head's bob never reaches outside it; then back to the home moment.
+    const points: LocalPoint[] = [];
+    for (let k = 0; k < FOOTPRINT_POSES; k++) {
+      action.time = (k / FOOTPRINT_POSES) * idle.duration;
+      mixer.update(0);
+      localPoints(root, hullMaterial, points);
+    }
+    toHomeMoment();
+    const footprint = measureFootprint(points);
+    const obstacle = footprintObstacle({ x: 0, z: 0, radius: 0 }, home.x, home.z, home.yaw, footprint, PIP_STRIKE_REACH);
     obstacleList.push(obstacle);
     const dummy: TrainingDummy = {
       index,
@@ -199,13 +252,12 @@ export function createTrainingDummies(
       mixer,
       home: Object.freeze({ ...home }),
       reach,
-      core,
+      footprint,
       height,
       pose: () => ({ ...pose }),
       moveTo(next) {
         pose = { ...next };
-        obstacle.x = pose.x;
-        obstacle.z = pose.z;
+        footprintObstacle(obstacle, pose.x, pose.z, pose.yaw, footprint, PIP_STRIKE_REACH);
         stand();
       },
       hit(event) {
@@ -251,17 +303,20 @@ export function createTrainingDummies(
           body.x = obstacleList[i]!.x;
           body.z = obstacleList[i]!.z;
           body.radius = dummy.reach + other.reach;
-          // The slot was Pip's when this dummy's own push last ran, so its core goes: dummies meet leg to leg.
-          body.core = undefined;
+          // The slot was Pip's when this dummy's own push last ran, so its head goes: dummies meet leg to leg.
+          delete body.head;
           return;
         }
-        // Pip's slot holds the same two radii his own obstacle for this dummy does, so a dummy he lunged in close to is
-        // held where it stands from him rather than thrown out to its whole reach on its first push (holdingRadius).
+        // Pip's slot: his root as this dummy's footprint sees it, turned about him (footprintObstacle's `reversed`), so
+        // a push stops where his reach meets its head or body, as his own walk does, and a dummy held from him by less
+        // (moved onto him by the debug hook) stays as close rather than being thrown out on its first push.
         const at = pip();
-        body.x = at ? at.x : 0;
-        body.z = at ? at.z : 0;
-        body.radius = at ? dummy.reach + PLAY_BODY_RADIUS : 0;
-        body.core = at ? dummy.core + PLAY_BODY_RADIUS : 0;
+        if (!at) {
+          body.x = body.z = body.radius = 0;
+          delete body.head;
+          return;
+        }
+        footprintObstacle(body, at.x, at.z, dummy.pose().yaw, dummy.footprint, PIP_STRIKE_REACH, true);
       });
       const kept = sweepMove(from.x, from.z, dx, dz, bodies);
       dummy.moveTo({ x: kept.x, z: kept.z, yaw: dummy.pose().yaw });

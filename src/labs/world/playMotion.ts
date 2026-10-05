@@ -81,29 +81,83 @@ export interface MotionState {
 }
 
 /**
- * A member's root on the tangent plane, and the reach he cannot walk into around it (his body's reach included).
- * `core`, when given, is the tighter body inside it that nothing may enter at all (his body's reach included too): a
- * training dummy's hump and thorax, where its reach is its splayed legs' tips at the ground. A lunge may carry him past
- * the reach toward the core (lunge.ts), and once inside the reach he is neither pushed back out nor let deeper
- * (resolveObstacles). Without a core the reach is the whole body.
+ * A head reaching ahead of an obstacle's root, as a capsule across the ground: along (dirX, dirZ), a unit direction on
+ * the tangent plane, from `from` to `to` metres ahead of the root, `radius` either side of that line (his reach
+ * included, as the obstacle's own radius includes it). A training dummy's Husk head and mandibles (labs/combat/
+ * footprint.ts).
+ */
+export interface ObstacleHead {
+  dirX: number;
+  dirZ: number;
+  from: number;
+  to: number;
+  radius: number;
+}
+
+/**
+ * A member's root on the tangent plane, and the reach he cannot walk into around it (his body's reach included). A
+ * shaped body adds a `head` (ObstacleHead): the obstacle is then the round reach and the capsule together, a training
+ * dummy's Husk footprint, and nothing may enter either, walking, lunging or by a clip's root motion. Phase B gave a dummy
+ * a round `core` inside its reach that only the lunge was swept against, so the lunge carried him past the reach to the
+ * core, about 0.5 m into the Husk's head on the finisher; the core is gone and every move meets the same footprint.
  */
 export interface Obstacle {
   x: number;
   z: number;
   radius: number;
-  core?: number;
+  head?: ObstacleHead;
+}
+
+/** Scratch for obstacleGap's outward direction. */
+export interface Direction {
+  x: number;
+  z: number;
 }
 
 /**
- * The reach an obstacle holds a move to, for a move that starts at (fromX, fromZ): its reach, unless the move starts
- * inside it, where a lunge left him, and then where he stands, never less than its core. Pushed straight back out to the
- * reach on his next frame, as every reach pushed before there were cores, he would pop up to 0.6 m in one frame after
- * every lunge into a dummy.
+ * How far a point stands outside an obstacle, in metres on the tangent plane (negative inside it): the least of its gap
+ * to the round reach and to the head's capsule. The way out of the nearer of the two is written into `out`, a unit
+ * direction (straight out from the root, or square out from the head's line); from exactly on a root or the head's line
+ * it is left as given, for the caller to choose.
  */
-export function holdingRadius(obstacle: Obstacle, fromX: number, fromZ: number): number {
-  const at = Math.hypot(fromX - obstacle.x, fromZ - obstacle.z);
-  if (at >= obstacle.radius) return obstacle.radius;
-  return Math.max(obstacle.core ?? obstacle.radius, at);
+export function obstacleGap(obstacle: Obstacle, x: number, z: number, out?: Direction): number {
+  let dx = x - obstacle.x;
+  let dz = z - obstacle.z;
+  let distance = Math.hypot(dx, dz);
+  let gap = distance - obstacle.radius;
+  const head = obstacle.head;
+  if (head) {
+    const ax = obstacle.x + head.dirX * head.from;
+    const az = obstacle.z + head.dirZ * head.from;
+    const ex = head.dirX * (head.to - head.from);
+    const ez = head.dirZ * (head.to - head.from);
+    const length = ex * ex + ez * ez;
+    const t = length > 1e-12 ? Math.min(1, Math.max(0, ((x - ax) * ex + (z - az) * ez) / length)) : 0;
+    const hx = x - (ax + ex * t);
+    const hz = z - (az + ez * t);
+    const along = Math.hypot(hx, hz);
+    if (along - head.radius < gap) {
+      gap = along - head.radius;
+      dx = hx;
+      dz = hz;
+      distance = along;
+    }
+  }
+  if (out && distance > 1e-9) {
+    out.x = dx / distance;
+    out.z = dz / distance;
+  }
+  return gap;
+}
+
+/**
+ * The gap an obstacle holds a move to, for a move that starts at (fromX, fromZ): 0, its edge, unless the move starts
+ * inside a shaped body (a training dummy, moved onto him by the reset test's debug hook), and then as deep as it starts,
+ * so he can step away or round it but not further in, where pushed straight back out on his next frame he would pop
+ * the whole depth in one frame. A round member's reach pushes him out to its edge from anywhere inside, as it always has.
+ */
+export function holdingGap(obstacle: Obstacle, fromX: number, fromZ: number): number {
+  return obstacle.head ? Math.min(0, obstacleGap(obstacle, fromX, fromZ)) : 0;
 }
 
 export function wrapAngle(angle: number): number {
@@ -191,31 +245,37 @@ export function groundDistance(ax: number, az: number, bx: number, bz: number, p
   return planetRadius * Math.atan2(Math.hypot(cx, cy, cz) / (la * lb), dot / (la * lb));
 }
 
+// Scratch for resolveObstacles, so a frame builds nothing.
+const outward: Direction = { x: 0, z: 0 };
+
 /**
- * Pushes a point out of every obstacle's reach, straight out from its root, so a step into a member keeps its part
- * along the reach's edge and he slides round it instead of stopping dead. A few passes settle a point pushed from one
- * reach into a neighbour's. A point exactly on a root is pushed back the way he came. A move that starts inside a reach
- * (a lunge carried him there, toward a dummy's core) is held at the distance it started from, never under the core,
- * rather than pushed back out to the reach (holdingRadius), so he can step away or round it but not further in.
+ * Pushes a point out of every obstacle, straight out from its root or square out from a head's line (obstacleGap), so
+ * a step into a member keeps its part along the edge and he slides round it instead of stopping dead. A few passes
+ * settle a point pushed from one obstacle into a neighbour's, or from a dummy's core into its head. A point exactly on
+ * a root or a head's line is pushed back the way he came. A move that starts inside an obstacle is held as deep as it
+ * started (holdingGap), so he can step away or round it but not further in.
  */
 export function resolveObstacles(x: number, z: number, fromX: number, fromZ: number, obstacles: readonly Obstacle[]): { x: number; z: number; blocked: boolean } {
   let blocked = false;
   for (let pass = 0; pass < 3; pass++) {
     let moved = false;
     for (const obstacle of obstacles) {
-      let dx = x - obstacle.x;
-      let dz = z - obstacle.z;
-      let distance = Math.hypot(dx, dz);
-      const radius = holdingRadius(obstacle, fromX, fromZ);
-      if (distance >= radius) continue;
-      if (distance < 1e-9) {
-        dx = fromX - obstacle.x;
-        dz = fromZ - obstacle.z;
-        distance = Math.hypot(dx, dz);
-        if (distance < 1e-9) [dx, dz, distance] = [1, 0, 1];
+      const allowed = holdingGap(obstacle, fromX, fromZ);
+      outward.x = Number.NaN;
+      const gap = obstacleGap(obstacle, x, z, outward);
+      if (gap >= allowed) continue;
+      let ox = outward.x;
+      let oz = outward.z;
+      if (!Number.isFinite(ox)) {
+        // On the line itself: back the way he came, or along +x from where he stood still on it.
+        ox = fromX - x;
+        oz = fromZ - z;
+        const back = Math.hypot(ox, oz);
+        if (back > 1e-9) [ox, oz] = [ox / back, oz / back];
+        else [ox, oz] = [1, 0];
       }
-      x = obstacle.x + (dx / distance) * radius;
-      z = obstacle.z + (dz / distance) * radius;
+      x += ox * (allowed - gap);
+      z += oz * (allowed - gap);
       moved = true;
       blocked = true;
     }
@@ -225,11 +285,14 @@ export function resolveObstacles(x: number, z: number, fromX: number, fromZ: num
 }
 
 /**
- * How far a point stands outside the nearest obstacle's reach, in metres on the tangent plane, and negative inside one:
- * the margin the browser test reads at his spawn, so a re-laid world cannot put him out inside a member.
+ * How far a point stands outside the nearest obstacle, in metres on the tangent plane, and negative inside one (a
+ * dummy's head included): the margin the browser test reads at his spawn, so a re-laid world cannot put him out inside a
+ * member, and the arena's tests read when he has walked up to a dummy.
  */
 export function clearance(x: number, z: number, obstacles: readonly Obstacle[]): number {
-  return Math.min(Infinity, ...obstacles.map((obstacle) => Math.hypot(x - obstacle.x, z - obstacle.z) - obstacle.radius));
+  let least = Infinity;
+  for (const obstacle of obstacles) least = Math.min(least, obstacleGap(obstacle, x, z));
+  return least;
 }
 
 /** Holds a point inside PLAY_AREA_RADIUS of the pole, sliding along the edge rather than stopping at it. */
@@ -256,11 +319,11 @@ export interface SweptMove {
 }
 
 /**
- * Whether a point stands outside every obstacle's reach as a move from (fromX, fromZ) is held to it (holdingRadius; a
- * point on the edge counts as outside).
+ * Whether a point stands outside every obstacle as a move from (fromX, fromZ) is held to it (holdingGap; a point on the
+ * edge counts as outside).
  */
 function outsideAll(x: number, z: number, obstacles: readonly Obstacle[], fromX: number, fromZ: number): boolean {
-  for (const obstacle of obstacles) if (Math.hypot(x - obstacle.x, z - obstacle.z) < holdingRadius(obstacle, fromX, fromZ) - 1e-9) return false;
+  for (const obstacle of obstacles) if (obstacleGap(obstacle, x, z) < holdingGap(obstacle, fromX, fromZ) - 1e-9) return false;
   return true;
 }
 
@@ -300,8 +363,8 @@ export function sweepMove(x: number, z: number, dx: number, dz: number, obstacle
 /**
  * How a swing holds him back on one frame (combo.ts, swingMotion): the share of the pace asked that he keeps (its
  * ceiling is that share of the walk's or the sprint's pace), the share of his turn rate, and two rules for a drive over
- * the ceiling. `cap`: a swing that keeps no pace stops him on this very frame (the finisher's plant), where any other
- * swing eases him down. `settleBy`: the seconds within which his drive must have come down to the ceiling (a light hit's
+ * the ceiling. `cap`: a swing that keeps no pace stops him on this very frame (a pace kept of 0 on the panel, which the
+ * finisher's plant always was), where any other swing eases him down. `settleBy`: the seconds within which his drive must have come down to the ceiling (a light hit's
  * wind-up, until its active frames), absent when there is no such deadline.
  */
 export interface SwingMotion {
@@ -324,9 +387,10 @@ export const FREE_MOTION: SwingMotion = Object.freeze({ moveScale: 1, turnScale:
  *
  * A swing (`swing`) scales the pace asked and the turn rate; the pace asked never rises past the swing's ceiling, its
  * share of the walk's or the sprint's pace. Three rules bring a drive over the ceiling down to it:
- * - A swing that keeps no pace (a share of 0) with `cap` stops him on this very frame: the finisher's plant (no pace, no
- *   turn) stops him dead on its first frame, as it must under boots the clip holds planted, where easing down at the
- *   stop rate took 0.12 s from a walk and 0.21 s from a sprint and slid him about 0.19 m and 0.59 m (2026-10-05).
+ * - A swing that keeps no pace (a share of 0) with `cap` stops him on this very frame: the finisher's old plant (no pace,
+ *   no turn) stopped him dead on its first frame, as it had to under boots the clip held planted, where easing down at
+ *   the stop rate took 0.12 s from a walk and 0.21 s from a sprint and slid him about 0.19 m and 0.59 m (2026-10-05).
+ *   The finisher now keeps finisherPace (combo.ts) and eases down like a light hit; a pace kept of 0 still stops dead.
  * - With `settleBy`, a light hit's wind-up, he comes down at the stop rate or faster, whichever reaches the ceiling by
  *   the deadline, the hit's active frames, so the blow always lands at the reduced pace. At the stop rate alone a low
  *   pace kept did not get there: at 0.1, from a sprint, 5.6 m/s fall to 0.56 m/s at 26.7 m/s squared in 0.19 s, longer
@@ -376,17 +440,13 @@ export function stepMotion(
   return { x: kept.x, z: kept.z, yaw, drive, speed };
 }
 
-/** The run clip's weight against the idle at a ground speed: the idle alone standing, the run alone from 1.2 m/s. */
+/**
+ * The run clip's weight against the idle at a ground speed: the idle alone standing, the run alone from 1.2 m/s. It was
+ * held at its last weight while a planted finisher faded in over his dead stop (blendRunWeight); the finisher slows him
+ * now rather than stopping him, so the run always follows his speed.
+ */
 export function runWeight(speed: number): number {
   return Math.min(1, Math.max(0, speed / PLAY_RUN_FULL_WEIGHT_SPEED));
-}
-
-/**
- * The run clip's weight against the idle on one frame: the weight it had on the frame before (`held`) while `hold` says
- * so (combo.ts, holdsRunWeight: while a planted hit fades in over a stop), otherwise his ground speed's (runWeight).
- */
-export function blendRunWeight(held: number, speed: number, hold: boolean): number {
-  return hold ? held : runWeight(speed);
 }
 
 /** The run clip's playback rate at a ground speed, so its planted foot moves back as fast as the ground passes. */

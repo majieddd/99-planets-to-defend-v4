@@ -17,6 +17,7 @@ import { createPlayInput } from '../world/playInput';
 import type { Obstacle } from '../world/playMotion';
 import { FIT_NDC } from '../world/views';
 import { ARENA_CAMERA_PITCH_DEG, ARENA_DUMMY_NAMES, arenaCameraBearing, arenaCameraDistance, arenaSpawn, dummyFrame, dummyHomes, fromBody } from './arena';
+import { bodyGap, pipProps, type PropMask } from './bodyGap';
 import { createTrainingDummies, type TrainingDummies } from './dummies';
 import { createCombatImpact, type CombatImpact } from './impact';
 import { createArenaPanel } from './panel';
@@ -238,7 +239,7 @@ async function start(): Promise<void> {
         yaw: pose.yaw,
         home: { tangent: [dummy.home.x, dummy.home.z], yaw: dummy.home.yaw },
         reach: dummy.reach,
-        core: dummy.core,
+        footprint: dummy.footprint,
         hits: dummy.hits,
         fromPip: play.tangent ? fromBody(play.tangent[0]!, play.tangent[1]!, play.yaw, pose.x, pose.z) : null,
       };
@@ -296,6 +297,17 @@ async function start(): Promise<void> {
       dummy.moveTo({ x, z, yaw });
       return true;
     },
+    /**
+     * An evidence hook: the least distance between Pip's body (his sword and shield left out) and a dummy's geometry, as
+     * drawn on the last frame (bodyGap.ts). Nothing on the page calls it.
+     */
+    bodyGap: (index: number) => {
+      const rig = pipPlay.rig();
+      const dummy = dummies?.list[index];
+      if (!rig || !dummy) return null;
+      props ??= pipProps(rig);
+      return bodyGap(rig, props, dummy.root, { hullMaterial: ctx.hullMaterial });
+    },
     hitDummy: (index: number) => {
       const dummy = dummies?.list[index];
       const play = pipPlay.reading();
@@ -326,6 +338,8 @@ async function start(): Promise<void> {
       }
     },
   };
+  // Pip's props for the body gap, read once from his rig when first asked.
+  let props: PropMask | null = null;
   // The clocks of a frame without the impact (a build without the dummies): all three on the frame's step.
   const plainClocks: PlayClocks = { combo: 0, motion: 0, frame: 0 };
 
@@ -345,8 +359,8 @@ async function start(): Promise<void> {
     let frame: ComboFrame | null = null;
     if (pipPlay.active) frame = pipPlay.update(clocks, input.read(), input.takeAttack(), camera, controls);
     impact?.afterPlay(frame, dt);
-    // The whoosh starts with the hit's wind-up, timed on the audio clock from this frame.
-    if (frame?.started) sound.whoosh(frame.started, contractOf(frame.started, pipPlay.contracts));
+    // The whoosh starts with the hit's wind-up, timed on the audio clock from this frame, at the hit's playback speed.
+    if (frame?.started) sound.whoosh(frame.started, contractOf(frame.started, pipPlay.contracts), frame.state.hit?.speed ?? 1);
     sound.sync();
     controls.update(dt);
     painted.sky.follow(camera);

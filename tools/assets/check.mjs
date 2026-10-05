@@ -101,7 +101,12 @@ export function evaluateAsset(entry, budgets, timings) {
     if (animation.exportedDuration !== null && Math.abs(animation.exportedDuration - timing.duration) > FRAME) {
       failures.push(`${name} exported duration ${animation.exportedDuration.toFixed(3)} != timings ${timing.duration}`);
     }
-    if (Math.abs((animation.strike ?? -1) - timing.strike) > FRAME) {
+    // A clip with no strike (a recovery) is timed with a strike of null and must export none. Compared as before, a
+    // null on both sides read as a strike 1 s off (-1 against null) and a strike key left out compared as NaN, which no
+    // test of "more than a frame off" catches, so a timing without its strike passed unchecked.
+    if (timing.strike === null) {
+      if (animation.strike !== null && animation.strike !== undefined) failures.push(`${name} strike ${animation.strike} != timings null (no strike)`);
+    } else if (!(Math.abs((animation.strike ?? -1) - timing.strike) <= FRAME)) {
       failures.push(`${name} strike ${animation.strike} != timings ${timing.strike}`);
     }
   }
@@ -119,12 +124,18 @@ export function timedClips(entry, timings) {
     .filter(([name]) => entry.animations.some((a) => a.name === name))
     .map(([name, timing]) => {
       const windows = hasWindows(timing) ? `, active ${timing.activeFrom} to ${timing.activeTo} s, ${timing.cancel === null ? 'no cancel' : `cancel ${timing.cancel} s`}` : '';
-      return `${name} ${timing.duration} s, strike ${timing.strike} s${windows}`;
+      return `${name} ${timing.duration} s, ${timing.strike === null ? 'no strike' : `strike ${timing.strike} s`}${windows}`;
     });
 }
 
 /** The combo window keys a hit's timings.json entry carries beside its length and strike. */
 export const WINDOW_KEYS = ['activeFrom', 'activeTo', 'cancel'];
+/**
+ * The finisher's cuttable recovery: from `recoverFrom` to `recoverTo` seconds into its clip, the stretch of its recovery
+ * the labs' "finisher recovery cut" may end it at, where he regains full control and can start a new chain. Optional:
+ * a finisher without the keys plays its recovery out to its end, as the hand-keyed one does.
+ */
+export const RECOVER_KEYS = ['recoverFrom', 'recoverTo'];
 /** The sidecar records each cancel rounded to the millisecond (blender/recipes/commander_pip.py, notes.combo). */
 const RECORDED_CANCEL_TOLERANCE = 0.0005 + 1e-9;
 
@@ -135,8 +146,22 @@ function hasWindows(timing) {
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 
 /**
- * A model's combo windows against its sidecar: the combo's hits are the sidecar's `notes.combo` entries, in order, the
- * last its finisher. Each needs its timings.json entry to carry `activeFrom`, `activeTo` and `cancel`: a light hit's
+ * The combo's swing sets as the sidecar records them: its `notes.combo` hits grouped by each record's `set`, in order,
+ * so each set's last hit is its finisher. A sidecar from before there were two sets names none, and its hits are one set.
+ */
+export function comboSets(combo) {
+  const sets = new Map();
+  for (const name of Object.keys(combo)) {
+    const set = typeof combo[name]?.set === 'string' ? combo[name].set : '';
+    if (!sets.has(set)) sets.set(set, []);
+    sets.get(set).push(name);
+  }
+  return sets;
+}
+
+/**
+ * A model's combo windows against its sidecar: the combo's hits are the sidecar's `notes.combo` entries, in order, each
+ * swing set's last its finisher (comboSets; Pip ships the Quaternius set and the hand-keyed one, each with its own). Each needs its timings.json entry to carry `activeFrom`, `activeTo` and `cancel`: a light hit's
  * must read 0 < activeFrom < strike < activeTo <= cancel < duration (the active frames around the strike, the cancel
  * after them and before the end), the finisher's cancel must be null and its windows 0 < activeFrom < strike <
  * activeTo <= duration, and the cancel the build recorded in the sidecar must be the file's. A timings entry with
@@ -156,38 +181,113 @@ export function comboWindowFailures(entry, timings, sidecar) {
     return failures;
   }
   const hits = Object.keys(combo);
-  hits.forEach((name, index) => {
-    const timing = entries[name];
-    if (!timing) {
-      failures.push(`combo hit ${name} has no timings.json entry`);
-      return;
-    }
-    const missing = WINDOW_KEYS.filter((key) => !(key in timing));
-    if (missing.length) {
-      failures.push(`${name} timings lack ${missing.join(', ')}`);
-      return;
-    }
-    const { duration, strike, activeFrom, activeTo, cancel } = timing;
-    if (!finite(activeFrom) || !finite(activeTo)) {
-      failures.push(`${name} active frames ${activeFrom} to ${activeTo} are not numbers`);
-      return;
-    }
-    if (index === hits.length - 1) {
-      if (cancel !== null) failures.push(`${name}, the finisher, must have cancel null, not ${cancel}`);
-      else if (!(activeFrom > 0 && activeFrom < strike && strike < activeTo && activeTo <= duration)) {
-        failures.push(`${name} windows out of order: want 0 < activeFrom ${activeFrom} < strike ${strike} < activeTo ${activeTo} <= duration ${duration}`);
+  for (const names of comboSets(combo).values()) {
+    names.forEach((name, index) => {
+      const timing = entries[name];
+      if (!timing) {
+        failures.push(`combo hit ${name} has no timings.json entry`);
+        return;
       }
-    } else if (!finite(cancel)) {
-      failures.push(`${name}, a light hit, needs a cancel in seconds, not ${cancel}`);
-    } else if (!(activeFrom > 0 && activeFrom < strike && strike < activeTo && activeTo <= cancel && cancel < duration)) {
-      failures.push(`${name} windows out of order: want 0 < activeFrom ${activeFrom} < strike ${strike} < activeTo ${activeTo} <= cancel ${cancel} < duration ${duration}`);
-    }
-    const recorded = combo[name]?.cancel;
-    const same = recorded === null || cancel === null ? recorded === cancel : finite(recorded) && finite(cancel) && Math.abs(recorded - cancel) <= RECORDED_CANCEL_TOLERANCE;
-    if (!same) failures.push(`${name} sidecar cancel ${recorded} != timings ${cancel}`);
-  });
+      const missing = WINDOW_KEYS.filter((key) => !(key in timing));
+      if (missing.length) {
+        failures.push(`${name} timings lack ${missing.join(', ')}`);
+        return;
+      }
+      const { duration, strike, activeFrom, activeTo, cancel } = timing;
+      if (!finite(activeFrom) || !finite(activeTo)) {
+        failures.push(`${name} active frames ${activeFrom} to ${activeTo} are not numbers`);
+        return;
+      }
+      const finisher = index === names.length - 1;
+      if (finisher) {
+        if (cancel !== null) failures.push(`${name}, the finisher, must have cancel null, not ${cancel}`);
+        else if (!(activeFrom > 0 && activeFrom < strike && strike < activeTo && activeTo <= duration)) {
+          failures.push(`${name} windows out of order: want 0 < activeFrom ${activeFrom} < strike ${strike} < activeTo ${activeTo} <= duration ${duration}`);
+        }
+      } else if (!finite(cancel)) {
+        failures.push(`${name}, a light hit, needs a cancel in seconds, not ${cancel}`);
+      } else if (!(activeFrom > 0 && activeFrom < strike && strike < activeTo && activeTo <= cancel && cancel < duration)) {
+        failures.push(`${name} windows out of order: want 0 < activeFrom ${activeFrom} < strike ${strike} < activeTo ${activeTo} <= cancel ${cancel} < duration ${duration}`);
+      }
+      failures.push(...recoveryFailures(name, timing, finisher, entries));
+      const recorded = combo[name]?.cancel;
+      const same = recorded === null || cancel === null ? recorded === cancel : finite(recorded) && finite(cancel) && Math.abs(recorded - cancel) <= RECORDED_CANCEL_TOLERANCE;
+      if (!same) failures.push(`${name} sidecar cancel ${recorded} != timings ${cancel}`);
+    });
+  }
   for (const name of windowed) if (!hits.includes(name)) failures.push(`${name} has combo windows in timings.json, but the sidecar records no combo hit of that name`);
   return failures;
+}
+
+/**
+ * A combo hit's recovery keys. A finisher may give its cuttable recovery (RECOVER_KEYS), both keys or neither, read
+ * activeTo <= recoverFrom < recoverTo <= duration; a light hit may name the clip that plays when the chain stops after
+ * it (`recovery`, Quaternius's attack_1_rec), which timings.json must time too, so assets:check requires the model to
+ * export it. Neither belongs to the other kind: a light hit's recovery is cut at its cancel point or played by its
+ * recovery clip, and the finisher's is the end of its own clip.
+ */
+function recoveryFailures(name, timing, finisher, entries) {
+  const failures = [];
+  const given = RECOVER_KEYS.filter((key) => key in timing);
+  if (given.length && !finisher) failures.push(`${name}, a light hit, takes no ${given.join(' or ')}: its recovery ends at its cancel point or in its recovery clip`);
+  else if (given.length === 1) failures.push(`${name} gives ${given[0]} without ${RECOVER_KEYS.find((key) => key !== given[0])}: the cuttable recovery needs both or neither`);
+  else if (given.length === 2) {
+    const { activeTo, recoverFrom, recoverTo, duration } = timing;
+    if (!finite(recoverFrom) || !finite(recoverTo)) failures.push(`${name} recovery ${recoverFrom} to ${recoverTo} is not two numbers`);
+    else if (!(activeTo <= recoverFrom && recoverFrom < recoverTo && recoverTo <= duration)) {
+      failures.push(`${name} recovery out of order: want activeTo ${activeTo} <= recoverFrom ${recoverFrom} < recoverTo ${recoverTo} <= duration ${duration}`);
+    }
+  }
+  if ('recovery' in timing) {
+    const clip = timing.recovery;
+    if (finisher) failures.push(`${name}, the finisher, names a recovery clip (${clip}); its recovery is the end of its own clip`);
+    else if (typeof clip !== 'string' || !clip) failures.push(`${name} recovery ${JSON.stringify(clip)} is not a clip name`);
+    else if (!(finite(entries[clip]?.duration) && entries[clip].duration > 0)) failures.push(`${name} names the recovery clip ${clip}, which timings.json does not time`);
+  }
+  return failures;
+}
+
+/**
+ * A model's recorded root motion (its sidecar's `notes.root_motion`, Play Pip's lunge from each clip's travel) against
+ * its clips: each record is for a clip the model exports, its times start at 0, rise strictly and end within a frame
+ * of the clip's length, and its forward and side tracks are finite, as long as its times and start at 0. The page
+ * checks the same when it loads (labs/world/lunge.ts) and falls back to the scripted lunge on a fault; here a fault
+ * stops the check before the record ships.
+ */
+export function rootMotionFailures(entry, sidecar) {
+  if (entry.kind !== 'model') return [];
+  const records = sidecar?.notes?.root_motion;
+  if (records === undefined || records === null) return [];
+  if (typeof records !== 'object' || Array.isArray(records)) return ['notes.root_motion is not an object of clips'];
+  const failures = [];
+  for (const [clip, record] of Object.entries(records)) {
+    const animation = entry.animations.find((a) => a.name === clip);
+    if (!animation) {
+      failures.push(`root motion for ${clip}, which the model does not export`);
+      continue;
+    }
+    const { times, forward, side } = record ?? {};
+    const list = (value) => Array.isArray(value) && value.length >= 2 && value.every(finite);
+    if (!list(times) || times[0] !== 0 || times.some((t, i) => i > 0 && !(t > times[i - 1]))) {
+      failures.push(`${clip} root motion times must be two or more finite numbers rising from 0`);
+      continue;
+    }
+    const length = animation.exportedDuration ?? animation.duration;
+    if (Math.abs(times[times.length - 1] - length) > FRAME) failures.push(`${clip} root motion ends at ${times[times.length - 1]} s, more than a frame from its ${length.toFixed(3)} s clip`);
+    for (const [key, track] of [['forward', forward], ['side', side]]) {
+      if (track === undefined && key === 'side') continue;
+      if (!list(track) || track.length !== times.length || track[0] !== 0) failures.push(`${clip} root motion ${key} must be ${times.length} finite numbers from 0`);
+    }
+  }
+  return failures;
+}
+
+/** The root motion the check held, for the pass line: each clip's travel forward and its length, or null for none. */
+export function rootMotionNote(entry, sidecar) {
+  const records = entry.kind === 'model' ? sidecar?.notes?.root_motion : null;
+  if (!records || typeof records !== 'object') return null;
+  const parts = Object.entries(records).map(([clip, r]) => `${clip} ${Number(r.forward.at(-1)).toFixed(2)} m forward over ${Number(r.times.at(-1)).toFixed(3)} s`);
+  return parts.length ? `root motion ${parts.join(', ')}` : null;
 }
 
 /**
@@ -198,15 +298,20 @@ export function comboWindowsNote(entry, timings, sidecar) {
   const combo = entry.kind === 'model' ? sidecar?.notes?.combo : null;
   if (!combo) return null;
   const entries = timings[entry.family]?.[entry.name] ?? {};
-  const hits = Object.keys(combo);
-  const orders = hits.map((name, index) => {
-    const t = entries[name];
-    return index === hits.length - 1
-      ? `${name} 0 < ${t.activeFrom} < ${t.strike} < ${t.activeTo} <= ${t.duration} (finisher, cancel null)`
-      : `${name} 0 < ${t.activeFrom} < ${t.strike} < ${t.activeTo} <= ${t.cancel} < ${t.duration}`;
+  const sets = [...comboSets(combo)].map(([set, names]) => {
+    const orders = names.map((name, index) => {
+      const t = entries[name];
+      if (index < names.length - 1) {
+        const recovery = t.recovery ? ` then ${t.recovery} ${entries[t.recovery].duration} s` : '';
+        return `${name} 0 < ${t.activeFrom} < ${t.strike} < ${t.activeTo} <= ${t.cancel} < ${t.duration}${recovery}`;
+      }
+      const cut = 'recoverFrom' in t ? `, recovery cut ${t.activeTo} <= ${t.recoverFrom} < ${t.recoverTo} <= ${t.duration}` : '';
+      return `${name} 0 < ${t.activeFrom} < ${t.strike} < ${t.activeTo} <= ${t.duration} (finisher, cancel null${cut})`;
+    });
+    return `${set ? `${set}: ` : ''}${orders.join(', ')}`;
   });
-  const cancels = hits.map((name) => (combo[name].cancel === null ? 'null' : combo[name].cancel)).join(', ');
-  return `combo windows ${orders.join(', ')}; sidecar cancels ${cancels} match`;
+  const cancels = Object.keys(combo).map((name) => (combo[name].cancel === null ? 'null' : combo[name].cancel)).join(', ');
+  return `combo windows ${sets.join('; ')}; sidecar cancels ${cancels} match`;
 }
 
 /**
@@ -256,6 +361,7 @@ function main() {
     failures.push(...fileFailures(entry, fileSize(join(root, 'public', 'assets', entry.file))));
     const sidecar = readSidecar(root, entry);
     failures.push(...comboWindowFailures(entry, timings, sidecar));
+    failures.push(...rootMotionFailures(entry, sidecar));
     if (failures.length) {
       fail += 1;
       console.log(`ASSET ${entry.name} FAIL: ${failures.join('; ')}`);
@@ -266,6 +372,8 @@ function main() {
       console.log(`ASSET ${entry.name} ok (${entry.tris} tris, ${Math.round(entry.bytes / 1024)} KB${note})`);
       const windows = comboWindowsNote(entry, timings, sidecar);
       if (windows) console.log(`ASSET ${entry.name} ${windows}`);
+      const travel = rootMotionNote(entry, sidecar);
+      if (travel) console.log(`ASSET ${entry.name} ${travel}`);
     }
   }
   console.log(`assets:check pass=${pass} fail=${fail}`);

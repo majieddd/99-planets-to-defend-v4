@@ -1,13 +1,16 @@
 import { Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { COMBAT_FEEL_RANGES, DEFAULT_COMBAT_FEEL } from '../../../src/labs/world/combatFeel';
-import { COMBO_HITS } from '../../../src/labs/world/combo';
+import { footprintObstacle } from '../../../src/labs/combat/dummies';
+import { PIP_STRIKE_REACH } from '../../../src/labs/combat/footprint';
+import { COMBO_HITS, HAND_HITS } from '../../../src/labs/world/combo';
 import {
   ASSIST_CONE_DEG,
   ASSIST_GAP,
   ASSIST_RANGE,
+  blendRootStep,
+  footprintEntry,
   freshLunge,
-  lungeBodies,
   LUNGE_LEAD,
   LUNGE_TAIL,
   lungeShare,
@@ -16,12 +19,14 @@ import {
   rootMotionCurve,
   rootMotionCurves,
   rootMotionFaults,
+  ROOT_MOTION_END_TOLERANCE,
   sampleTrack,
   ScriptedLunge,
   stepLunge,
   type LungeCurve,
 } from '../../../src/labs/world/lunge';
-import { holdingRadius, PLAY_AREA_RADIUS, resolveObstacles, stepMotion, sweepMove, type Obstacle } from '../../../src/labs/world/playMotion';
+import { legShare } from '../../../src/labs/world/play';
+import { holdingGap, obstacleGap, PLAY_AREA_RADIUS, resolveObstacles, stepMotion, type Obstacle } from '../../../src/labs/world/playMotion';
 import {
   crescentWidth,
   TRAIL_CAPACITY,
@@ -37,30 +42,34 @@ import {
 } from '../../../src/labs/world/swordTrail';
 
 // Play Pip's lunge and sword trail, which run on both pages (labs/world): the lunge's window, its curve (scripted or a
-// clip's root motion) and assist, its sweep against the bodies' cores and the area's edge, and the trail's ring,
-// subsampling, length, fade and fresh stroke per hit.
+// clip's root motion) and assist, how it combines with his drive, its sweep against the dummies' footprints and the
+// area's edge, and the trail's ring, subsampling, length, fade and fresh stroke per hit.
 
 const R = 160;
 const DT = 1 / 60;
 const FEEL = { ...DEFAULT_COMBAT_FEEL };
-const [HIT1, HIT2, HIT3] = COMBO_HITS as [(typeof COMBO_HITS)[number], (typeof COMBO_HITS)[number], (typeof COMBO_HITS)[number]];
+// The scripted lunge's own tests run on the hand-keyed hits, which take it (the Quaternius hits bring root motion).
+const [HIT1, HIT2, HIT3] = HAND_HITS as [(typeof HAND_HITS)[number], (typeof HAND_HITS)[number], (typeof HAND_HITS)[number]];
 
-/** Runs a hit's lunge over its whole clip at 60 fps from (x, z) facing yaw, the obstacles' cores as its bodies. */
-function runLunge(curve: LungeCurve, duration: number, x: number, z: number, yaw: number, obstacles: Obstacle[] = [], targets: Obstacle[] = [], turn = 0) {
+/** Runs a lunge over a clip at 60 fps from (x, z) facing yaw, swept against the obstacles, his drive moving `driven` m a frame. */
+function runLunge(curve: LungeCurve, duration: number, x: number, z: number, yaw: number, obstacles: Obstacle[] = [], targets: Obstacle[] = [], turn = 0, driven = 0) {
   const state = freshLunge();
   const at = { x, z, yaw };
-  const bodies = lungeBodies(obstacles, []);
   const track: { t: number; x: number; z: number }[] = [];
   for (let t = 0; t <= duration + 1e-9; t += DT) {
-    stepLunge(state, curve, t, at, targets, bodies, turn, R);
+    stepLunge(state, curve, t, at, targets, obstacles, turn, R, { metres: driven, yaw: at.yaw });
     track.push({ t, x: at.x, z: at.z });
   }
   return { state, at, track };
 }
 
+/** A dummy's footprint as an obstacle facing -z (toward a Pip south of it): a core and a head, both widened by `widen`. */
+const husk = (x: number, z: number, widen = PIP_STRIKE_REACH): Obstacle =>
+  footprintObstacle({ x: 0, z: 0, radius: 0 }, x, z, Math.PI, { core: 0.8, head: { from: 0.6, to: 0.6, radius: 0.7 } }, widen);
+
 describe("Pip's lunge (labs/world/lunge.ts)", () => {
   it('carries each scripted hit forward around its strike, at rest at both ends of its window', () => {
-    for (const hit of COMBO_HITS) {
+    for (const hit of [...COMBO_HITS, ...HAND_HITS]) {
       const { from, to } = lungeWindow(hit);
       expect(from).toBeCloseTo(hit.strike - LUNGE_LEAD, 12);
       expect(to).toBeCloseTo(hit.strike + LUNGE_TAIL, 12);
@@ -70,9 +79,9 @@ describe("Pip's lunge (labs/world/lunge.ts)", () => {
       // Smooth at its ends: a tiny share a frame in, and a tiny share left a frame before the end.
       expect(lungeShare(hit, from + 0.005)).toBeLessThan(0.01);
       expect(1 - lungeShare(hit, to - 0.005)).toBeLessThan(0.01);
-      // The scripted curve is that share of its metres.
+      // The scripted curve is that share of its metres, and reaches its whole length.
       const curve = new ScriptedLunge(hit, 0.35);
-      expect([curve.source, curve.total, curve.at(to)]).toEqual(['scripted', 0.35, 0.35]);
+      expect([curve.source, curve.total, curve.reach, curve.at(to)]).toEqual(['scripted', 0.35, 0.35, 0.35]);
     }
   });
 
@@ -101,28 +110,30 @@ describe("Pip's lunge (labs/world/lunge.ts)", () => {
     expect(at).toEqual(held);
   });
 
-  it('turns a little toward a target ahead and stops just outside its core, and leaves one outside its cone or range alone', () => {
+  it("turns a little toward a target ahead and stops just outside its footprint, and leaves one outside its cone or range alone", () => {
     const turn = (15 * Math.PI) / 180;
-    // A target 25 degrees to his left, 2.15 m off: its reach's edge is 0.6 m away, its core's (a 0.95 m core, the
-    // Husk's hump widened by his body) 1.2 m. He turns 15 degrees (the cap) toward it, and the lunge stops ASSIST_GAP
-    // outside its core, cut to the 0.55 m asked.
+    // A dummy 25 degrees to his left, 3 m off, facing him: its footprint widened by his reach begins 0.70 m away head on.
+    // He turns 15 degrees (the cap) toward it, and the lunge stops ASSIST_GAP outside the footprint along the turned way.
     const off = (25 * Math.PI) / 180;
-    const target: Obstacle = { x: Math.sin(off) * 2.15, z: Math.cos(off) * 2.15, radius: 1.55, core: 0.95 };
-    const plan = planLunge(0, 0, 0, 0.55, [target], turn);
+    const target = footprintObstacle({ x: 0, z: 0, radius: 0 }, Math.sin(off) * 3, Math.cos(off) * 3, off + Math.PI, { core: 0.8, head: { from: 0.6, to: 0.6, radius: 0.7 } }, PIP_STRIKE_REACH);
+    const plan = planLunge(0, 0, 0, 1.47, [target], turn);
     expect(plan.target).toBe(0);
     expect(plan.turn).toBeCloseTo(turn, 12);
     expect(plan.yaw).toBeCloseTo(turn, 12);
-    expect(plan.length).toBe(0.55);
-    // From the reach's edge, where W parks him, there is room to the core: 1.55 - 0.95 less the gap.
-    const parked = planLunge(0, 0, 0, 0.8, [{ x: 0, z: 1.55, radius: 1.55, core: 0.95 }], turn);
-    expect(parked).toMatchObject({ target: 0, turn: 0 });
-    expect(parked.length).toBeCloseTo(0.6 - ASSIST_GAP, 12);
-    // At the core's edge already, no lunge; without a core the reach stands in for it, as for the world's members.
-    expect(planLunge(0, 0, 0, 0.55, [{ x: 0, z: 0.95 + ASSIST_GAP, radius: 1.55, core: 0.95 }], turn).length).toBeCloseTo(0, 12);
-    const member = planLunge(0, 0, 0, 0.55, [{ x: 0, z: 1.55 + ASSIST_GAP, radius: 1.55 }], turn);
+    const entry = footprintEntry(0, 0, Math.sin(turn), Math.cos(turn), target, 2);
+    expect(plan.length).toBeCloseTo(entry - ASSIST_GAP, 12);
+    expect(obstacleGap(target, Math.sin(turn) * plan.length, Math.cos(turn) * plan.length)).toBeCloseTo(ASSIST_GAP * Math.cos(turn - off) ** 0, 2);
+    // Never further than the curve reaches: 0.35 m asked, 0.35 m planned.
+    expect(planLunge(0, 0, 0, 0.35, [target], turn).length).toBe(0.35);
+    // Head on at its edge already, no lunge: where W parks him, his reach meets its head.
+    const parked = husk(0, 1.3 + PIP_STRIKE_REACH);
+    expect(obstacleGap(parked, 0, 0)).toBeCloseTo(0, 9);
+    expect(planLunge(0, 0, 0, 0.75, [parked], turn).length).toBe(0);
+    // A member, round, with nothing but its reach: stops ASSIST_GAP outside it.
+    const member = planLunge(0, 0, 0, 0.55, [{ x: 0, z: 1.55 + 0.3, radius: 1.55 }], turn);
     expect(member).toMatchObject({ target: 0, turn: 0 });
-    expect(member.length).toBeCloseTo(0, 12);
-    // Outside the cone, or beyond the range, or with the assist off: straight ahead, the whole distance.
+    expect(member.length).toBeCloseTo(0.3 - ASSIST_GAP, 6);
+    // Outside the cone, or beyond the range, or with the assist off: straight ahead, the whole reach.
     const wide = (ASSIST_CONE_DEG + 5) * (Math.PI / 180);
     expect(planLunge(0, 0, 0, 0.55, [{ x: Math.sin(wide) * 2.15, z: Math.cos(wide) * 2.15, radius: 1.55 }], turn)).toEqual({ yaw: 0, length: 0.55, turn: 0, target: -1 });
     expect(planLunge(0, 0, 0, 0.55, [{ x: 0, z: 1.55 + ASSIST_RANGE + 0.1, radius: 1.55 }], turn).target).toBe(-1);
@@ -133,36 +144,40 @@ describe("Pip's lunge (labs/world/lunge.ts)", () => {
     expect(run.state.moved).toBeCloseTo(0.35, 6);
   });
 
-  it("is swept against a body's core, so the leg tips that stop his walk do not stop a lunge, and he is then held where it left him", () => {
-    // A dummy dead ahead, its reach (its legs, widened by his body) 1.55 m and its core 0.95 m: W parks him on the reach.
-    const dummy: Obstacle = { x: 0, z: 1.55, radius: 1.55, core: 0.95 };
-    // Straight ahead with no assist, 0.8 m asked: he lunges in past the reach and stops on the core, 0.6 m on.
-    const straight = runLunge(new ScriptedLunge(HIT3, 0.8), HIT3.duration, 0, 0, 0, [dummy]);
+  it("stops at a dummy's head as his walk does, swept, where phase B's lunge went on to a core inside it", () => {
+    // A dummy facing him head on, its footprint widened by his reach: its head reaches 1.30 m, so the footprint begins
+    // 2.30 m ahead of its root. From 0.5 m short of that, the finisher's 1.47 m of root motion stops on its edge.
+    const dummy = husk(0, 2.3 + 0.5);
+    const finisher = rootMotionCurve({ times: [0, 1, 2], forward: [0, 1.2, 1.47] });
+    const straight = runLunge(finisher, 2, 0, 0, 0, [dummy]);
     expect(straight.state.blocked).toBe(true);
-    expect(straight.at.z).toBeCloseTo(0.6, 6);
-    // Swept against the reach, as it was, he could not move at all from there.
-    const legs = sweepMove(0, 0, 0, 0.5, [dummy]);
-    expect(legs.moved).toBe(0);
-    // Inside the reach his next frames hold him where he stands: walking on asks nothing deeper and pushes nothing out,
-    // and walking away is free.
-    const inside = { x: 0, z: 0.4, yaw: 0, speed: 0, drive: 0 };
-    expect(holdingRadius(dummy, inside.x, inside.z)).toBeCloseTo(1.15, 12);
+    expect(straight.at.z).toBeCloseTo(0.5, 6);
+    expect(obstacleGap(dummy, straight.at.x, straight.at.z)).toBeGreaterThanOrEqual(-1e-9);
+    // From the side, the head is not there to stop him: he comes up to the widened core, 1.8 m from the root.
+    const side = runLunge(finisher, 2, -2.3, 2.8, Math.PI / 2, [dummy]);
+    expect(side.state.blocked).toBe(true);
+    expect(Math.hypot(side.at.x - dummy.x, side.at.z - dummy.z)).toBeCloseTo(0.8 + PIP_STRIKE_REACH, 6);
+    // His walk meets the same footprint: walking on asks nothing deeper.
+    const at = { x: 0, z: 0.5, yaw: 0, speed: 0, drive: 3.2 };
+    const on = stepMotion(at, { x: 0, z: 1, amount: 1 }, false, DT, [dummy], R);
+    expect(obstacleGap(dummy, on.x, on.z)).toBeGreaterThanOrEqual(-1e-9);
+    // A point already inside (a body moved onto him) is held as deep as it stands, not thrown out, and may walk away.
+    const inside = { x: 0, z: 0.8, yaw: 0, speed: 0, drive: 0 };
+    expect(holdingGap(dummy, inside.x, inside.z)).toBeCloseTo(obstacleGap(dummy, 0, 0.8), 12);
     const still = stepMotion(inside, null, false, DT, [dummy], R);
-    expect([still.x, still.z]).toEqual([0, 0.4]);
-    const on = stepMotion({ ...inside, drive: 3.2 }, { x: 0, z: 1, amount: 1 }, false, DT, [dummy], R);
-    expect(Math.hypot(on.x - dummy.x, on.z - dummy.z)).toBeGreaterThanOrEqual(1.15 - 1e-9);
+    expect([still.x, still.z]).toEqual([0, 0.8]);
     const back = stepMotion({ ...inside, yaw: Math.PI, drive: 3.2 }, { x: 0, z: -1, amount: 1 }, false, DT, [dummy], R);
-    expect(back.z).toBeLessThan(0.4 - 0.05);
-    // A point inside a reach with no core is pushed back to it, as every member's always was.
+    expect(back.z).toBeLessThan(0.8 - 0.05);
+    // A point inside a round reach with no head is pushed back to it, as every member's always was.
     expect(resolveObstacles(0, 0.5, 0, 0.4, [{ x: 0, z: 1.55, radius: 1.55 }]).z).toBeCloseTo(0, 9);
   });
 
-  it('follows a clip\'s root-motion curve when one is recorded, scaled by the planned length and swept', () => {
+  it('follows a clip\'s root-motion curve when one is recorded, scaled by the planned length over its reach, and swept', () => {
     // A synthetic retargeted hit: 0.5 m along his facing, most of it between 0.1 and 0.2 s, and 0.1 m to his right.
     const motion = { times: [0, 0.1, 0.2, 0.3, 0.7], forward: [0, 0.05, 0.4, 0.5, 0.5], side: [0, 0, 0.08, 0.1, 0.1] };
     expect(rootMotionFaults(motion)).toEqual([]);
     const curve = rootMotionCurve(motion);
-    expect([curve.source, curve.total]).toEqual(['root', 0.5]);
+    expect([curve.source, curve.total, curve.reach]).toEqual(['root', 0.5, 0.5]);
     expect(curve.at(0.15)).toBeCloseTo(0.225, 12);
     expect(curve.side!(0.25)).toBeCloseTo(0.09, 12);
     expect(sampleTrack(motion.times, motion.forward, 5)).toBe(0.5);
@@ -173,23 +188,81 @@ describe("Pip's lunge (labs/world/lunge.ts)", () => {
     const at15 = open.track.find((p) => p.t >= 0.15 - 1e-9)!;
     expect(at15.z).toBeCloseTo(curve.at(at15.t), 4);
     // The assist cuts the plan to 0.3 m: the whole curve is scaled by 0.6, not cut off at 0.3 m.
-    const target: Obstacle = { x: 0, z: 0.95 + ASSIST_GAP + 0.3, radius: 1.55, core: 0.95 };
+    const target: Obstacle = { x: 0, z: 1.55 + ASSIST_GAP + 0.3, radius: 1.55 };
     const cut = runLunge(curve, 0.7, 0, 0, 0, [], [target], (15 * Math.PI) / 180);
-    expect(cut.state.plan!.length).toBeCloseTo(0.3, 9);
+    expect(cut.state.plan!.length).toBeCloseTo(0.3, 6);
     expect(cut.at.z).toBeCloseTo(0.3, 4);
     expect(cut.at.x).toBeCloseTo(-0.06, 4);
     const cut15 = cut.track.find((p) => p.t >= 0.15 - 1e-9)!;
-    expect(cut15.z).toBeCloseTo(curve.at(cut15.t) * 0.6, 4);
-    // Swept: a body's core 0.2 m ahead of where he starts stops him on its edge for the rest of the hit (the side part
-    // has carried him a little to his right by then, so he meets it just past 0.2 m on).
-    const swept = runLunge(curve, 0.7, 0, 0, 0, [{ x: 0, z: 1.15, radius: 1.55, core: 0.95 }]);
-    expect(swept.state.blocked).toBe(true);
-    expect(Math.hypot(swept.at.x, swept.at.z - 1.15)).toBeCloseTo(0.95, 9);
-    expect(swept.at.z).toBeGreaterThan(0.2);
-    expect(swept.at.z).toBeLessThan(0.21);
+    expect(cut15.z).toBeCloseTo(curve.at(cut15.t) * 0.6, 3);
+    // A curve that overshoots and comes back (the forehand's 0.77 m peak, 0.75 m at its end) plans from its peak.
+    expect(rootMotionCurve({ times: [0, 0.3, 0.43], forward: [0, 0.77, 0.75] }).reach).toBe(0.77);
   });
 
-  it('names a root-motion record with a fault and falls back to the scripted profile for that hit', () => {
+  it('plays a step back as recorded, which the assist does not shorten, where phase B scaled it to nothing', () => {
+    // The Quaternius backhand ends 6 cm back. Planned from its total, as phase B did, the lunge's length was 0 and its
+    // scale 0 over -0.06, so the step was dropped without a word; planned from its reach (0), it plays as recorded.
+    const back = rootMotionCurve({ times: [0, 0.2, 0.53], forward: [0, -0.02, -0.06], side: [0, -0.01, -0.03] });
+    expect([back.total, back.reach]).toEqual([-0.06, 0]);
+    const target: Obstacle = { x: 0, z: 1.6, radius: 1.55 };
+    const run = runLunge(back, 0.6, 0, 0, 0, [], [target], (15 * Math.PI) / 180);
+    expect(run.at.z).toBeCloseTo(-0.06, 6);
+    expect(run.at.x).toBeCloseTo(0.03, 6);
+  });
+
+  it("finishes the assist's turn by the hit's active frames, where his facing locks, whatever the curve has done", () => {
+    const turn = (15 * Math.PI) / 180;
+    const off = (25 * Math.PI) / 180;
+    const target: Obstacle = { x: Math.sin(off) * 2.15, z: Math.cos(off) * 2.15, radius: 1.55 };
+    // A scripted lunge, whose curve runs to its strike and 0.04 s past it: with the active frames as the deadline the
+    // turn is whole there, where it went on turning him through them.
+    const curve = new ScriptedLunge(HIT1, 0.35);
+    const state = freshLunge();
+    const at = { x: 0, z: 0, yaw: 0 };
+    for (let t = DT; t <= HIT1.activeFrom + 1e-9; t += DT) stepLunge(state, curve, t, at, [target], [], turn, R, { metres: 0, yaw: 0 }, HIT1.activeFrom);
+    expect(at.yaw).toBeCloseTo(turn, 2);
+    // Without a deadline the turn follows the curve and is still under way there.
+    const late = freshLunge();
+    const at2 = { x: 0, z: 0, yaw: 0 };
+    for (let t = DT; t <= HIT1.activeFrom + 1e-9; t += DT) stepLunge(late, curve, t, at2, [target], [], turn, R);
+    expect(at2.yaw).toBeLessThan(turn * 0.9);
+  });
+
+  it('travels the larger of his drive and the lunge along its way, never their sum, and adds a step back in full', () => {
+    expect(blendRootStep(0.03, 0)).toBe(0.03);
+    expect(blendRootStep(0.03, 0.02)).toBeCloseTo(0.01, 12);
+    expect(blendRootStep(0.03, 0.05)).toBe(0);
+    expect(blendRootStep(0.03, -0.05)).toBe(0.03);
+    expect(blendRootStep(-0.01, 0.05)).toBe(-0.01);
+    // Over a whole clip: standing he lunges the curve's 0.5 m; walking at the light hits' 0.4 pace (1.28 m/s, 0.0213 m a
+    // frame) the lunge adds only where the clip's own step is the faster, so walk and lunge together cover less than
+    // their sum and at least the walk.
+    const curve = rootMotionCurve({ times: [0, 0.1, 0.2, 0.3, 0.7], forward: [0, 0.05, 0.4, 0.5, 0.5] });
+    const walking = runLunge(curve, 0.7, 0, 0, 0, [], [], 0, 1.28 * DT);
+    const walked = 1.28 * DT * Math.round(0.7 / DT + 1);
+    expect(walking.state.moved).toBeGreaterThan(0);
+    expect(walking.state.moved).toBeLessThan(0.5);
+    expect(walking.state.moved + walked).toBeLessThan(0.5 + walked);
+    expect(walking.state.moved + walked).toBeGreaterThanOrEqual(walked);
+  });
+
+  it("weighs a root-motion clip's legs by the share of its travel he is given, so a lunge cut short does not slide his feet", () => {
+    const forehand = rootMotionCurve({ times: [0, 0.3, 0.43], forward: [0, 0.77, 0.75] });
+    // Before the lunge is planned, and planned whole: the clip's own legs.
+    expect(legShare(forehand, null, false)).toBe(1);
+    expect(legShare(forehand, 0.77, false)).toBe(1);
+    // From contact the assist plans nothing: the stance's legs; cut to half, half of each; stopped by a body, the stance.
+    expect(legShare(forehand, 0, false)).toBe(0);
+    expect(legShare(forehand, 0.385, false)).toBeCloseTo(0.5, 12);
+    expect(legShare(forehand, 0.77, true)).toBe(0);
+    // A step back plays whole unless a body stops it; the scripted lunge, authored in place, always keeps its legs.
+    const back = rootMotionCurve({ times: [0, 0.53], forward: [0, -0.06] });
+    expect([legShare(back, 0, false), legShare(back, 0, true)]).toEqual([1, 0]);
+    expect(legShare(new ScriptedLunge(HIT1, 0.35), 0, true)).toBe(1);
+    expect(legShare(null, null, false)).toBe(1);
+  });
+
+  it('names a root-motion record with a fault and falls back to the scripted profile for that hit, and notes a step back', () => {
     const good = { times: [0, 0.2, 0.4], forward: [0, 0.3, 0.4] };
     const faults = {
       lengths: { times: [0, 0.2, 0.4], forward: [0, 0.3] },
@@ -202,22 +275,31 @@ describe("Pip's lunge (labs/world/lunge.ts)", () => {
     for (const [why, value] of Object.entries(faults)) expect(rootMotionFaults(value).length, why).toBeGreaterThan(0);
     expect(rootMotionFaults(faults.lengths)).toEqual(['forward has 2 samples against 3 times']);
     expect(rootMotionFaults(faults.descending)).toEqual(['times must rise strictly (0.3 then 0.2)']);
-    const said: string[] = [];
+    // A record that ends more than a frame short of its clip, or past it, is a fault; within a frame it is not.
+    expect(rootMotionFaults(good, 0.5)).toEqual(["its last sample at 0.4 s misses the clip's 0.500 s by more than a frame"]);
+    expect(rootMotionFaults(good, 0.4 + 1 / 40)).toEqual([]);
+    expect(ROOT_MOTION_END_TOLERANCE).toBeCloseTo(1 / 30, 12);
+    const said: [string, string][] = [];
     const curves = rootMotionCurves(
-      ['attack_1', 'attack_2', 'attack_3'],
-      { root_motion: { attack_1: good, attack_2: faults.descending } },
-      { attack_3: faults.lengths },
-      (text) => said.push(text),
+      ['attack_1', 'attack_2', 'attack_3', 'attack_1_rec', 'block'],
+      { root_motion: { attack_1: good, attack_2: faults.descending, attack_1_rec: good, block: { times: [0, 0.4], forward: [0, -0.1] } } },
+      { attack_3: faults.lengths, attack_1_rec: { times: [0, 0.4], forward: [0, 0.9] } },
+      (text, kind) => said.push([kind, text]),
+      { attack_1_rec: 0.4 },
     );
-    // attack_1 from the sidecar; attack_2's sidecar record and attack_3's glTF extras are named and dropped.
-    expect(Object.keys(curves)).toEqual(['attack_1']);
-    expect(curves.attack_1!.total).toBe(0.4);
-    expect(said).toHaveLength(2);
-    expect(said[0]).toContain("attack_2's root motion in the sidecar is invalid (times must rise strictly");
-    expect(said[1]).toContain("attack_3's root motion in the clip's glTF extras is invalid");
+    // attack_1 from the sidecar; attack_2's sidecar record and attack_3's glTF extras are named and dropped; where the
+    // sidecar and the extras both name a clip (attack_1_rec), the sidecar's is taken; a step back is kept and noted.
+    expect(Object.keys(curves)).toEqual(['attack_1', 'attack_1_rec', 'block']);
+    expect(curves['attack_1']!.total).toBe(0.4);
+    expect(curves['attack_1_rec']!.total).toBe(0.4);
+    expect(curves['block']!.total).toBe(-0.1);
+    expect(said.map(([kind]) => kind)).toEqual(['fault', 'fault', 'note']);
+    expect(said[0]![1]).toContain("attack_2's root motion in the sidecar is invalid (times must rise strictly");
+    expect(said[1]![1]).toContain("attack_3's root motion in the clip's glTF extras is invalid");
+    expect(said[2]![1]).toContain("block's root motion in the sidecar ends -0.100 m along his facing");
     // No sidecar notes and no extras: nothing recorded, nothing named, every hit scripted.
-    expect(rootMotionCurves(['attack_1'], null, {}, (text) => said.push(text))).toEqual({});
-    expect(said).toHaveLength(2);
+    expect(rootMotionCurves(['attack_1'], null, {}, (text, kind) => said.push([kind, text]))).toEqual({});
+    expect(said).toHaveLength(3);
   });
 });
 
@@ -349,6 +431,6 @@ describe("the sword trail's crescent (labs/world/swordTrail.ts)", () => {
       expect(stroke.time - b.time[b.slot(0)]!, `${fps} fps`).toBeGreaterThan(TRAIL_LENGTH_MAX - dt - 1e-9);
       expect(b.count, `${fps} fps`).toBeLessThanOrEqual(TRAIL_CAPACITY);
     }
-    expect(TRAIL_CAPACITY).toBe(179);
+    expect(TRAIL_CAPACITY).toBe(279);
   });
 });

@@ -5,9 +5,14 @@
     },
     "commander_pip": {
       "attack": { "duration": 0.85, "strike": 0.34 },
-      "attack_1": { "duration": 0.55, "strike": 0.2, "activeFrom": 0.15, "activeTo": 0.28, "cancel": 0.3 },
-      "attack_2": { "duration": 0.55, "strike": 0.2, "activeFrom": 0.15, "activeTo": 0.28, "cancel": 0.3 },
-      "attack_3": { "duration": 0.85, "strike": 0.38, "activeFrom": 0.33, "activeTo": 0.46, "cancel": null }
+      "attack_1": { "duration": 0.433, "strike": 0.267, "activeFrom": 0.217, "activeTo": 0.347, "cancel": 0.367, "recovery": "attack_1_rec" },
+      "attack_2": { "duration": 0.533, "strike": 0.267, "activeFrom": 0.217, "activeTo": 0.347, "cancel": 0.367, "recovery": "attack_2_rec" },
+      "attack_3": { "duration": 2.0, "strike": 0.667, "activeFrom": 0.617, "activeTo": 0.747, "cancel": null, "recoverFrom": 0.767, "recoverTo": 1.633 },
+      "attack_1_rec": { "duration": 0.967, "strike": null },
+      "attack_2_rec": { "duration": 1.033, "strike": null },
+      "attack_1_hand": { "duration": 0.55, "strike": 0.2, "activeFrom": 0.15, "activeTo": 0.28, "cancel": 0.3 },
+      "attack_2_hand": { "duration": 0.55, "strike": 0.2, "activeFrom": 0.15, "activeTo": 0.28, "cancel": 0.3 },
+      "attack_3_hand": { "duration": 0.85, "strike": 0.38, "activeFrom": 0.33, "activeTo": 0.46, "cancel": null }
     }
   },
   "xeno": {
