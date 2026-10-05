@@ -1617,6 +1617,7 @@ The order of construction:
 | v3's run-ending death outside the frontier | dropped | owner chose the cargo cache rule, 2026-09-23 |
 | v3 classic maps (Pocket World, Giant World, Titan's Brow) | not yet | candidates for Planet Lab sandbox play after M10 |
 | Co-op or multiplayer | not yet | the pure simulation keeps it possible |
+| Play Pip's impact feel (phase B, a lab prototype feeding M1's commander controller): a hit's shape is its blade's sweep across the ground, a hit lands on its strike frame (or at the meeting, if later), the trail is cyan energy with no ink, the lunge is scripted with a soft target assist, the shake is off under reduced motion, the hit numbers are placeholders, and the hits land only in the combat arena while the lunge and the trail run on both pages | partial | 2026-10-05, labs/combat and labs/world (Numbers, Asset World layout and Combat arena); the Asset World's Husks are catalogue members placed and measured by the world, so they take no knockback or flinch; docs/evidence/m1/combat-impact/; the owner's feel verdict is open |
 
 ## Task list
 
@@ -1664,16 +1665,19 @@ The order of construction:
 - [ ] When M4 tunes the attacks, put each contract duration on a whole 30 fps frame: Bulwark's and Pip's
       0.85 s is 25.5 frames, so each exports as 25 frames (0.8333 s) and passes only on assets:check's
       one-frame tolerance (`FRAME`, tools/assets/check.mjs); the timings stay as they are until then
-- [ ] Combat feel phase B, the impact feel, in Play Pip: lunge, sword trail, training dummies with hit detection on
+- [x] Combat feel phase B, the impact feel, in Play Pip: lunge, sword trail, training dummies with hit detection on
       the active frames, hit-stop, sparks and camera shake, each number a key of the combat feel settings
       (`CombatFeel`, labs/world/combatFeel.ts), so the panel's folder shows it. Hit-stop holds the combo's and the
       movement's clocks and leaves the frame's running (`PlayClocks`, labs/world/play.ts), which keeps the presses made
-      in the stop and the camera alive; `update()` hands back each frame's strike (`ComboFrame`)
+      in the stop and the camera alive; `update()` hands back each frame's strike (`ComboFrame`) (2026-10-05: the lunge
+      and the trail on both pages, the hits, the stop, the sparks, the shake, the reactions and the numbers in the
+      arena; docs/evidence/m1/combat-impact/. Open: the owner's feel verdict)
 - [x] The combat arena (labs/combat.html, 2026-10-05): Pip and three Husk training dummies, two models, ready in under
       a second on the GPU, with R and a panel button to reset; linked from the home page and both labs
-- [ ] Phase B adds hit reactions to the combat arena's dummies (labs/combat/dummies.ts): hit detection calls each
+- [x] Phase B adds hit reactions to the combat arena's dummies (labs/combat/dummies.ts): hit detection calls each
       dummy's hit hook (`hit`), `onHit` plays the flinch on the dummy's `mixer` and `push` carries the knockback, and the
-      arena's reset already brings them home and tells `onReset`
+      arena's reset already brings them home and tells `onReset` (2026-10-05: a procedural lean of the Husk's body over
+      its idle, since it has no flinch clip, and a swept, eased knockback)
 - [x] When the real attack_1 to attack_3 ship in commander_pip.glb (the page plays a clip of a hit's name in place of
       its placeholder), move `COMBO_HITS` into src/shared/timings.json and hold the exports to it in assets:check
       (2026-10-05: each hit's length and strike are its timings.json entry, which combo.ts reads and assets:check holds;
@@ -1999,3 +2003,19 @@ was keyed from (13 to 47 mm before), and no timing moved: `npm run assets -- --o
 and assets:check reads every hit's length and strike as timings.json sets them. A preview folder is emptied when a build
 first asks for it, and a contact sheet sharp cannot write is a warning, not a failed build after publishing. npm test
 reads 500 passed and npm run test:blender 23 passed.
+2026-10-05, last. Phase B, the impact feel. Play Pip now lunges on every hit (0.35 m on a light hit and 0.55 m on the
+finisher, around its strike, swept against the bodies and the area's edge, and turned and cut short by a soft assist
+toward a target ahead), and his blade, read from the hand it is skinned to, draws a cyan sword trail through each hit's
+active frames: a painted energy stroke keyed for the bloom, glazed under its light so it stays cyan over the warm sky,
+breaking into the brush atlas's strokes where it is thin, and not inked. Both run on both pages. In the combat arena the
+blade's sweep through the active frames is tested against each training dummy: a dummy it meets is hit once a swing,
+and on the strike frame time stops (55 ms and 90 ms, holding Pip's combo and movement and the struck dummy while the
+camera, the sparks and the shake run on), sparks and a flash burst at the wound, a placeholder number rises from it,
+the camera kicks, and the dummy leans back and is knocked back; a whiff gets none of it, and R puts it all back. Every
+number is a slider in the combat feel folder, from ten new settings, or a Numbers row. Measured: the browser test
+reads a whiff with no stop and no sparks, then three hits on the middle dummy, each connected, with stops of 55.0, 55.0
+and 90.0 ms on the frames' own clocks, a burst at each contact and its hits at 3; the colour audit at the Style Lab's
+hero camera on high still reads 1.927. docs/evidence/m1/combat-impact/ holds the full combo at 60 fps
+(combat-impact.mp4, 640 x 360, 90 frames, stepped on the lab's own clock) and its strip, beside combat-trail.png and
+combat-spark.png. npm test reads 519 passed, npm run test:blender 23 passed and the browser suite 33 passed and 11 skipped. Next: the
+owner's feel verdict in the arena, and whether the strike's 0.20 s becomes 0.25 s.
