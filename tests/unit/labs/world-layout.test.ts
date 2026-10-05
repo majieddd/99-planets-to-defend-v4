@@ -322,6 +322,7 @@ describe('buildAssetWorld', () => {
       'pip_idle',
       'pip_run',
       'pip_face',
+      'pip_attack',
       'bulwark_idle',
       'bulwark_run',
       'bulwark_attack',
@@ -344,10 +345,11 @@ describe('buildAssetWorld', () => {
   it('gives every Pip instance its own face, blinking out of step after its mixer, and cycles the demo on the face member alone', () => {
     const { world } = build();
     const faces = () => new Map(world.faces().map((face) => [face.name, face]));
-    // Only rigs with face morphs get a face: Pip's three, never Bulwark's visor or the Husk.
-    expect([...faces().keys()]).toEqual(['pip_idle', 'pip_run', 'pip_face']);
-    // Before any draw, every instance's hull, the two rig copies' included, already shares its body's influences.
-    for (const name of ['pip_idle', 'pip_run', 'pip_face']) {
+    // Only rigs with face morphs get a face: Pip's four, never Bulwark's visor or the Husk.
+    const pips = ['pip_idle', 'pip_run', 'pip_face', 'pip_attack'];
+    expect([...faces().keys()]).toEqual(pips);
+    // Before any draw, every instance's hull, the rig copies' included, already shares its body's influences.
+    for (const name of pips) {
       const part = world.root.getObjectByName(name)!.getObjectByName('commander_pip_part') as Mesh;
       const hull = part.children.find((child) => (child as Mesh).material === hullMaterial) as Mesh;
       expect(hull.morphTargetInfluences, name).toBe(part.morphTargetInfluences);
@@ -366,9 +368,9 @@ describe('buildAssetWorld', () => {
         expect(part.morphTargetInfluences![part.morphTargetDictionary!['blink_L']!], face.name).toBe(face.blink);
       }
     }
-    for (const name of ['pip_idle', 'pip_run', 'pip_face']) expect(most.get(name), name).toBeGreaterThan(0.9);
-    // Seeded one after another, the three never start a blink on the same frame.
-    expect(new Set(firstBlink.values()).size).toBe(3);
+    for (const name of pips) expect(most.get(name), name).toBeGreaterThan(0.9);
+    // Seeded one after another, the four never start a blink on the same frame.
+    expect(new Set(firstBlink.values()).size).toBe(pips.length);
   });
 
   it('cycles neutral, smile and brows up on the face member, holds every face while frozen, and holds a posed face for a frame', () => {
@@ -638,7 +640,7 @@ describe('the Asset World views', () => {
     expect(shown({ view: OVERVIEW, member: '' }, true, OVERVIEW_MEMBER_LABELS_MIN_WIDTH - 1)).toEqual(families);
     expect(shown({ view: OVERVIEW, member: '' }, true, OVERVIEW_MEMBER_LABELS_MIN_WIDTH)).toEqual([...families, ...labelled]);
     expect(shown({ view: 'towers', member: '' })).toEqual(['family:towers', 'bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
-    const commanders = ['pip_idle', 'pip_run', 'pip_face', 'bulwark_idle', 'bulwark_run', 'bulwark_attack'];
+    const commanders = ['pip_idle', 'pip_run', 'pip_face', 'pip_attack', 'bulwark_idle', 'bulwark_run', 'bulwark_attack'];
     const commanderPlacards = ['family:commanders:commander_pip', 'family:commanders:bulwark'];
     expect(shown({ view: CHARACTERS, member: '' })).toEqual(['family:xeno', ...commanderPlacards, 'husk_idle', 'husk_walk', 'husk_attack', ...commanders]);
     // Pip leads the commanders' view, Bulwark after him; Pip has no view of his own any more.
@@ -654,9 +656,9 @@ describe('the Asset World views', () => {
     expect(shown({ view: 'env', member: 'flowers' }, true, 375)).toEqual(['flowers']);
     expect(Object.keys(FAMILY_MEMBER_LABELS_MIN_WIDTH)).toEqual(['env']);
     expect(shown({ view: 'towers', member: '' }, true, 375)).toEqual(['family:towers', 'bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
-    // On a phone the characters' view, which frames the whole 24.6 m character row, names the placards alone.
+    // On a phone the characters' view, which frames the whole 27.2 m character row, names the placards alone.
     expect(shown({ view: CHARACTERS, member: '' }, true, CHARACTERS_MEMBER_LABELS_MIN_WIDTH - 1)).toEqual(['family:xeno', ...commanderPlacards]);
-    expect(shown({ view: CHARACTERS, member: '' }, true, CHARACTERS_MEMBER_LABELS_MIN_WIDTH)).toHaveLength(12);
+    expect(shown({ view: CHARACTERS, member: '' }, true, CHARACTERS_MEMBER_LABELS_MIN_WIDTH)).toHaveLength(3 + 10);
     expect(shown({ view: 'towers', member: 'bolt_mk2' })).toEqual(['bolt_mk2']);
     // A member opened from the overview's list is named the same way.
     expect(shown({ view: OVERVIEW, member: 'rock_a' })).toEqual(['rock_a']);

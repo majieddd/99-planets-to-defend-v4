@@ -231,9 +231,9 @@ test.describe('the Asset World', () => {
     expect(towersUnframed, line).toEqual([]);
     expect(state.towerLabels, line).toEqual(['Bolt Sentinel', 'Mark I', 'Mark II', 'Mark III']);
     expect(outside, line).toEqual([]);
-    expect(commanders, line).toEqual(['pip_idle', 'pip_run', 'pip_face', 'bulwark_idle', 'bulwark_run', 'bulwark_attack']);
+    expect(commanders, line).toEqual(['pip_idle', 'pip_run', 'pip_face', 'pip_attack', 'bulwark_idle', 'bulwark_run', 'bulwark_attack']);
     // Every Pip instance has its own face, and every one of their hulls follows its body's morphs, the copies' too.
-    expect(state.faces.map((face) => face.name), line).toEqual(['pip_idle', 'pip_run', 'pip_face']);
+    expect(state.faces.map((face) => face.name), line).toEqual(['pip_idle', 'pip_run', 'pip_face', 'pip_attack']);
     expect(state.faces.every((face) => face.hullsShared), line).toBe(true);
     // With no dials link the world opens on DEFAULT_DIALS, Painted-Anime-Inkline 4.0, the set the Style Lab opens on.
     expect(state.look, line).toBe('locked');

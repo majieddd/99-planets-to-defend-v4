@@ -13,21 +13,25 @@ import { createPaintUniforms } from '../../../src/render/materials/painted';
 import { VERDANT } from '../../../src/render/themes';
 import { assetIO } from '../../../tools/assets/optimize.mjs';
 
-// The shipped Pip-A, as three r186's own GLTFLoader delivers it, so the names the renderer and the face driver read are
+// The shipped Pip, as three r186's own GLTFLoader delivers it, so the names the renderer and the face driver read are
 // the loader's and not assumed. Node has no image decoder, so the file's three textures are dropped before parsing; the
 // geometry, the skin, the morphs and the clips pass through the loader exactly as the page loads them.
 const FILE = fileURLToPath(new URL('../../../public/assets/commanders/commander_pip.glb', import.meta.url));
 const FACE = ['blink_L', 'blink_R', 'smile', 'brows_up', 'pucker'];
-// Since the v5 study export the body's glTF mesh has two primitives, the body on the shared paint material and the head
-// on a second material with its own 1024 px texture. GLTFLoader loads such a node as a Group named after the node, with
-// one skinned mesh per primitive named after the mesh and made unique, so the node's own name is taken and the two
-// primitives arrive as commander_body_1 (body) and commander_body_2 (head). Every check that read commander_body as one
-// mesh now reads both, because a check on the body alone would pass with the head, where the eyes are, left unpainted,
+// The recipe build's body mesh (blender/lib/charforge.py, paint_commander) has two primitives, the body on the atlas it
+// shares with the armour and the head on a second material with its own 1024 px texture. GLTFLoader loads such a node
+// as a Group named after the node, with one skinned mesh per primitive named after the mesh and made unique, so the
+// node's own name is taken and the two primitives arrive as commander_body_1 (body) and commander_body_2 (head). Every
+// check reads both, because a check on the body alone would pass with the head, where the eyes are, left unpainted,
 // uninked or undriven.
 const BODY_PARTS = ['commander_body_1', 'commander_body_2'];
+// His attack's contract (src/shared/timings.json), and the export's frame rounding, which assets:check allows too.
+const ATTACK_SECONDS = 0.85;
+const FRAME = 1 / 30;
 
 let scene: Group;
 let clips: string[];
+let durations: Record<string, number>;
 
 beforeAll(async () => {
   const io = await assetIO();
@@ -38,12 +42,13 @@ beforeAll(async () => {
   const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, '');
   scene = gltf.scene;
   clips = gltf.animations.map((clip) => clip.name);
+  durations = Object.fromEntries(gltf.animations.map((clip) => [clip.name, clip.duration]));
 });
 
 const mesh = (name: string) => scene.getObjectByName(name) as Mesh;
 const bodyParts = () => BODY_PARTS.map(mesh);
 
-describe('the shipped Pip-A through GLTFLoader', () => {
+describe('the shipped Pip through GLTFLoader', () => {
   it('loads the two-material body as a Group of the body and the head, each a skinned mesh on its own material', () => {
     const body = scene.getObjectByName('commander_body')!;
     expect([body.type, body.children.map((child) => child.name)]).toEqual(['Group', BODY_PARTS]);
@@ -76,7 +81,7 @@ describe('the shipped Pip-A through GLTFLoader', () => {
     expect(range(head!)).toEqual([expect.closeTo(1, 3), expect.closeTo(1, 3)]);
   });
 
-  it('carries the five face morphs on the body and the head, positions only, the jaw bone by its exact name, and the idle and run clips', () => {
+  it('carries the five face morphs on the body and the head, positions only, the jaw bone by its exact name, and the idle, run and attack clips', () => {
     for (const part of bodyParts()) {
       expect(Object.keys(part.morphTargetDictionary ?? {})).toEqual(FACE);
       expect(part.geometry.morphAttributes['position']).toHaveLength(5);
@@ -88,7 +93,9 @@ describe('the shipped Pip-A through GLTFLoader', () => {
     const jaw = scene.getObjectByName(JAW_BONE_NAME) as Bone;
     expect(jaw.isBone).toBe(true);
     expect(jaw.parent?.name).toBe('mixamorigHead');
-    expect(clips).toEqual(['idle', 'run']);
+    // The exporter writes the clips in name order; the attack, authored in the recipe, lasts its contract to a frame.
+    expect(clips).toEqual(['attack', 'idle', 'run']);
+    expect(Math.abs(durations['attack']! - ATTACK_SECONDS)).toBeLessThanOrEqual(FRAME);
   });
 
   it('paints the body and the head as skin out of the edge pass and keeps the armour in it, all inked', () => {
@@ -122,12 +129,19 @@ describe('the shipped Pip-A through GLTFLoader', () => {
     // The shipped rig carries the face morphs, so it gets a face; a null here would pass every check below unread.
     expect(made).not.toBeNull();
     const face = made!;
-    // The driver sets the morphs on the head, where the eyes and mouth are, as well as on the body.
+    // Every primitive that carries the morphs is the body's two, and the driver sets the morphs on each of them: on the
+    // head, where the eyes and mouth are, as well as on the body. The hulls the paint test above hung under them share
+    // their morphs and follow them (syncHullMorphs), so they are not counted as primitives of the file.
+    const morphed: Mesh[] = [];
+    scene.traverse((object) => {
+      if ((object as Mesh).isMesh && (object as Mesh).morphTargetDictionary && !(object.parent as Mesh | null)?.isMesh) morphed.push(object as Mesh);
+    });
+    expect(morphed.map((m) => m.name)).toEqual(BODY_PARTS);
     expect(face.meshes.map((m) => m.name)).toEqual(expect.arrayContaining(BODY_PARTS));
-    // And it writes to the shipped asset's own influences, not a copy: with the lids held shut, every body primitive's
-    // blink_L reads 1, the head's included.
+    // And it writes to the shipped asset's own influences, not a copy: with the lids held shut, every morphed
+    // primitive's blink_L reads 1, the head's included.
     face.setBlinkHold(1);
-    for (const part of bodyParts()) expect(part.morphTargetInfluences![part.morphTargetDictionary!['blink_L']!], part.name).toBe(1);
+    for (const part of morphed) expect(part.morphTargetInfluences![part.morphTargetDictionary!['blink_L']!], part.name).toBe(1);
     face.setBlinkHold(null);
     face.setJaw(1);
     const open = chin();

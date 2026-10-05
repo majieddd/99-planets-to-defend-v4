@@ -5,8 +5,7 @@
     "texture": 1024,
     "ink": true,
     "animations": ["idle", "run", "attack"],
-    "morphs": ["blink_L", "blink_R", "smile", "brows_up", "pucker"],
-    "pending": { "commander_pip": { "attack": "Pip (commander) has idle and run; his attack clip is phase B" } }
+    "morphs": ["blink_L", "blink_R", "smile", "brows_up", "pucker"]
   },
   "xeno": { "tris": 9000, "bones": 24, "texture": 1024, "ink": true, "animations": ["idle", "walk", "attack"] },
   "towers": { "tris": 36000, "bones": 0, "texture": 1024, "ink": true },

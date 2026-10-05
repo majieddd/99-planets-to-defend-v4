@@ -133,6 +133,13 @@
           "loop": true,
           "strike": null,
           "exportedDuration": 0.699999988079071
+        },
+        {
+          "name": "attack",
+          "duration": 0.85,
+          "loop": false,
+          "strike": 0.34,
+          "exportedDuration": 0.8333333134651184
         }
       ],
       "morphs": [
@@ -142,7 +149,7 @@
         "brows_up",
         "pucker"
       ],
-      "tris": 24000,
+      "tris": 23999,
       "bones": 24,
       "textures": [
         {
@@ -175,7 +182,7 @@
           "sink": 0
         }
       ],
-      "bytes": 687488
+      "bytes": 710300
     },
     {
       "name": "verdant_kit",

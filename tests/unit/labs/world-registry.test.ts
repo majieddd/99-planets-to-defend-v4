@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { pendingClips } from '../../../tools/assets/check.mjs';
 import { COMMANDER_LABELS } from '../../../src/labs/shared/commanders';
 import { FAMILY_STANDARD_BLEND, standardBlendFor } from '../../../src/render/assets/familyBlend';
 import {
@@ -33,7 +32,6 @@ interface ShippedManifest extends CoverageManifest {
 }
 
 const manifest = JSON.parse(readFileSync('public/assets/manifest.json', 'utf8')) as ShippedManifest;
-const budgets = JSON.parse(readFileSync('tools/assets/budgets.json', 'utf8')) as Record<string, { pending?: Record<string, Record<string, string>> }>;
 
 describe('the Asset World registry', () => {
   it('accounts for every entry of the shipped manifest: each model placed, each placeable and kit piece placed, each clip looped, each texture given a reason', () => {
@@ -122,7 +120,7 @@ describe('the Asset World registry', () => {
   it('reads the placeables from the ground records: a whole-asset record covers the asset, otherwise each named node', () => {
     const find = (name: string) => manifest.assets.find((entry) => entry.name === name)!;
     expect(requiredPieces(find('bulwark'))).toEqual([]);
-    // Pip-A is placed whole, like Bulwark: his rig's top-level empty is covered by the whole-asset record.
+    // Pip is placed whole, like Bulwark: his rig's top-level empty is covered by the whole-asset record.
     expect(requiredPieces(find('commander_pip'))).toEqual([]);
     expect(requiredPieces(find('worldheart'))).toEqual([]);
     expect(requiredPieces(find('bolt_sentinel'))).toEqual(['bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
@@ -144,13 +142,14 @@ describe('the Asset World registry', () => {
     // The members the world shows: the Husk idle, walking and attacking, the commanders, the three fixed heart stages and
     // the slider's heart, and the three tower marks.
     expect(MEMBERS.filter((m) => m.entry === 'husk').map((m) => m.clip)).toEqual(['idle', 'walk', 'attack']);
-    // The commanders' zone: Pip (commander), the default, first, idle, running and a third idle whose face cycles the
-    // expression demo (his attack clip is pending); then Bulwark, the alternate, idle, running and attacking.
+    // The commanders' zone: Pip (commander), the default, first, idle, running, a third idle whose face cycles the
+    // expression demo, and attacking; then Bulwark, the alternate, idle, running and attacking.
     expect(ZONES.find((zone) => zone.family === 'commanders')?.label).toBe('Commanders');
     expect(MEMBERS.filter((m) => m.zone === 'commanders').map((m) => [m.name, m.entry, m.clip, m.faceDemo, m.label, m.character])).toEqual([
       ['pip_idle', 'commander_pip', 'idle', false, 'Idle', 'Pip (commander)'],
       ['pip_run', 'commander_pip', 'run', false, 'Run', 'Pip (commander)'],
       ['pip_face', 'commander_pip', 'idle', true, 'Face', 'Pip (commander)'],
+      ['pip_attack', 'commander_pip', 'attack', false, 'Attack', 'Pip (commander)'],
       ['bulwark_idle', 'bulwark', 'idle', false, 'Idle', 'Bulwark'],
       ['bulwark_run', 'bulwark', 'run', false, 'Run', 'Bulwark'],
       ['bulwark_attack', 'bulwark', 'attack', false, 'Attack', 'Bulwark'],
@@ -187,8 +186,9 @@ describe('the Asset World registry', () => {
     const pip = MEMBERS.filter((m) => m.entry === 'commander_pip');
     expect([HUSK_ROW_START, PIP_ROW_START]).toEqual([-6.4, 2.8]);
     // Bulwark's row follows the end of Pip's, so its start comes from the rows' geometry, not a literal: 13 m while Pip
-    // has three members, and 2.6 m further once his attack member joins them, with nothing here to change.
+    // had three members, and 15.6 m since his attack member joined them, with nothing here changed.
     expect(BULWARK_ROW_START).toBeCloseTo(PIP_ROW_START + (pip.length - 1) * CHARACTER_SPACING + COMMANDER_ROW_GAP, 12);
+    expect([pip.length, BULWARK_ROW_START]).toEqual([4, expect.closeTo(15.6, 9)]);
     expect(husk[0]!.s).toBe(HUSK_ROW_START);
     expect(pip[0]!.s).toBe(PIP_ROW_START);
     expect(bulwark[0]!.s).toBe(BULWARK_ROW_START);
@@ -196,50 +196,39 @@ describe('the Asset World registry', () => {
     expect(Math.min(...pip.map((m) => m.s)) - Math.max(...husk.map((m) => m.s))).toBeCloseTo(CHARACTER_ROW_GAP, 12);
     expect(Math.min(...bulwark.map((m) => m.s)) - Math.max(...pip.map((m) => m.s))).toBeCloseTo(COMMANDER_ROW_GAP, 12);
     expect([CHARACTER_ROW_GAP, COMMANDER_ROW_GAP]).toEqual([4, 5]);
-    // Pip's idle and run stand on the level clearing, inside 6 m of the pole, where the relief begins.
-    for (const m of pip.filter((member) => !member.faceDemo)) expect(Math.hypot(m.s, m.d), m.name).toBeLessThan(6);
+    // Pip's idle and run stand on the level clearing, inside 6 m of the pole, where the relief begins; his face member
+    // and his attack, which came last, stand past it, at 8 m and 10.6 m.
+    const clearing = pip.filter((member) => member.name === 'pip_idle' || member.name === 'pip_run');
+    expect(clearing.map((m) => m.name)).toEqual(['pip_idle', 'pip_run']);
+    for (const m of clearing) expect(Math.hypot(m.s, m.d), m.name).toBeLessThan(6);
+    expect(pip.filter((member) => !clearing.includes(member)).map((m) => [m.name, Math.hypot(m.s, m.d)])).toEqual([
+      ['pip_face', expect.closeTo(8, 9)],
+      ['pip_attack', expect.closeTo(10.6, 9)],
+    ]);
     for (const row of [husk, bulwark, pip]) {
       for (let i = 1; i < row.length; i++) expect(row[i]!.s - row[i - 1]!.s).toBeCloseTo(CHARACTER_SPACING, 12);
       for (const m of row) expect([m.d, m.lean, m.turnDeg], m.name).toEqual([CHARACTER_ROW_DEPTH, LEAN.plumb, THREE_QUARTER_TURN_DEG]);
     }
   });
 
-  it('treats a pending clip as no member yet, so the clip shipping later needs one member and no other change', () => {
-    // The rule is tested on a manifest of its own: a copy of Bulwark's entry without his attack, pending in a budget of
-    // its own, beside his other members. Tested on today's pending list, it failed the day Pip's attack shipped, however
-    // rightly the clip came in, because the list it expected had emptied.
+  it('names a member put in ahead of its clip and leaves it out, so a clip that ships later needs one member and no other change', () => {
+    // The rule is tested on a manifest of its own: a copy of Bulwark's entry without his attack, beside his other
+    // members, as Pip's entry stood before his attack shipped.
     const bulwark = manifest.assets.find((asset) => asset.name === 'bulwark')!;
-    const entry = { ...bulwark, name: 'pending_commander', animations: bulwark.animations.filter((animation) => animation.name !== 'attack') };
-    const budget = { animations: ['idle', 'run', 'attack'], pending: { pending_commander: { attack: 'phase B' } } };
-    expect(pendingClips(entry, budget)).toEqual([{ clip: 'attack', reason: 'phase B' }]);
-    const members = MEMBERS.filter((m) => m.entry === 'bulwark' && m.clip !== 'attack').map((m) => ({ ...m, name: `pending_${m.clip}`, entry: entry.name }));
-    const early = { ...members[0]!, name: 'pending_attack', label: 'Attack', clip: 'attack' };
-    const pending: CoverageManifest = { assets: [entry] };
-    // While it is pending, the model's other members cover it, with no member and no CLIPS_NOT_SHOWN reason for it.
-    expect(coverageGaps(pending, members)).toEqual([]);
+    const entry = { ...bulwark, name: 'early_commander', animations: bulwark.animations.filter((animation) => animation.name !== 'attack') };
+    const members = MEMBERS.filter((m) => m.entry === 'bulwark' && m.clip !== 'attack').map((m) => ({ ...m, name: `early_${m.clip}`, entry: entry.name }));
+    const early = { ...members[0]!, name: 'early_attack', label: 'Attack', clip: 'attack' };
+    const before: CoverageManifest = { assets: [entry] };
+    // Before the clip ships, the model's other members cover it, with no member and no CLIPS_NOT_SHOWN reason for it.
+    expect(coverageGaps(before, members)).toEqual([]);
     // A member put in ahead of the clip is named, and the page leaves it out rather than stopping on a missing clip.
-    const earlyGaps = coverageGaps(pending, [...members, early]);
-    expect(earlyGaps).toEqual([expect.stringContaining('member "pending_attack" loops a clip "attack" that "pending_commander" does not export')]);
+    const earlyGaps = coverageGaps(before, [...members, early]);
+    expect(earlyGaps).toEqual([expect.stringContaining('member "early_attack" loops a clip "attack" that "early_commander" does not export')]);
     expect(showableMembers(new Map([[entry.name, entry.animations.map((animation) => animation.name)]]), earlyGaps, [...members, early])).toEqual({ shown: members, unnamed: [] });
     // The clip ships: the coverage check names exactly it, and one member that loops it closes the gap.
     const shipped: CoverageManifest = { assets: [{ ...entry, animations: [...entry.animations, { name: 'attack' }] }] };
-    expect(coverageGaps(shipped, members)).toEqual([expect.stringContaining('"pending_commander" has a clip "attack" that no Asset World member loops')]);
+    expect(coverageGaps(shipped, members)).toEqual([expect.stringContaining('"early_commander" has a clip "attack" that no Asset World member loops')]);
     expect(coverageGaps(shipped, [...members, early])).toEqual([]);
-  });
-
-  it('gives no member and no CLIPS_NOT_SHOWN reason to any clip budgets.json still lists as pending', () => {
-    // A check on the data, which holds with no clip pending at all, as it will once Pip's attack ships.
-    const pending = Object.values(budgets).flatMap((budget) =>
-      Object.keys(budget.pending ?? {}).flatMap((entryName) => {
-        const entry = manifest.assets.find((asset) => asset.name === entryName)!;
-        return (pendingClips(entry, budget) as { clip: string }[]).map(({ clip }) => ({ entry: entryName, clip }));
-      }),
-    );
-    for (const { entry, clip } of pending) {
-      const key = `${entry}/${clip}`;
-      expect(MEMBERS.filter((m) => m.entry === entry && m.clip === clip).map((m) => m.name), key).toEqual([]);
-      expect(clipHasReason(entry, clip), key).toBe(false);
-    }
   });
 
   it('builds every member the loaded models can show, and names any it leaves out that the coverage gaps do not', () => {
@@ -256,7 +245,7 @@ describe('the Asset World registry', () => {
     withoutNest.delete('nest');
     expect(showableMembers(withoutNest, []).unnamed).toEqual(['member "nest" is left out because its model "nest" did not load']);
     // A member the coverage gaps already name is left out with no second sentence.
-    const early = { ...MEMBERS.find((m) => m.name === 'pip_idle')!, name: 'pip_attack', label: 'Attack', clip: 'attack' };
+    const early = { ...MEMBERS.find((m) => m.name === 'pip_idle')!, name: 'pip_dance', label: 'Dance', clip: 'dance' };
     expect(showableMembers(loaded, coverageGaps(manifest, [...MEMBERS, early]), [...MEMBERS, early])).toEqual({ shown: [...MEMBERS], unnamed: [] });
   });
 
@@ -266,6 +255,7 @@ describe('the Asset World registry', () => {
     expect(options['Bulwark idle (bulwark_idle)']).toBe('bulwark_idle');
     const commanders = MEMBERS.filter((m) => m.zone === 'commanders');
     expect(Object.values(options)).toEqual(['', ...commanders.map((m) => m.name)]);
+    expect(options['Pip (commander) attack (pip_attack)']).toBe('pip_attack');
     for (const m of commanders) expect(memberOptionText(m)).toBe(`${m.character} ${m.label!.toLowerCase()} (${m.name})`);
     expect(Object.keys(memberOptions('xeno'))).toEqual(['Whole view', 'Idle (husk_idle)', 'Walk (husk_walk)', 'Attack (husk_attack)']);
     // A family's only member has no label, and the list names it by its address.

@@ -3,11 +3,11 @@
   "family": "commanders",
   "file": "commanders/commander_pip.glb",
   "kind": "model",
-  "recipe": null,
+  "recipe": "commander_pip",
   "nodes": [
     "commander_rig",
-    "commander_armour",
-    "commander_body"
+    "commander_body",
+    "commander_armour"
   ],
   "animations": [
     {
@@ -21,13 +21,68 @@
       "duration": 0.7,
       "loop": true,
       "strike": null
+    },
+    {
+      "name": "attack",
+      "duration": 0.85,
+      "loop": false,
+      "strike": 0.34
     }
   ],
-  "tris": 24000,
+  "tris": 23999,
   "notes": {
-    "preview": "Pip-A, the M1 commander preview, study export v5: the owner's CharForge Pip reworked in Blender 5.2.1 by the M1 study's scripts, which are not yet a recipe in blender/recipes, so npm run assets keeps this committed file and does not rebuild it",
-    "head": "v5 gives the body a second material for a 1024 px head texture and zeroes the neck's _INK around the jaw, where the hull ink drew specks",
-    "clips": "idle and run only; the attack clip is phase B"
+    "source": "blender/sources/charforge/pip.glb",
+    "bones": 24,
+    "morphs": [
+      "blink_L",
+      "blink_R",
+      "smile",
+      "brows_up",
+      "pucker"
+    ],
+    "height_m": 1.782,
+    "decimation": {
+      "after_cull": 61490,
+      "head_source_tris": 13253,
+      "pass1": 23252,
+      "final": 17439,
+      "head_tris": 7493
+    },
+    "morph_transfer": {
+      "blink_L": {
+        "source_max_mm": 26.9,
+        "body_max_mm": 26.9
+      },
+      "blink_R": {
+        "source_max_mm": 27.0,
+        "body_max_mm": 27.0
+      },
+      "smile": {
+        "source_max_mm": 8.7,
+        "body_max_mm": 8.7
+      },
+      "brows_up": {
+        "source_max_mm": 12.4,
+        "body_max_mm": 12.1
+      },
+      "pucker": {
+        "source_max_mm": 8.5,
+        "body_max_mm": 8.5
+      }
+    },
+    "attack_checks": {
+      "sword_shield_overlaps": 0,
+      "blade_body_overlaps": 0,
+      "frames_crossing_shield": [],
+      "frames_blade_in_body": [],
+      "min_z": -0.0,
+      "boot_shift_mm": 0.0,
+      "strike_blade_tip": {
+        "z": 0.255,
+        "y": -1.12,
+        "x": 0.094
+      }
+    }
   },
   "placeables": []
 }

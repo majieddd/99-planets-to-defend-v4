@@ -187,8 +187,8 @@ async function start(): Promise<void> {
   // would otherwise have posed by the time it is copied. He goes in the scene, not the world's root, so the world's
   // members, bounds and labels stay exactly what they are with play off.
   const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS);
-  // A member whose model or clip this build lacks is left out rather than built, where a member put in ahead of a pending
-  // clip would stop the page with "has no clip". The coverage gaps above, read from the manifest, name most such members;
+  // A member whose model or clip this build lacks is left out rather than built, where a member put in ahead of its clip
+  // would stop the page with "has no clip". The coverage gaps above, read from the manifest, name most such members;
   // one the loaded GLBs drop that the manifest does not (a GLB rebuilt without a clip the manifest lists) is named here.
   const loadedClips = new Map([...assets].map(([name, asset]) => [name, asset.animations.map((clip) => clip.name)] as const));
   const { shown, unnamed } = showableMembers(loadedClips, gaps);

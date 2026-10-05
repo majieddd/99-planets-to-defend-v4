@@ -180,21 +180,21 @@ const huskRow = characterRow('husk', 'xeno', HUSK_ROW_START, null, [
 
 /**
  * Pip (commander), the default commander, leads the commanders' zone, first in its order and on the level clearing next
- * to the Husk: idle and running, each blinking on its own, and a third idle whose face cycles the held-expression demo.
- * His attack clip is pending (tools/assets/budgets.json, phase B), so it has no member: when the clip ships, the coverage
- * check names it until one more slot here loops it. What is computed from the layout then follows it: Bulwark's row,
- * which starts from the end of this one, steps 2.6 m further out, and WORLD_REACH with the sun's box, the views' fits
- * and the label anchors move with it. What was measured does not: the label width thresholds (views.ts), the shadow
- * texel and reach figures quoted in comments and the blueprint, and Bulwark's ground contact readings on the slope past
- * the clearing, which the Task list has re-measured once the clip ships. The two commanders share a zone, so each row's placard names its commander ("Pip (commander)", the name
- * the labs give him until the owner names the character) and the member labels stay as short as the Husk's: a label
- * that named him too, "Pip (commander) idle", overlapped its neighbours by 68 px in the 1920 x 1080 overview, and still
- * by 39 px at 2560 x 1440. The member names stay as they were (`pip_face` is the face member's address).
+ * to the Husk: idle and running, each blinking on its own, a third idle whose face cycles the held-expression demo, and
+ * his attack, last, so the members measured before it stayed where they stood. Bulwark's row, which starts from the end
+ * of this one, stepped 2.6 m further out when the attack joined, and WORLD_REACH with the sun's box, the views' fits and
+ * the label anchors moved with it; what does not follow the layout by itself (the label width thresholds in views.ts,
+ * the shadow figures in sun.ts and Bulwark's ground contact on the slope past the clearing) was measured again then
+ * (Asset World layout). The two commanders share a zone, so each row's placard names its commander ("Pip (commander)",
+ * the name the labs give him until the owner names the character) and the member labels stay as short as the Husk's: a
+ * label that named him too, "Pip (commander) idle", overlapped its neighbours by 68 px in the 1920 x 1080 overview, and
+ * still by 39 px at 2560 x 1440. The member names stay as they were (`pip_face` is the face member's address).
  */
 const pipRow = characterRow('commander_pip', 'commanders', nextRowStart(huskRow), COMMANDER_LABELS.pip, [
   ['pip_idle', 'Idle', 'idle', false],
   ['pip_run', 'Run', 'run', false],
   ['pip_face', 'Face', 'idle', true],
+  ['pip_attack', 'Attack', 'attack', false],
 ]);
 
 /** Bulwark, the alternate commander, after Pip in the commanders' zone: idle, running and attacking. */
@@ -205,8 +205,8 @@ const bulwarkRow = characterRow('bulwark', 'commanders', nextRowStart(pipRow, CO
 ]);
 
 /**
- * Where Pip's row and Bulwark's begin along s, in metres: 2.8 m, on the level clearing, and, while Pip has three
- * members, 13 m, past it, since Bulwark's row follows the end of Pip's.
+ * Where Pip's row and Bulwark's begin along s, in metres: 2.8 m, on the level clearing, and, with Pip's four members,
+ * 15.6 m, past it, since Bulwark's row follows the end of Pip's.
  */
 export const PIP_ROW_START = pipRow[0]!.s;
 export const BULWARK_ROW_START = bulwarkRow[0]!.s;
@@ -287,10 +287,10 @@ export function requiredPieces(entry: CoverageManifest['assets'][number]): strin
  * list means every entry is accounted for. A model with no member, a placeable the world leaves out, a kit piece with no
  * place, a clip no member loops and CLIPS_NOT_SHOWN does not explain, and a texture that is neither placed nor given a
  * reason each fail; so does a member whose entry the manifest no longer lists, or whose family disagrees with its
- * entry's, or that loops a clip its entry does not export (a pending clip's member put in before the clip ships), and
- * a CLIPS_NOT_SHOWN reason whose clip the manifest no longer lists or a member loops. The clips were once
- * left out: the Husk's idle shipped in its GLB and the world showed only its walk and attack, while the blueprint
- * promised every animation.
+ * entry's, or that loops a clip its entry does not export (a member put in before its clip ships), and a
+ * CLIPS_NOT_SHOWN reason whose clip the manifest no longer lists or a member loops. The clips were once left out: the
+ * Husk's idle shipped in its GLB and the world showed only its walk and attack, while the blueprint promised every
+ * animation.
  */
 export function coverageGaps(
   manifest: CoverageManifest,
@@ -326,8 +326,8 @@ export function coverageGaps(
     for (const m of own) {
       if (m.family !== entry.family) gaps.push(`member "${m.name}" sits in family ${m.family}, but its entry "${entry.name}" is in ${entry.family} (${where})`);
       if (m.node !== null && !entry.nodes.includes(m.node)) gaps.push(`member "${m.name}" places node "${m.node}", which "${entry.name}" does not have (${where})`);
-      // A member for a clip the model does not ship, such as a pending one (budgets.json) put in ahead of its clip, is
-      // named here, and the page leaves it out instead of stopping when it builds the world (labs/world/main.ts).
+      // A member for a clip the model does not ship, put in ahead of its clip, is named here, and the page leaves it out
+      // instead of stopping when it builds the world (labs/world/main.ts).
       if (m.clip !== null && !(entry.animations ?? []).some((animation) => animation.name === m.clip)) {
         gaps.push(`member "${m.name}" loops a clip "${m.clip}" that "${entry.name}" does not export; add the member once the clip ships (${where})`);
       }
