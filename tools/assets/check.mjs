@@ -5,6 +5,9 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { isMain } from '../is-main.mjs';
 
+// The exporter's sampling step: the recipes key and export their clips at 30 fps (blender/lib/anim.py FPS), so a clip
+// lasts a whole number of frames and its duration and strike can miss a contract that falls between two frames by up
+// to one. Pip's and Bulwark's attacks are timed 0.85 s, 25.5 frames, and export as 25 frames, 0.8333 s.
 const FRAME = 1 / 30;
 // How far a placeable's lowest point may sit from its placement origin, or from its declared sink under it, on either
 // side, and still stand on the ground as designed: far above the manifest's 0.1 mm rounding and the few millimetres an

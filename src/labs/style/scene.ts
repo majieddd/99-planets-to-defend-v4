@@ -87,8 +87,14 @@ export const COMMANDER_ATTACK_SECONDS: Readonly<Record<CommanderKind, number>> =
   pip: timings.commanders.commander_pip.attack.duration,
   bulwark: timings.commanders.bulwark.attack.duration,
 };
-/** When the cycle's strike begins, and how long the cycle runs before it repeats, in seconds. */
+/**
+ * The commander's cycle, in seconds from its start: the strike begins at CYCLE_STRIKE_AT, the lap at CYCLE_LAP_AT, and
+ * the cycle repeats after CYCLE_SECONDS. Three seconds of idle open it, so a capture taken at the start shows him home;
+ * the lap leaves at 6 s, after the longest attack (0.85 s) and over two seconds of idle back in his guard; and 12 s
+ * leaves the lap (3.59 s) and a closing idle of 2.4 s, the stretch the high-tier evidence frames are taken in.
+ */
 export const CYCLE_STRIKE_AT = 3;
+export const CYCLE_LAP_AT = 6;
 export const CYCLE_SECONDS = 12;
 
 /** A kit piece's scatter: its node name, its count at scatter scale 1, and the ring it fills. */
@@ -314,12 +320,12 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
       const t = cycleTime % CYCLE_SECONDS;
       if (t < CYCLE_STRIKE_AT) commander.play('idle');
       else if (t < CYCLE_STRIKE_AT + COMMANDER_ATTACK_SECONDS[commanderKind]) strike(t - dt < CYCLE_STRIKE_AT);
-      else if (t < 6) commander.play('idle');
-      else if (t < 6 + LAP_SECONDS) {
+      else if (t < CYCLE_LAP_AT) commander.play('idle');
+      else if (t < CYCLE_LAP_AT + LAP_SECONDS) {
         running = true;
-        // The angle comes from the cycle clock rather than accumulating, so every lap leaves home at 6 s and closes
-        // on it one lap later, however the frames fall.
-        runAngle = HOME_ANGLE - (RUN_SPEED / RUN_RADIUS) * (t - 6);
+        // The angle comes from the cycle clock rather than accumulating, so every lap leaves home at CYCLE_LAP_AT and
+        // closes on it one lap later, however the frames fall.
+        runAngle = HOME_ANGLE - (RUN_SPEED / RUN_RADIUS) * (t - CYCLE_LAP_AT);
       } else commander.play('idle');
     } else if (mode === 'idle') commander.play('idle');
     else if (mode === 'attack') {

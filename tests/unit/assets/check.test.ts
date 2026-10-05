@@ -133,6 +133,10 @@ describe("morph targets and Pip's attack", () => {
     ]);
     // Within one frame (1 / 30 s) of the contract passes, as the export's frame rounding needs.
     expect(evaluateAsset(off({ strike: 0.35 }), commanders, commanderTimings)).toEqual([]);
+    // The real export: 0.85 s is 25.5 frames, and the GLB's clip ends at 25 frames, 0.8333 s, as the manifest records
+    // it; a clip a frame and a half short is out.
+    expect(evaluateAsset(off({ exportedDuration: 0.8333333134651184 }), commanders, commanderTimings)).toEqual([]);
+    expect(evaluateAsset(off({ exportedDuration: 0.8 }), commanders, commanderTimings)).toEqual(['attack exported duration 0.800 != timings 0.85']);
     // The pass line names the contracts held; a model with no entry, or a texture, names none.
     expect(timedClips(pip(), commanderTimings)).toEqual(['attack 0.85 s, strike 0.34 s']);
     expect(timedClips(pip({ name: 'commander_bo' }), commanderTimings)).toEqual([]);

@@ -217,8 +217,9 @@ test.describe('the style lab commander toggle', () => {
   test.use({ viewport: { width: 480, height: 270 } });
 
   test('opens on Pip by default and by name, on Bulwark by name, switches, names an unknown commander, and falls back without Pip or when he fails to load', async ({ page }) => {
-    // Seven loads at about 48 s a load, the allowance the five-load test had in its 240 s.
-    test.setTimeout(330_000);
+    // Seven loads at 48 s a load, the allowance the five-load test had in its 240 s: 336 s. The budget was 330 s,
+    // under the seven loads its own comment allowed.
+    test.setTimeout(336_000);
     // Each error keeps the load it came in and where it came from, a console error or an uncaught page error, so the two
     // loads in which Pip's GLB answers 404 can expect their own console errors explicitly while every other load, and
     // every page error in any load, must be absent.
