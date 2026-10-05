@@ -2,6 +2,9 @@
   "commanders": {
     "bulwark": {
       "attack": { "duration": 0.85, "strike": 0.34 }
+    },
+    "commander_pip": {
+      "attack": { "duration": 0.85, "strike": 0.34 }
     }
   },
   "xeno": {
