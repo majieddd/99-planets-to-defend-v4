@@ -160,23 +160,34 @@ type Recorder = { playSamples: PlayReading[]; playStop: boolean; playMark: numbe
  * SwiftShader, once let the whole 0.83 s swing pass between two of them. The first reading is taken at once. With
  * `pressF`, F's keydown and keyup are dispatched in the same call, right after it, so the swing starts from the state
  * recorded: pressed from the test once the recorder had started, F came a round trip later, while he ran on under the
- * held key toward whatever stood ahead.
+ * held key toward whatever stood ahead. With `pressF` set to a speed, the recorder waits in the page for the first frame
+ * at that ground speed or faster, takes it as the first reading and presses F there, so how far he runs before the hit
+ * does not hang on how long the test's round trips take.
  */
-async function startRecording(page: Page, pressF = false): Promise<void> {
+async function startRecording(page: Page, pressF: boolean | number = false): Promise<void> {
   await page.evaluate((press) => {
     const recorder = window as unknown as Recorder;
-    recorder.playSamples = [(window.__P99__!['play'] as () => PlayReading)()];
+    const read = () => (window.__P99__!['play'] as () => PlayReading)();
+    const swing = (): void => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF', key: 'f' }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyF', key: 'f' }));
+    };
+    let waiting = typeof press === 'number';
+    recorder.playSamples = waiting ? [] : [read()];
     recorder.playStop = false;
     const tick = (): void => {
       if (recorder.playStop) return;
-      recorder.playSamples.push((window.__P99__!['play'] as () => PlayReading)());
+      const sample = read();
+      if (!waiting) recorder.playSamples.push(sample);
+      else if (sample.speed >= (press as number)) {
+        waiting = false;
+        recorder.playSamples.push(sample);
+        swing();
+      }
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
-    if (press) {
-      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF', key: 'f' }));
-      window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyF', key: 'f' }));
-    }
+    if (press === true) swing();
   }, pressF);
 }
 
@@ -571,16 +582,18 @@ test.describe('the Asset World', () => {
       // The moving attack: F with S and D held. attack_1 plays on his upper body while his legs keep the run: his pace
       // eases down through the wind-up and is held at DEFAULT_COMBAT_FEEL.moveScale of the walk through the active
       // frames, with his facing locked there, the hit reaches its strike at full weight, and once it ends he runs on
-      // under the held keys. F is pressed in the call that starts the recorder. S and D head him down and to the right
-      // from the spawn, away from his row and between it and the nest, with more than 2.5 m to spare: run on with W,
+      // under the held keys. F is pressed by the recorder at the walk's pace. S and D head him down and to the right
+      // from the spawn, away from his row and between it and the nest: run on with W,
       // toward the row, he came out of one swing 0.53 m from a member's reach, and S alone heads him at the nest, 5.5 m
       // ahead of the spawn on the tower row (NEST_SPOT), whose reach he met at the hit's end once the hit kept him moving
       // (clearance 0.00 m, 2026-10-05). The hit's checks on his speed need open ground, so his clearance is held above 0
       // through it.
+      // F goes on the first frame he reaches the walk's pace, pressed from the page: from the spawn the room ahead is
+      // fixed, and with F pressed from the test after a wait for the run, a run busy with other tests let him run on
+      // for round trips first and come out of the hit 0.33 m from a member's reach (2026-10-05).
       await page.keyboard.down('KeyS');
       await page.keyboard.down('KeyD');
-      await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().runWeight > 0.5, undefined, { timeout: 60_000 });
-      await startRecording(page, true);
+      await startRecording(page, PLAY_WALK_SPEED - 1e-9);
       // Until the hit has come and gone and he runs on under the held key.
       await waitForSwing(page, true);
       const samples = await stopRecording(page);
