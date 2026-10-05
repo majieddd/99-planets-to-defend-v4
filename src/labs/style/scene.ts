@@ -33,8 +33,9 @@ export interface StyleAssets {
   bulwark: LoadedAsset;
   /**
    * Pip's model, when it came with the others: loaded up front when he is the commander a lab opens on, so the first
-   * frame shows him with no swap. Absent when the manifest lacks him, with the placeholders, and when a lab opens on
-   * Bulwark, where the first switch to Pip hands the scene his asset instead (setCommander).
+   * frame shows him with no swap. Absent when the manifest lacks him, when his model failed to load, with the
+   * placeholders, and when a lab opens on Bulwark, where the first switch to Pip hands the scene his asset instead
+   * (setCommander). Without it the scene opens on Bulwark, the fallback.
    */
   pip?: LoadedAsset;
   husk: LoadedAsset;
@@ -370,6 +371,9 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
         pip = makePip(asset);
       }
       const next = kind === 'pip' && pip ? pip : { actor: bulwark, face: null };
+      // Leaving Pip hands his face back to the blink. A pose held for an evidence frame used to survive the switch, so
+      // a switch away and back brought him back with the held lids and expression, no longer blinking.
+      if (face) holdFacePose(face, null);
       root.remove(commander.root);
       root.add(next.actor.root);
       commander = next.actor;

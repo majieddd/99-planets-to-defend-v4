@@ -16,6 +16,7 @@ import { createStylePatch, STYLE_PLANET_RADIUS } from '../../render/terrain/styl
 import { sunDirection, VERDANT } from '../../render/themes';
 import { flatTexture, loadManifestTexture, loadNamedAsset } from '../shared/labAssets';
 import { auditPixels, mutationProof } from './audit';
+import { createCommanderSwitch, loadPipOnce, PIP_NOT_BUILT, type PipLoad } from './commanderSwitch';
 import { createDialsPanel, type LabState } from './dials';
 import { placeholderAssets } from './placeholders';
 import { mountReferenceBoard } from './referenceBoard';
@@ -96,11 +97,12 @@ function fail(error: unknown): void {
 }
 
 /**
- * The style scene's models, in one round of loads. Pip comes with them when he is the commander the lab opens on, so
+ * The style scene's models, in one round of loads. Pip comes with them when the lab opens on him (`pip` is given), so
  * the first frame and its colour audit show him with no swap; Bulwark always comes, as the alternate and the fallback.
- * A manifest without Pip still gives the scene, without him; a manifest without any other model gives the placeholders.
+ * A manifest without Pip, or a Pip whose load fails (one console error, from loadPipOnce), still gives the scene,
+ * without him; a manifest without any other model gives the placeholders.
  */
-async function loadStyleAssets(manifest: Manifest | null, ctx: MaterialContext, commander: CommanderKind): Promise<StyleAssets | null> {
+async function loadStyleAssets(manifest: Manifest | null, ctx: MaterialContext, pip: PipLoad | null): Promise<StyleAssets | null> {
   if (!manifest) return null;
   const urls = {
     bulwark: assetUrl(BASE, manifest, 'bulwark'),
@@ -111,16 +113,17 @@ async function loadStyleAssets(manifest: Manifest | null, ctx: MaterialContext, 
     kit: assetUrl(BASE, manifest, 'verdant_kit'),
   };
   if (Object.values(urls).some((url) => url === null)) return null;
-  const [bulwark, husk, bolt, heart, nest, kit, pip] = await Promise.all([
+  const [bulwark, husk, bolt, heart, nest, kit, pipAsset] = await Promise.all([
     loadNamedAsset('bulwark', urls.bulwark as string, ctx, FAMILY_STANDARD_BLEND.commanders),
     loadNamedAsset('husk', urls.husk as string, ctx, FAMILY_STANDARD_BLEND.xeno),
     loadNamedAsset('bolt_sentinel', urls.bolt as string, ctx, FAMILY_STANDARD_BLEND.towers),
     loadNamedAsset('worldheart', urls.heart as string, ctx, FAMILY_STANDARD_BLEND.heart),
     loadNamedAsset('nest', urls.nest as string, ctx, FAMILY_STANDARD_BLEND.nests),
     loadNamedAsset('verdant_kit', urls.kit as string, ctx, FAMILY_STANDARD_BLEND.env),
-    commander === 'pip' ? loadPip(manifest, ctx) : null,
+    // asset() never rejects: a failed Pip resolves to null, so it cannot take the core models' load down with it.
+    pip ? pip.asset() : null,
   ]);
-  return pip ? { bulwark, husk, bolt, heart, nest, kit, pip } : { bulwark, husk, bolt, heart, nest, kit };
+  return pipAsset ? { bulwark, husk, bolt, heart, nest, kit, pip: pipAsset } : { bulwark, husk, bolt, heart, nest, kit };
 }
 
 /** A preset named in the URL must be one the scene knows: applyPreset threw on any other name and stopped the lab. */
@@ -139,7 +142,10 @@ function parseCommander(value: string | null): { kind: CommanderKind; problem: s
   return kind ? { kind, problem: null } : { kind: DEFAULT_COMMANDER, problem: `no commander named "${value}"; showing ${COMMANDER_LABELS[DEFAULT_COMMANDER]}` };
 }
 
-/** Pip's model (`commander_pip`), loaded with the commanders' standard blend, or null when the manifest lacks it. */
+/**
+ * Pip's model (`commander_pip`), loaded with the commanders' standard blend, or null when the manifest lacks it. It
+ * rejects when the GLB is missing or corrupt; the lab reaches it only through loadPipOnce, which turns that into null.
+ */
 async function loadPip(manifest: Manifest | null, ctx: MaterialContext): Promise<LoadedAsset | null> {
   const url = manifest ? assetUrl(BASE, manifest, 'commander_pip') : null;
   return url ? loadNamedAsset('commander_pip', url, ctx, FAMILY_STANDARD_BLEND.commanders) : null;
@@ -245,8 +251,9 @@ async function start(): Promise<void> {
 
   // Pip, the default commander, loads with the other models, so the scene is built with him and his first frame needs no
   // swap. A lab opened on Bulwark leaves Pip unloaded until the panel switches to him, so it loads and draws exactly what
-  // the locked look's lab drew before Pip existed.
-  const loaded = await loadStyleAssets(manifest, ctx, state.commander);
+  // the locked look's lab drew before Pip existed. The opening load and every switch share this one load of him.
+  const pipLoad = manifest ? loadPipOnce(() => loadPip(manifest, ctx)) : null;
+  const loaded = await loadStyleAssets(manifest, ctx, state.commander === 'pip' ? pipLoad : null);
   const banner = document.getElementById('banner') as HTMLElement;
   if (!loaded) {
     banner.hidden = false;
@@ -255,24 +262,23 @@ async function start(): Promise<void> {
   const style = buildStyleScene(patch, loaded ?? placeholderAssets(ctx), ctx, tier.scatterScale, state.commander);
   scene.add(style.root);
 
-  let pipAsset: LoadedAsset | null = loaded?.pip ?? null;
   const note = (text: string): void => {
     console.warn(`Style Lab: ${text}`);
     banner.hidden = false;
-    banner.textContent = banner.textContent ? `${banner.textContent}\n${text}` : text;
+    // A line already showing is not repeated, so switching to a Pip who cannot be shown again and again names him once.
+    const lines = banner.textContent ? banner.textContent.split('\n') : [];
+    if (!lines.includes(text)) banner.textContent = [...lines, text].join('\n');
   };
   if (commanderParam.problem) note(`${commanderParam.problem.charAt(0).toUpperCase()}${commanderParam.problem.slice(1)}.`);
-  // Without Pip in the built assets there is no Pip to show, so the lab shows Bulwark and says why, whether Pip came by
-  // default, by the address or by the panel.
-  const pipMissing = `${COMMANDER_LABELS.pip} is not in the built assets (npm run assets); showing ${COMMANDER_LABELS.bulwark}.`;
-  if (state.commander !== style.commander()) note(pipMissing);
+  // Without Pip there is no Pip to show, so the lab shows Bulwark and says why, whether Pip came by default, by the
+  // address or by the panel: not in the built assets, or listed and failed to load. The placeholders load no Pip at all.
+  const pipSource = loaded ? pipLoad : null;
+  if (state.commander !== style.commander()) note(pipSource ? pipSource.missing() : PIP_NOT_BUILT);
   state.commander = style.commander();
+  const switchCommander = createCommanderSwitch(style, pipSource, note);
   async function showCommander(kind: CommanderKind): Promise<CommanderKind> {
-    if (kind === 'pip' && !pipAsset) pipAsset = loaded ? await loadPip(manifest, ctx) : null;
-    if (kind === 'pip' && !pipAsset) {
-      note(pipMissing);
-      style.setCommander('bulwark');
-    } else style.setCommander(kind, pipAsset ?? undefined);
+    await switchCommander(kind);
+    // The scene's commander, not the one this call asked for, which a later choice may have overtaken.
     state.commander = style.commander();
     return state.commander;
   }
@@ -361,6 +367,8 @@ async function start(): Promise<void> {
     onHeartStage: (level) => style.setHeartStage(level),
     onBulwark: (mode) => style.setBulwarkMode(mode),
     onCommander: (kind) => {
+      // A Pip who cannot load falls back to Bulwark inside the switch and never reaches this rejection, which is left
+      // for a fault in building the scene's commander, where the lab stops as it does on any other fault.
       showCommander(kind).then(
         () => {
           for (const controller of gui.controllersRecursive()) controller.updateDisplay();
@@ -451,7 +459,7 @@ async function start(): Promise<void> {
       style.setFrozen(on);
     },
     commander: () => style.commander(),
-    // Switches the commander as the panel does and resolves to the one shown, Bulwark when Pip is not built.
+    // Switches the commander as the panel does and resolves to the one shown, Bulwark when Pip is not built or failed to load.
     setCommander: async (kind: CommanderKind) => {
       const shown = await showCommander(kind);
       for (const controller of gui.controllersRecursive()) controller.updateDisplay();

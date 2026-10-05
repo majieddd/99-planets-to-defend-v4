@@ -59,6 +59,10 @@ const CENTER = new Vector3(0, -STYLE_PLANET_RADIUS, 0);
 const SCALE = 0.4; // the low tier's scatter scale
 const DT = 1 / 60;
 
+/**
+ * The style scene on the placeholders by default. They carry no Pip, so the scene opens on Bulwark, the fallback for
+ * the default commander, and the tests that drive the commander through it name him the placeholder Bulwark.
+ */
 function build(assets: StyleAssets = placeholderAssets(ctx), scale = SCALE): { assets: StyleAssets; style: StyleScene } {
   return { assets, style: buildStyleScene(patch, assets, ctx, scale) };
 }
@@ -497,7 +501,7 @@ describe('buildStyleScene', () => {
     });
   });
 
-  it('places every actor before the first update, so the startup preset frames Bulwark from behind', () => {
+  it('places every actor before the first update, so the startup preset frames the placeholder Bulwark from behind', () => {
     const { assets, style } = build();
     const body = worldPosition(assets.bulwark.root);
     expect(body.distanceTo(patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position)).toBeLessThan(1e-9);
@@ -597,7 +601,7 @@ describe('buildStyleScene', () => {
     for (const error of railErrors(style, assets.husk.root)) expect(error).toBeLessThan(0.01);
   });
 
-  it("keeps every rail out of Bulwark's body through a full lap of the Husk", () => {
+  it("keeps every rail out of the placeholder Bulwark's body through a full lap of the Husk", () => {
     const { assets, style } = build();
     const rails = [1, 2, 3].map((level) => {
       const rail = style.root.getObjectByName(`bolt_mk${level}_rail`) as Mesh;
@@ -632,7 +636,7 @@ describe('buildStyleScene', () => {
     expect(nearest).toBeGreaterThan(radius);
   });
 
-  it(`runs Bulwark round the ${RUN_RADIUS} m lap from home at ${RUN_SPEED} m/s in run mode, the heart on his left`, () => {
+  it(`runs the placeholder Bulwark round the ${RUN_RADIUS} m lap from home at ${RUN_SPEED} m/s in run mode, the heart on his left`, () => {
     const { assets, style } = build();
     const root = assets.bulwark.root;
     style.setBulwarkMode('run');
@@ -656,7 +660,7 @@ describe('buildStyleScene', () => {
     expect(travelled).toBeCloseTo(RUN_SPEED, 1);
   });
 
-  it('keeps Bulwark at home through idle and attack, then runs one lap from home back to home', () => {
+  it('keeps the placeholder Bulwark at home through idle and attack, then runs one lap from home back to home', () => {
     const { assets, style } = build();
     const home = patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position;
     // The cycle sets his lap angle on a line of its own, apart from run mode's step, so the run-mode test's checks on
@@ -684,7 +688,7 @@ describe('buildStyleScene', () => {
     expect(away.at(-1)! - away[0]!).toBeCloseTo((away.length - 1) * DT, 9); // one unbroken stretch
   });
 
-  it('moves Bulwark at most one run step and turns him under 40 degrees a frame, through three cycles', () => {
+  it('moves the placeholder Bulwark at most one run step and turns him under 40 degrees a frame, through three cycles', () => {
     const { assets, style } = build();
     const root = assets.bulwark.root;
     let position = worldPosition(root);
@@ -710,7 +714,7 @@ describe('buildStyleScene', () => {
     expect(largestTurn).toBeLessThan(40);
   });
 
-  it("starts run mode's lap from home, wherever a switch cut the cycle's lap short", () => {
+  it("starts the placeholder Bulwark's run-mode lap from home, wherever a switch cut the cycle's lap short", () => {
     const { assets, style } = build();
     const home = patch.surfaceAt(BULWARK_HOME.x, BULWARK_HOME.z).position;
     step(style, 7.5);
@@ -724,7 +728,7 @@ describe('buildStyleScene', () => {
     expect(worldPosition(assets.bulwark.root).distanceTo(home)).toBeLessThan(RUN_SPEED * DT + 1e-6);
   });
 
-  it('restarts a repeated strike in place instead of fading it in from the bind pose', () => {
+  it("restarts the placeholder Bulwark's repeated strike in place instead of fading it in from the bind pose", () => {
     // The strike holds the body at x = 1 and the other clips at 0, as does the body's own (bind) pose, so a strike
     // that fades in from zero weight shows as x dipping toward 0.
     const { assets, body } = withBulwarkClips({ idle: 0, run: 0, attack: 1 });
@@ -742,7 +746,7 @@ describe('buildStyleScene', () => {
     expect(lowest).toBeCloseTo(1, 9);
   });
 
-  it('idles Bulwark from the switch to attack mode until the first strike, whatever played before', () => {
+  it('idles the placeholder Bulwark from the switch to attack mode until the first strike, whatever played before', () => {
     const { assets, body } = withBulwarkClips({ idle: 0, run: 2, attack: 1 });
     const { style } = build(assets);
     style.setBulwarkMode('run');
@@ -880,5 +884,29 @@ describe('the Style Lab commander', () => {
     expect(lids()).toBe(0.5);
     style.setFace(null);
     style.setFrozen(false);
+  });
+
+  it('hands a held face pose back to the blink when the lab leaves Pip, so a switch away and back finds him blinking', () => {
+    const { style } = build();
+    const pip = pipStandIn({ idle: 0, run: 0 });
+    const body = pip.root.getObjectByName('pip_body') as Mesh;
+    const weight = (name: string) => body.morphTargetInfluences![body.morphTargetDictionary![name]!]!;
+    style.setCommander('pip', pip);
+    style.setFace({ blink: 1, smile: 1 });
+    expect([weight('blink_L'), weight('smile')]).toEqual([1, 1]);
+    style.setCommander('bulwark');
+    // Released on the way out, not on the way back: the lids open and the smile rests while he is off stage.
+    expect([weight('blink_L'), weight('blink_R'), weight('smile')]).toEqual([0, 0, 0]);
+    style.setCommander('pip');
+    // Back on stage his lids follow the blink again, shut only for a blink and open between; held, they read 1 on
+    // every frame.
+    const lids: number[] = [];
+    for (let i = 0; i < 360; i++) {
+      style.update(DT);
+      lids.push(weight('blink_L'));
+    }
+    expect(Math.max(...lids)).toBeGreaterThan(0.9);
+    expect(Math.min(...lids)).toBe(0);
+    expect(weight('smile')).toBe(0);
   });
 });

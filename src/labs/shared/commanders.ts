@@ -13,7 +13,8 @@ export const COMMANDERS: readonly CommanderKind[] = ['pip', 'bulwark'];
 
 /**
  * The commander a lab shows when nothing names another: Pip, by the owner's decision of 2026-10-04 ("yes make Pip the
- * default, keep Bulwark as alternate"). Bulwark stays one switch away, and is the fallback when Pip is not built.
+ * default, keep Bulwark as alternate"). Bulwark stays one switch away, and is the fallback when Pip is not built or his
+ * model fails to load (the Style Lab's labs/style/commanderSwitch.ts).
  */
 export const DEFAULT_COMMANDER: CommanderKind = 'pip';
 

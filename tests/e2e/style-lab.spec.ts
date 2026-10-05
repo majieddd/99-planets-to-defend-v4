@@ -211,24 +211,31 @@ test.describe('the style lab test handle', () => {
 
 // Pip (commander) is the lab's default commander, by the owner's decision of 2026-10-04, and loads with the other models
 // so the first frame shows him; Bulwark, the alternate the locked look was approved on, opens by the address or the
-// panel, and a lab opened on him loads nothing of Pip until the panel switches.
+// panel, and a lab opened on him loads nothing of Pip until the panel switches. A Pip who fails to load leaves Bulwark
+// in a running lab.
 test.describe('the style lab commander toggle', () => {
   test.use({ viewport: { width: 480, height: 270 } });
 
-  test('opens on Pip by default and by name, on Bulwark by name, switches, names an unknown commander, and falls back without Pip', async ({ page }) => {
-    test.setTimeout(240_000);
-    const errors: string[] = [];
+  test('opens on Pip by default and by name, on Bulwark by name, switches, names an unknown commander, and falls back without Pip or when he fails to load', async ({ page }) => {
+    // Seven loads, each up to about 15 s under SwiftShader; it was 240 s for five.
+    test.setTimeout(330_000);
+    // Each console error keeps the load it came in, so the two loads in which Pip's GLB answers 404 can expect their own
+    // errors explicitly while every other load must log none.
+    let loadName = '';
+    const errors: { load: string; text: string; url: string }[] = [];
     const warnings: string[] = [];
     let requests: string[] = [];
     page.on('console', (message) => {
-      if (message.type() === 'error') errors.push(message.text());
+      if (message.type() === 'error') errors.push({ load: loadName, text: message.text(), url: message.location().url });
       if (message.type() === 'warning') warnings.push(message.text());
     });
-    page.on('pageerror', (error) => errors.push(String(error)));
+    page.on('pageerror', (error) => errors.push({ load: loadName, text: String(error), url: '' }));
     page.on('request', (request) => requests.push(request.url()));
     // One reading per load: the commander shown, the panel's choice and its options, whether Pip's model was requested,
-    // whether a face pose holds, the banner and the dials; then, when asked, a switch to another commander.
-    const load = async (query: string, switchTo: string | null = null) => {
+    // whether a face pose holds, the banner and the dials; then, when asked, a switch to another commander and the
+    // banner after it.
+    const load = async (name: string, query: string, switchTo: string | null = null) => {
+      loadName = name;
       requests = [];
       await page.goto(`./labs/style.html?tier=low&freeze=1${query}`);
       await page.waitForFunction(() => window.__P99__?.ready === true, undefined, { timeout: 180_000 });
@@ -251,37 +258,58 @@ test.describe('the style lab commander toggle', () => {
           switched: null as string | null,
           switchedPanel: null as string | null,
           switchedFace: null as boolean | null,
+          switchedBanner: null as string | null,
         };
         if (next) {
           reading.switched = await call<Promise<string>>('setCommander', next);
           reading.switchedPanel = select()?.selectedOptions[0]?.textContent ?? null;
           reading.switchedFace = call<boolean>('setFace', { blink: 1 });
           call('setFace', null);
+          reading.switchedBanner = document.getElementById('banner')!.hidden ? '' : document.getElementById('banner')!.textContent;
         }
         return reading;
       }, switchTo);
       return { ...read, pipRequestedAtLoad, pipRequestedAfter: requests.some((url) => url.includes('commander_pip')) };
     };
 
-    const byDefault = await load('', 'bulwark');
-    const bulwark = await load('&commander=bulwark', 'pip');
-    const pip = await load('&commander=pip');
-    const unknown = await load('&commander=nope');
+    const byDefault = await load('default', '', 'bulwark');
+    const bulwark = await load('bulwark', '&commander=bulwark', 'pip');
+    const pip = await load('pip', '&commander=pip');
+    const unknown = await load('nope', '&commander=nope');
     // A build whose manifest has no Pip: the default falls back to Bulwark and the banner says why.
     await page.route('**/assets/manifest.json', async (route) => {
       const response = await route.fetch();
       const shipped = (await response.json()) as { assets: { name: string }[] };
       await route.fulfill({ response, json: { ...shipped, assets: shipped.assets.filter((entry) => entry.name !== 'commander_pip') } });
     });
-    const missing = await load('');
+    const missing = await load('missing', '');
     await page.unroute('**/assets/manifest.json');
+    // A build whose manifest lists Pip but whose GLB is missing or corrupt, at the start and on the panel's switch from
+    // Bulwark: either used to stop the lab ("Style Lab failed to start", or "stopped" on the switch).
+    await page.route('**/commander_pip*.glb', (route) => route.fulfill({ status: 404, contentType: 'text/plain', body: 'not found' }));
+    const failedAtStart = await load('failed at start', '');
+    const failedOnSwitch = await load('failed on switch', '&commander=bulwark', 'pip');
+    await page.unroute('**/commander_pip*.glb');
+    loadName = '';
     const summary = (name: string, r: typeof byDefault) =>
       `${name} shows ${r.shown} (panel "${r.panel}" of ${JSON.stringify(r.options)}, Pip requested at load ${r.pipRequestedAtLoad}, ` +
       `face ${r.face}/${r.faceReleased}, banner "${r.banner}")` +
-      (r.switched ? `, switched to ${r.switched} (panel "${r.switchedPanel}", face ${r.switchedFace}, Pip requested by then ${r.pipRequestedAfter})` : '');
+      (r.switched
+        ? `, switched to ${r.switched} (panel "${r.switchedPanel}", face ${r.switchedFace}, Pip requested by then ${r.pipRequestedAfter}, banner "${r.switchedBanner}")`
+        : '');
+    // The failed loads' own errors, and only those, are expected: the browser's 404 for the GLB and the lab's one
+    // console.error naming the model, once at the start and once on the switch.
+    const failedLoads = ['failed at start', 'failed on switch'];
+    const expected = (error: (typeof errors)[number]) =>
+      failedLoads.includes(error.load) &&
+      (error.text.includes('commander_pip') || error.url.includes('commander_pip') || error.text.startsWith('Failed to load resource: the server responded with a status of 404'));
+    const unexpected = errors.filter((error) => !expected(error));
+    const labErrors = errors.filter((error) => expected(error) && error.text.includes('asset commander_pip failed to load'));
     const line =
       `style lab commander [${test.info().project.name}]: ${summary('default', byDefault)}; ${summary('?commander=bulwark', bulwark)}; ` +
-      `${summary('?commander=pip', pip)}; ${summary('?commander=nope', unknown)}; ${summary('a manifest without Pip', missing)}; ${errors.length} console errors`;
+      `${summary('?commander=pip', pip)}; ${summary('?commander=nope', unknown)}; ${summary('a manifest without Pip', missing)}; ` +
+      `${summary('Pip GLB 404 at start', failedAtStart)}; ${summary('Pip GLB 404 on a switch', failedOnSwitch)}; ` +
+      `${errors.length} console errors, ${errors.length - unexpected.length} expected from the 404 loads (${labErrors.length} from the lab), ${unexpected.length} unexpected`;
     console.log(line);
     // The default: Pip, loaded with the other models and posed from the first frame, first in the panel; Bulwark one switch away.
     expect(byDefault.shown, line).toBe('pip');
@@ -311,16 +339,31 @@ test.describe('the style lab commander toggle', () => {
     // An unknown name falls back to the default and says so once, in the banner and the console.
     expect(unknown.shown, line).toBe('pip');
     expect(unknown.banner, line).toBe('No commander named "nope"; showing Pip (commander).');
-    expect(warnings.filter((text) => text.includes('Style Lab: No commander named "nope"')), line).toHaveLength(1);
     expect(warnings.filter((text) => text.includes('Style Lab: No commander named "nope"; showing Pip (commander).')), line).toHaveLength(1);
     // Without Pip in the manifest the lab shows Bulwark, requests nothing of Pip, and names why.
     expect(missing.shown, line).toBe('bulwark');
     expect(missing.panel, line).toBe('Bulwark');
     expect(missing.pipRequestedAtLoad, line).toBe(false);
     expect(missing.banner, line).toBe('Pip (commander) is not in the built assets (npm run assets); showing Bulwark.');
+    // With Pip listed and his GLB failing, the lab still starts, on Bulwark, and says Pip failed; the banner holds that
+    // line alone, where a stopped lab's would read "Style Lab failed to start" or "Style Lab stopped".
+    const failedLine = 'Pip (commander) failed to load; showing Bulwark.';
+    expect(failedAtStart.shown, line).toBe('bulwark');
+    expect(failedAtStart.panel, line).toBe('Bulwark');
+    expect(failedAtStart.pipRequestedAtLoad, line).toBe(true);
+    expect(failedAtStart.banner, line).toBe(failedLine);
+    // Opened on Bulwark, the switch to Pip requests him, falls back to Bulwark and says so, and the lab runs on.
+    expect(failedOnSwitch.shown, line).toBe('bulwark');
+    expect(failedOnSwitch.banner, line).toBe('');
+    expect(failedOnSwitch.switched, line).toBe('bulwark');
+    expect(failedOnSwitch.switchedPanel, line).toBe('Bulwark');
+    expect(failedOnSwitch.pipRequestedAfter, line).toBe(true);
+    expect(failedOnSwitch.switchedBanner, line).toBe(failedLine);
+    expect(warnings.filter((text) => text === `Style Lab: ${failedLine}`), line).toHaveLength(2);
     // The address changes the commander, never the look.
-    for (const reading of [byDefault, bulwark, pip, unknown, missing]) expect(reading.dials, line).toEqual(DEFAULT_DIALS);
-    expect(errors, line).toEqual([]);
+    for (const reading of [byDefault, bulwark, pip, unknown, missing, failedAtStart, failedOnSwitch]) expect(reading.dials, line).toEqual(DEFAULT_DIALS);
+    expect(labErrors.map((error) => error.load), line).toEqual(failedLoads);
+    expect(unexpected, line).toEqual([]);
   });
 });
 
