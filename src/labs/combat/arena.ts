@@ -9,9 +9,9 @@ import { toTangent, TOWARD_CAMERAS } from '../world/registry';
 import { wrapAngle, yawOf } from '../world/playMotion';
 
 /**
- * Where Pip comes out, on the world's view frame: 1.5 m in front of the pole on the world cameras' side, so the dummies
- * 3 m ahead of him stand within 1.6 m of the pole and every body in the arena stands on the level ground there (the
- * patch's relief begins 6 m from the pole, stylePatch.ts).
+ * Where Pip comes out, on the world's view frame: 1.5 m in front of the pole on the world cameras' side, so the middle
+ * dummy 3 m ahead of him stands 1.5 m past the pole and the outer two 2.48 m from it, and every body in the arena stands
+ * on the level ground there (the patch's relief begins 6 m from the pole, stylePatch.ts).
  */
 export const ARENA_SPAWN = { s: 0, d: -1.5 } as const;
 /** How far each training dummy's root stands from Pip's spawn, in metres: all three on one arc about him. */
@@ -23,6 +23,11 @@ export const ARENA_DUMMY_DISTANCE = 3;
 export const ARENA_DUMMY_SPACING = 2.8;
 /** The training dummies' names, left to right as the camera behind him sees them; the middle one stands dead ahead. */
 export const ARENA_DUMMY_NAMES = ['dummy_left', 'dummy_middle', 'dummy_right'] as const;
+/**
+ * The panel's reset button's name: what it does, and the key that does the same. Here rather than in panel.ts, which
+ * loads lil-gui, so the browser test imports the one name the button carries instead of keeping a copy of it.
+ */
+export const RESET_NAME = 'Reset the dummies and Pip (R)';
 
 /** A body's place on the plane tangent at the pole and its yaw, as place() takes them. */
 export interface GroundPose {
@@ -83,8 +88,8 @@ export function fromBody(x: number, z: number, yaw: number, toX: number, toZ: nu
 /**
  * The opening camera's pitch above his horizon, in degrees, straight behind him. At the Asset World's 16 degrees his
  * body hid the middle dummy whole: the line over his head met the dummy 1.31 m up, and a Husk stands lower. At 30 it
- * meets the dummy 0.48 m up, so the Husk's back and eyes show over his shoulders, while the horizon and the planet's
- * curve stay in the frame's top. Turning the camera off his back instead, over a shoulder, showed the dummy beside him
+ * meets the dummy 0.48 m up, so the Husk's back shows over his shoulders (its eyes, on the face turned to him, do not),
+ * while the horizon and the planet's curve stay in the frame's top. Turning the camera off his back instead, over a shoulder, showed the dummy beside him
  * but turned W off his facing by the same angle, since W runs up the screen: he veered off the dummy he faced. The
  * follow and the orbit take over from this framing as in the world.
  */

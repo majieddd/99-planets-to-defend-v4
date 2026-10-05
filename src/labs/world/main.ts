@@ -1,30 +1,26 @@
-import { PerspectiveCamera, Scene, Vector2, Vector3, type WebGLRenderer } from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Vector3, type WebGLRenderer } from 'three';
 import { standardBlendFor } from '../../render/assets/familyBlend';
 import type { LoadedAsset, MaterialContext } from '../../render/assets/loadAsset';
 import { assetUrl, fetchManifest, type Manifest } from '../../render/assets/manifest';
 import { DEFAULT_DIALS, type RenderDials } from '../../render/defaults';
 import { acceptDial, decodeDials, encodeDials, type SetDialsResult } from '../../render/dialsCodec';
-import { applyInkDials, createHullMaterial, createInkUniforms } from '../../render/ink/hull';
-import { LAYERS } from '../../render/layers';
-import { applyPaintDials, createPaintUniforms } from '../../render/materials/painted';
-import { createPipeline, type Pipeline } from '../../render/post/pipeline';
-import { detectTier, parseTier, TIERS, type TierName } from '../../render/quality';
-import { createRenderer } from '../../render/renderer';
-import { createPaintedSky } from '../../render/sky';
-import { createStylePatch, STYLE_PLANET_RADIUS } from '../../render/terrain/stylePatch';
+import { applyInkDials } from '../../render/ink/hull';
+import { applyPaintDials } from '../../render/materials/painted';
+import type { TierName } from '../../render/quality';
+import { STYLE_PLANET_RADIUS } from '../../render/terrain/stylePatch';
 import { VERDANT } from '../../render/themes';
 import { FACE_SEED, type FacePose } from '../shared/commanderFace';
-import { flatTexture, loadManifestTexture, loadNamedAsset } from '../shared/labAssets';
+import { loadNamedAsset } from '../shared/labAssets';
+import { createPaintedStage, frameStep, pickTier } from '../shared/paintedStage';
 import { NARROW_SCREEN } from '../style/referenceBoard';
-import { combatFeelJson, defaultCombatFeel, feelAddressValue, parseCombatFeel } from './combatFeel';
+import { feelAddressValue, feelFromAddress } from './combatFeel';
 import { WorldLabels, type LabelSpec } from './labels';
 import { buildAssetWorld, type AssetWorld } from './layout';
 import { createWorldPanel, type WorldPanelState } from './panel';
 import { createPipPlay, memberObstacles } from './play';
 import { createPlayInput } from './playInput';
+import type { Obstacle } from './playMotion';
 import { coverageGaps, MEMBERS, showableMembers } from './registry';
-import { createWorldSun } from './sun';
 import {
   frameView,
   isViewName,
@@ -102,7 +98,6 @@ function describeView(open: OpenView): string {
 async function start(): Promise<void> {
   const stage = document.getElementById('stage') as HTMLElement;
   const params = new URLSearchParams(location.search);
-  const probe = document.createElement('canvas').getContext('webgl2');
   const linked = params.get('dials');
   // The locked Painted-Anime-Inkline 4.0 defaults, which the Style Lab opens on too, unless the address carries a dials
   // link, whose dials apply over those defaults exactly as the Style Lab applies the same link, so a look tuned there
@@ -122,12 +117,9 @@ async function start(): Promise<void> {
     heartLevel: 0,
     speed: 1,
     paused: false,
-    tier: parseTier(params.get('tier')) ?? (probe ? detectTier(probe, navigator.userAgent) : 'low'),
+    tier: pickTier(params.get('tier')),
     play: false,
   };
-  let tier = TIERS[state.tier];
-  const renderer = createRenderer(stage, tier);
-  activeRenderer = renderer;
 
   const look = document.getElementById('look') as HTMLButtonElement;
   const lookName = look.querySelector('.look-name') as HTMLElement;
@@ -153,34 +145,11 @@ async function start(): Promise<void> {
 
   // One manifest read serves the textures and the models; a build without one skips even that (see the Style Lab).
   const manifest = __HAS_ASSET_MANIFEST__ ? await fetchManifest(BASE) : null;
-  const [brushAtlas, inkNoiseMap] = await Promise.all([
-    loadManifestTexture(BASE, manifest, 'brush_strokes', PAGE),
-    loadManifestTexture(BASE, manifest, 'ink_noise', PAGE),
-  ]);
-  const paint = createPaintUniforms(theme, dials, brushAtlas ?? flatTexture(128));
-  const inkUniforms = createInkUniforms(dials);
-  const ctx: MaterialContext = { paint, hullMaterial: createHullMaterial(inkUniforms), hullLayer: LAYERS.hull };
-  // As in the Style Lab, the ink width dial's 0 hides the shared hull material, because the shader's floor would still
-  // draw 1.2 px hulls.
-  const syncHulls = (): void => {
-    ctx.hullMaterial.visible = dials.inkWidthPx > 0;
-  };
-  syncHulls();
-
-  const scene = new Scene();
-  const camera = new PerspectiveCamera(50, stage.clientWidth / stage.clientHeight, 0.1, 2500);
-  camera.layers.enable(LAYERS.hull);
-  camera.layers.enable(LAYERS.sky);
-  camera.layers.enable(LAYERS.noEdge); // grass and flowers: drawn, and cast shadows (r186 tests this camera's layers)
-
-  const sun = createWorldSun(theme, dials, tier);
-  scene.add(sun.light, sun.light.target);
-  // Without the brush atlas the sky takes a black field, not grey, which would lift its cloud band into a slab (Style Lab).
-  const planet = { center: new Vector3(0, -STYLE_PLANET_RADIUS, 0), radius: STYLE_PLANET_RADIUS };
-  const sky = createPaintedSky(theme, brushAtlas ?? flatTexture(0), sun.direction, planet);
-  scene.add(sky.mesh);
-  const patch = createStylePatch(theme, paint, tier.terrainSegments);
-  scene.add(patch.mesh, patch.lowPlanet);
+  // The painted patch, its sun, sky and fog, the camera, its orbit and the post pipeline, as the combat arena has them
+  // (labs/shared/paintedStage.ts).
+  const painted = await createPaintedStage(stage, { tier: state.tier, dials, theme, page: PAGE, manifest });
+  activeRenderer = painted.renderer;
+  const { scene, camera, ctx, inkUniforms, patch, controls } = painted;
 
   // Every manifest entry must have a place or a reason, which the unit test holds; a page built from a manifest that
   // outran the registry still opens, places what it knows, and names what it left out.
@@ -192,20 +161,12 @@ async function start(): Promise<void> {
   // Before the world is built: the play prototype keeps a copy of Pip's rig in the bind pose, which the world's mixers
   // would otherwise have posed by the time it is copied. He goes in the scene, not the world's root, so the world's
   // members, bounds and labels stay exactly what they are with play off.
-  // Play Pip's combat feel: the defaults, with any settings a `?feel=` address carries (the panel's readout JSON) over
-  // them; a key that is not a setting, or a value outside its slider's range, is named and skipped. The one object is
-  // shared by the panel, which writes it, and Play Pip, which reads it every frame.
-  const feel = defaultCombatFeel();
-  const feelParam = params.get('feel');
-  if (feelParam) {
-    const pasted = parseCombatFeel(feelParam);
-    Object.assign(feel, pasted.feel);
-    if (pasted.rejected.length) {
-      const said = `Combat feel: skipped ${pasted.rejected.join(', ')} in the address; using ${combatFeelJson(feel)}`;
-      console.warn(`${PAGE}: ${said}`);
-      showBanner(`${said}.`);
-    }
-  }
+  // Play Pip's combat feel, as the address opens it (feelFromAddress). The one object is shared by the panel, which
+  // writes it, and Play Pip, which reads it every frame.
+  const feel = feelFromAddress(params, (said) => {
+    console.warn(`${PAGE}: ${said}`);
+    showBanner(`${said}.`);
+  });
   const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS, feel);
   // A member whose model or clip this build lacks is left out rather than built, where a member put in ahead of its clip
   // would stop the page with "has no clip". The coverage gaps above, read from the manifest, name most such members;
@@ -218,27 +179,12 @@ async function start(): Promise<void> {
   }
   const world: AssetWorld = buildAssetWorld(patch, assets, ctx, shown);
   scene.add(world.root);
+  // The members Play Pip walks round, read again when the slider heart's drawn size changes (setHeartLevel), and handed
+  // to him as a provider he reads every frame (ObstacleSource, play.ts).
+  let worldObstacles: readonly Obstacle[] = memberObstacles(world.members);
 
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  // As in the Style Lab: past about 1 km the depth buffer cannot keep the patch in front of the low planet under it.
-  controls.maxDistance = 400;
   // OrbitControls turns autoRotateSpeed * 2 pi / 60 radians per second when update() is given the frame's seconds.
   controls.autoRotateSpeed = 60 / TURNTABLE_SECONDS;
-
-  const inkNoise = inkNoiseMap ?? flatTexture(128);
-  let pipeline: Pipeline = createPipeline({ renderer, scene, camera, tier, dials, theme, inkNoise, sunDirection: sun.direction, reducedMotion, planet });
-  const drawing = new Vector2();
-
-  // Everything that reads the sun, as in the Style Lab: the light, the sky and the fog's sunward warming. Run once here
-  // too, because the sky starts from the theme's sun colour, which the locked defaults already override, and
-  // createWorldSun leaves the light's position to the first sync.
-  function syncSun(): void {
-    sun.sync(dials);
-    sky.setSun(sun.direction, dials.sunColor);
-    pipeline.setSunDirection(sun.direction);
-  }
-  syncSun();
 
   // Labels: a placard under each family's zone, and a label over each member, except a family's only member.
   const labels = new WorldLabels(document.getElementById('labels') as HTMLElement);
@@ -323,7 +269,7 @@ async function start(): Promise<void> {
   const playHint = document.getElementById('play-hint') as HTMLElement;
   const pad = document.getElementById('pad') as HTMLElement;
   const attackButton = document.getElementById('attack') as HTMLElement;
-  const input = createPlayInput(pad, pad.querySelector('.pad-knob') as HTMLElement, attackButton, renderer.domElement);
+  const input = createPlayInput(pad, pad.querySelector('.pad-knob') as HTMLElement, attackButton, painted.renderer.domElement);
   const coarse = matchMedia('(pointer: coarse)');
   function syncPlayUi(): void {
     const touch = coarse.matches;
@@ -351,7 +297,7 @@ async function start(): Promise<void> {
         turntableBeforePlay = state.turntable;
         state.turntable = false;
         // Each face on the page blinks on its own seed, and his follows the world's (FACE_SEED).
-        pipPlay.enter(camera, controls, memberObstacles(world.members), FACE_SEED + world.faces().length, frozen);
+        pipPlay.enter(camera, controls, () => worldObstacles, FACE_SEED + world.faces().length, frozen);
       } else {
         pipPlay.exit(controls);
         // The panel's refresh below shows the restored value.
@@ -379,8 +325,8 @@ async function start(): Promise<void> {
     world.setHeartLevel(level);
     state.heartLevel = world.heartLevel();
     // He walks round the reaches read when he came out, so a heart grown while he played let him walk into its new
-    // crystal, and one shrunk kept him off ground it had given up.
-    if (pipPlay.active) pipPlay.refreshObstacles(memberObstacles(world.members));
+    // crystal, and one shrunk kept him off ground it had given up; he reads this list on every frame.
+    worldObstacles = memberObstacles(world.members);
     if (!liveHeart) return;
     labels.setText(liveHeart.member.name, liveHeartText(state.heartLevel));
     labels.setAnchor(liveHeart.member.name, memberLabelAnchor(liveHeart));
@@ -392,12 +338,7 @@ async function start(): Promise<void> {
   function resize(): void {
     widthPx = stage.clientWidth;
     heightPx = stage.clientHeight;
-    camera.aspect = widthPx / heightPx;
-    camera.updateProjectionMatrix();
-    renderer.setSize(widthPx, heightPx);
-    pipeline.setSize(widthPx, heightPx);
-    renderer.getDrawingBufferSize(drawing);
-    inkUniforms.uResolution.value.copy(drawing);
+    painted.resize();
     // A turned phone refits the open view, unless the viewer has moved the camera since opening it.
     if (!userMoved && loopStarted) applyFocus(false);
   }
@@ -405,25 +346,18 @@ async function start(): Promise<void> {
   resize();
 
   function applyDials(): void {
-    applyPaintDials(paint, dials, theme);
+    applyPaintDials(ctx.paint, dials, theme);
     applyInkDials(inkUniforms, dials);
-    syncHulls();
-    pipeline.applyDials(dials, theme);
-    syncSun();
+    painted.syncHulls();
+    painted.pipeline.applyDials(dials, theme);
+    painted.syncSun();
     syncLook();
   }
 
   function setTier(name: TierName): void {
     try {
-      const next = TIERS[name];
-      // Built before anything changes, so a throw leaves the working pipeline in place (see the Style Lab).
-      const nextPipeline = createPipeline({ renderer, scene, camera, tier: next, dials, theme, inkNoise, sunDirection: sun.direction, reducedMotion, planet });
-      tier = next;
+      painted.setTier(name);
       state.tier = name;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.pixelRatioMax));
-      sun.setTier(tier);
-      pipeline.dispose();
-      pipeline = nextPipeline;
       resize();
     } catch (error) {
       fail(error);
@@ -575,17 +509,17 @@ async function start(): Promise<void> {
     },
   };
   loopStarted = true;
-  renderer.setAnimationLoop(() => {
+  painted.renderer.setAnimationLoop(() => {
     try {
       const now = performance.now();
       const interval = now - last;
       last = now;
       // Only the scene's step is clamped, so a stall does not jump it; the reading keeps the real interval (Style Lab).
-      const dt = frozen ? 0 : Math.min(interval / 1000, 1 / 20);
+      const dt = frameStep(interval, frozen);
       frameMs = frameMs * 0.95 + interval * 0.05;
       world.update(state.paused ? 0 : dt * state.speed);
       if (transition) {
-        transition.elapsed += Math.min(interval / 1000, 1 / 20);
+        transition.elapsed += frameStep(interval, false);
         const t = Math.min(transition.elapsed / TRANSITION_SECONDS, 1);
         const eased = 1 - Math.pow(1 - t, 3); // ease out: the move starts at once and settles softly
         camera.position.lerpVectors(transition.from.position, transition.to.position, eased);
@@ -594,16 +528,17 @@ async function start(): Promise<void> {
       }
       // Pip moves on the frame's own step, which the freeze stops, and not on the animation speed dial, which is the
       // world's clips'; the camera then follows him before the controls apply a drag or the wheel. His combo and his
-      // movement share the step here; phase B's hit-stop will hold the combo's alone.
-      if (pipPlay.active) pipPlay.update({ combo: dt, motion: dt }, input.read(), input.takeAttack(), camera, controls);
+      // movement share the step here, and the camera's follow too; phase B's hit-stop will hold the combo's and the
+      // movement's and leave the frame's running (PlayClocks).
+      if (pipPlay.active) pipPlay.update({ combo: dt, motion: dt, frame: dt }, input.read(), input.takeAttack(), camera, controls);
       // The turntable turns around the open view, and waits while a view glides in or Pip plays.
       controls.autoRotate = state.turntable && transition === null && !pipPlay.active;
-      controls.update(frozen ? 0 : Math.min(interval / 1000, 1 / 20));
-      sky.follow(camera);
-      pipeline.render(dt);
+      controls.update(frameStep(interval, frozen));
+      painted.sky.follow(camera);
+      painted.pipeline.render(dt);
       labels.update(camera, widthPx, heightPx, labelShows());
       frames += 1;
-      if (frames % 30 === 0) fpsBox.textContent = `${tier.name} tier, frame interval ${frameMs.toFixed(1)} ms`;
+      if (frames % 30 === 0) fpsBox.textContent = `${painted.tier.name} tier, frame interval ${frameMs.toFixed(1)} ms`;
       if (frames === 3 && window.__P99__) window.__P99__.ready = true;
     } catch (error) {
       fail(error);

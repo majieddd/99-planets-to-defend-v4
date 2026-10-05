@@ -15,9 +15,12 @@ import {
   comboPhase,
   comboWeights,
   contractOf,
+  fadeStep,
+  FIRST_FADE_STEP,
   holdsRunWeight,
   stepCombo,
   swingMotion,
+  type ComboFrame,
   type ComboPhase,
   type ComboState,
   type ComboStep,
@@ -130,17 +133,33 @@ export interface PlayReading {
 }
 
 /**
- * The two clocks a frame of play runs on, in seconds. Kept apart so phase B's hit-stop can hold the combo's clock at 0
- * for a few frames on contact while his movement, the camera and the input go on: a press in the stop is still taken
- * and kept (combo.ts), and the combo picks up where it stopped once its clock runs again. Both are the frame's step
- * today, and both 0 while the lab is frozen.
+ * The clocks a frame of play runs on, in seconds, kept apart so phase B's hit-stop can hold Pip while the view goes on.
+ * For a hit-stop, phase B holds `combo` and `motion` both at 0 for the stop's frames and leaves `frame` running. The
+ * combo's clock holds his hit and all his clips, the idle's and the run's loops included, since the mixer runs on it,
+ * so his movement must hold with it: held alone, the combo froze his legs mid-stride while `motion` carried him on, and
+ * he skated. `frame` drives the camera's follow, and phase B's sparks and shake will read it too, so the view stays alive
+ * through the stop. A press in the stop is still taken and kept (combo.ts), and the combo picks up where it stopped once
+ * its clock runs again; the hits' fades read the combo's last moving step meanwhile (fadeStep, combo.ts), not any of
+ * these. `motion` used to be the camera's interval and the fades' too, so a stop that held it would have stopped the
+ * camera and read every fade at a step of 0. The pages give all three the frame's interval clamped to MAX_FRAME_STEP
+ * (labs/shared/paintedStage.ts), so a stall does not jump the scene, and all three 0 while the lab is frozen.
  */
 export interface PlayClocks {
-  /** The combo and his clips: the hits' clip times, the mixer and his face. */
+  /** The combo and his clips: the hits' clip times, the mixer (the idle's and run's loops too) and his face. */
   combo: number;
-  /** His movement and the camera's follow; also the frame's real interval, which the hits' fades read (ownWeight). */
+  /** His movement across the ground. */
   motion: number;
+  /** The frame's own clamped interval: the camera's follow, which a hit-stop leaves running. */
+  frame: number;
 }
+
+/**
+ * Where he finds the reaches he walks round, read on every update: the Asset World's members, or the arena's training
+ * dummies as they stand now. A list handed over once had to be handed over again after every change (a dummy knocked
+ * back, the slider heart grown), and a change the page forgot to hand on left him walking into a body or round air.
+ * The provider should return a list it keeps rather than build one each frame.
+ */
+export type ObstacleSource = () => readonly Obstacle[];
 
 /**
  * Where he comes out and how the camera first frames him: his point on the plane tangent at the pole and his yaw, the
@@ -197,10 +216,10 @@ export interface PipPlay {
   readonly available: boolean;
   readonly active: boolean;
   /**
-   * Puts him out at `start` (the Asset World's, worldPlayStart, by default) among `obstacles`, the reaches he walks
-   * round, his face blinking on `seed` and held while `frozen`.
+   * Puts him out at `start` (the Asset World's, worldPlayStart, by default) among the reaches `obstacles` gives on each
+   * update, his face blinking on `seed` and held while `frozen`.
    */
-  enter(camera: PerspectiveCamera, controls: OrbitControls, obstacles: readonly Obstacle[], seed: number, frozen: boolean, start?: PlayStart): void;
+  enter(camera: PerspectiveCamera, controls: OrbitControls, obstacles: ObstacleSource, seed: number, frozen: boolean, start?: PlayStart): void;
   exit(controls: OrbitControls): void;
   /**
    * Stands him back at the start, still and out of any hit, with the camera framing him as it first did, or as `start`
@@ -212,15 +231,12 @@ export interface PipPlay {
    * One frame: takes the frame's attack press into the combo (combo.ts says what a press does when), moves him by the
    * input as the playing hit allows, poses him, and carries the camera with him. A press while the lab is frozen is
    * dropped here and counted (`dropped`), since a frozen lab takes no input; one on a combo clock of 0 that is not a
-   * freeze, phase B's hit-stop, reaches the combo and is kept.
+   * freeze, phase B's hit-stop, reaches the combo and is kept. Returns the frame's combo step (stepCombo's ComboFrame:
+   * the hit that struck on it, the hit that began, what the press did), which phase B's hit detection reads on the
+   * frame it happens, with nothing built for it; null when he is not out.
    */
-  update(clocks: PlayClocks, input: MoveInput, attack: boolean, camera: PerspectiveCamera, controls: OrbitControls): void;
+  update(clocks: PlayClocks, input: MoveInput, attack: boolean, camera: PerspectiveCamera, controls: OrbitControls): ComboFrame | null;
   setFrozen(on: boolean): void;
-  /**
-   * Takes new obstacles while he plays: the Asset World's after the slider heart's drawn size changed, the arena's after
-   * a dummy moved or went home.
-   */
-  refreshObstacles(obstacles: readonly Obstacle[]): void;
   reading(): PlayReading;
 }
 
@@ -307,9 +323,12 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
   let run: HalfActions | null = null;
   let hitActions: HalfActions[] = [];
   let face: FaceDriver | null = null;
-  let obstacles: Obstacle[] = [];
+  const noObstacles: readonly Obstacle[] = [];
+  let obstacles: ObstacleSource = () => noObstacles;
   let motion: MotionState = { x: 0, z: 0, yaw: 0, speed: 0, drive: 0 };
   let combo: ComboState = COMBO_READY;
+  // The step the hits' fades read: the combo's last moving step, kept through a held clock (fadeStep, combo.ts).
+  let fadeStepNow = FIRST_FADE_STEP;
   let strikes = 0;
   let strikesByStep = [0, 0, 0];
   let lastStrikeStep: ComboStep | null = null;
@@ -425,7 +444,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       strikesByStep = [0, 0, 0];
       lastStrikeStep = null;
       dropped = 0;
-      obstacles = [...obstaclesNow];
+      obstacles = obstaclesNow;
 
       saved = { minDistance: controls.minDistance, maxDistance: controls.maxDistance, maxPolarAngle: controls.maxPolarAngle, enablePan: controls.enablePan };
       controls.minDistance = PLAY_CAMERA_MIN_DISTANCE;
@@ -455,17 +474,20 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       hitActions = [];
       face = null;
       combo = COMBO_READY;
+      obstacles = () => noObstacles;
       if (saved) Object.assign(controls, saved);
       saved = null;
     },
     update(clocks, input, attackAsked, camera, controls) {
-      if (!root || !mixer || !idle || !run) return;
+      if (!root || !mixer || !idle || !run) return null;
       const asked = attackAsked && hits !== null;
       // The press and the combo's step go into the combo first, so this frame's movement already follows the hit it
       // leaves playing. The combo keeps a press on a step of 0, for phase B's hit-stop, so the lab's freeze, which takes
-      // no input, drops its presses here.
+      // no input, drops its presses here. The fades and a hit begun on this frame read the combo's last moving step, so
+      // a hit begun in a hit-stop takes over from the weight drawn on the frame before it.
       if (asked && frozen) dropped += 1;
-      const frame = stepCombo(combo, asked && !frozen, clocks.combo, feel, clocks.motion);
+      fadeStepNow = fadeStep(fadeStepNow, clocks.combo);
+      const frame = stepCombo(combo, asked && !frozen, clocks.combo, feel, fadeStepNow);
       combo = frame.state;
       if (frame.press === 'dropped') dropped += 1;
       if (frame.struck !== null) {
@@ -484,13 +506,15 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       else forward.set(0, 0, 0);
       turn.setFromUnitVectors(UP, surfaceUp).invert();
       forward.applyQuaternion(turn);
-      motion = stepMotion(motion, moveDirection(input, forward.x, forward.z), input.sprint, clocks.motion, obstacles, planetRadius, swing);
+      motion = stepMotion(motion, moveDirection(input, forward.x, forward.z), input.sprint, clocks.motion, obstacles(), planetRadius, swing);
       pose();
 
-      // The fades read the frame's real interval (ownWeight), so a frozen frame, whose interval is 0, keeps the weights
-      // it had rather than jumping by a frame's worth of fade; a held combo clock with frames still running (phase B's
-      // hit-stop) reads the same interval as the frames around it, so its weights hold too.
-      if (clocks.motion > 0) weights = comboWeights(combo, clocks.motion);
+      // The weights follow the combo on every frame but a frozen one, at the combo's last moving step (fadeStep), so a
+      // held combo clock (phase B's hit-stop), whose hit stands still, draws the same weights as the frame before the
+      // stop, and a hit begun in the stop starts its crossfade from them. They used to be read at the movement's step,
+      // and only while it ran, so a stop that held his movement too, as it must, both froze them and read any hit begun
+      // in it at a step of 0.
+      if (!frozen) weights = comboWeights(combo, fadeStepNow);
       // The run keeps its weight while the finisher fades in over his stop (holdsRunWeight says why).
       runShare = blendRunWeight(runShare, motion.speed, holdsRunWeight(combo));
       timeScale = stride ? runTimeScale(motion.speed, stride.clipSpeed) : 1;
@@ -509,24 +533,23 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
         weigh(actions, (isCurrent ? body.upper.current : 0) + (isOutgoing ? body.upper.outgoing : 0), (isCurrent ? body.lower.current : 0) + (isOutgoing ? body.lower.outgoing : 0));
       });
       mixer.update(clocks.combo);
-      // After the mixer, which would otherwise write any morph or jaw track a clip carries over the face; the blinks run
-      // through the swings, and hold with the clips, so the whole figure holds together under a held combo clock.
+      // After the mixer, which would otherwise write any morph or jaw track a clip carries over the face. The blinks run
+      // through the swings and hold with the clips, on the combo's clock; so do the idle's and the run's loops, which is
+      // why a hit-stop must hold his movement with it (PlayClocks): the figure holds together only while both hold.
       face?.update(clocks.combo);
 
       // The orbit's centre closes on his chest, and the camera moves with it, so a drag still orbits and the wheel
-      // still zooms about him.
+      // still zooms about him. On the frame's own clock, so the view keeps following through a hit-stop.
       chest(desired);
-      follow.lerp(desired, 1 - Math.exp(-PLAY_FOLLOW_RATE * clocks.motion));
+      follow.lerp(desired, 1 - Math.exp(-PLAY_FOLLOW_RATE * clocks.frame));
       shift.subVectors(follow, controls.target);
       controls.target.add(shift);
       camera.position.add(shift);
+      return frame;
     },
     setFrozen(on) {
       frozen = on;
       face?.setFrozen(on);
-    },
-    refreshObstacles(obstaclesNow) {
-      if (root) obstacles = [...obstaclesNow];
     },
     reading() {
       const at = root ? root.getWorldPosition(new Vector3()).toArray() : null;
@@ -541,7 +564,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
         runWeight: runShare,
         runTimeScale: timeScale,
         stride: stride ?? null,
-        clearance: root ? clearance(motion.x, motion.z, obstacles) : null,
+        clearance: root ? clearance(motion.x, motion.z, obstacles()) : null,
         attacking: hit !== null,
         attackTime: hit ? hit.time : null,
         attackWeight: weights.current,

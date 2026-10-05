@@ -168,15 +168,33 @@ export function bufferOpensAt(contract: HitContract, buffer: number): number {
   return Math.max(0, (contract.cancel ?? contract.duration) - Math.max(0, buffer));
 }
 
+/** The fade step a page starts from, before its combo's clock has moved: a frame at 60 frames a second. */
+export const FIRST_FADE_STEP = 1 / 60;
+
+/** The least step the combo takes at once, in seconds (longestComboStep): a frame at 120 frames a second. */
+export const COMBO_STEP_FLOOR = 1 / 120;
+
+/**
+ * The step the hits' fades read on a frame (ownWeight): the combo's own step when its clock moves, and on a held clock
+ * (phase B's hit-stop, or the lab's freeze) the last step it moved by, `previous`. A page keeps the value from frame to
+ * frame, from FIRST_FADE_STEP. The fades read the frame's movement step before, which is 0 whenever a hit-stop holds his
+ * movement too, as it must (PlayClocks says why): a hit begun in the stop then took over from a weight read at a step
+ * of 0, not the one drawn on the frame before (0.5 against 0.417 for a light hit 0.45 s in), and the pose popped.
+ */
+export function fadeStep(previous: number, comboStep: number): number {
+  return comboStep > 0 ? comboStep : previous;
+}
+
 /**
  * A hit's own weight over the idle and run at a time into it: risen over its fades' rise (the crossfade from a hit still
  * showing, or the first hit's fade in from the idle and run), held, and faded out to 0 one frame before its end,
- * `frameStep` (the frame's real interval, the best guess at the next) short of it, since the hit ends on the frame that
- * reaches its end and a fade that reached 0 only there left that last frame up to a step's share of the fade, which
- * then vanished in one frame (a quarter at SwiftShader's 0.05 s step). The real interval, not the combo's step, because
- * phase B's hit-stop will hold the combo's step at 0 while frames still draw: read at a step of 0 the fade's end jumped
- * a frame's share each time a stop began and ended. A light hit keeps its full weight until its cancel point whatever
- * the fade out, so a buffered hit always takes over from a hit at full weight and no idle shows between two hits.
+ * `frameStep` (the step the combo's clock last moved by, the best guess at its next: fadeStep) short of it, since the
+ * hit ends on the frame that reaches its end and a fade that reached 0 only there left that last frame up to a step's
+ * share of the fade, which then vanished in one frame (a quarter at SwiftShader's 0.05 s step). The last moving step,
+ * not this frame's, because phase B's hit-stop will hold the combo's step at 0 while frames still draw: read at a step
+ * of 0 the fade's end jumped a frame's share each time a stop began and ended. A light hit keeps its full weight until
+ * its cancel point whatever the fade out, so a buffered hit always takes over from a hit at full weight and no idle
+ * shows between two hits.
  */
 export function ownWeight(contract: HitContract, time: number, fades: HitFades, frameStep: number): number {
   const step = frameStep > 0 ? frameStep : 0;
@@ -190,7 +208,7 @@ export function ownWeight(contract: HitContract, time: number, fades: HitFades, 
  * The weights of the hit playing and of the one fading out under it. The incoming hit rises over its crossfade while
  * the outgoing one falls from the weight it had when the next began, so the two never sum past 1 and, from a hit at
  * full weight, sum to exactly 1 through the crossfade: the idle and run take only what the two leave, and the pose never
- * pops. `frameStep` is the frame's real interval (ownWeight says why).
+ * pops. `frameStep` is the step the combo's clock last moved by (fadeStep; ownWeight says why).
  */
 export function comboWeights(state: ComboState, frameStep: number, hits: readonly HitContract[] = COMBO_HITS): { current: number; outgoing: number } {
   const { hit, outgoing } = state;
@@ -219,10 +237,12 @@ function startHit(step: ComboStep, time: number, from: HitPlay | null, fromTime:
  * carried as far as its own strike, it began already past it, the strike check (before the strike, then at or past it)
  * never saw it cross, and the hit never struck (a light hit carried in by a 0.25 s step began 0.20 s in, on its strike).
  * The carry is always shorter than the step, so a step no longer than the earliest strike starts every hit short of its
- * own. The pages clamp their step to 1/20 s, so this only guards a caller that does not.
+ * own. The pages clamp their step to 1/20 s, so this only guards a caller that does not. It is floored at
+ * COMBO_STEP_FLOOR: a contract with its strike at 0 made the cap 0, and the combo then moved no time on any frame, so
+ * every hit stood at its first moment for good (a unit test holds every shipped strike above 0).
  */
 export function longestComboStep(hits: readonly HitContract[] = COMBO_HITS): number {
-  return Math.min(...hits.map((hit) => hit.strike));
+  return Math.max(COMBO_STEP_FLOOR, Math.min(...hits.map((hit) => hit.strike)));
 }
 
 /**
@@ -246,8 +266,9 @@ export function longestComboStep(hits: readonly HitContract[] = COMBO_HITS): num
  *   attack_1; after the finisher it starts again from attack_1 at once.
  *
  * `dt` is the combo's own step, which phase B's hit-stop holds at 0 (and a NaN step moves no time either, so it cannot
- * leave a hit whose time never reaches its end); `frameStep` is the frame's real interval, which the weights read
- * (ownWeight says why), the same as `dt` unless the combo's clock is held or scaled.
+ * leave a hit whose time never reaches its end); `frameStep` is the step the weights read (fadeStep: the combo's last
+ * moving step), the same as `dt` unless the combo's clock is held, so a hit begun on a held frame takes over from the
+ * weight drawn on the frame before.
  */
 export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel: CombatFeel, frameStep: number = dt, hits: readonly HitContract[] = COMBO_HITS): ComboFrame {
   let { hit, outgoing, queued, next, sinceEnd } = state;

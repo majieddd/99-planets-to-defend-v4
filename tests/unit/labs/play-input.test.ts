@@ -82,6 +82,31 @@ describe('the play prototype controls', () => {
     expect(input.takeAttack()).toBe(false);
   });
 
+  it('lets go of a held key on its keyup even when a panel control stops the event, by reading it on the way down', () => {
+    // A key held while the focus moved into the panel was released there, and lil-gui stops every key event that starts
+    // inside a controller from bubbling up to the window, so a keyup listened for on the way up never came and he ran on
+    // by himself. Read in the capture phase, the window hears the keyup before the controller can stop it. With no DOM
+    // here, the window's listener registrations are read, and a keyup dispatched to it is seen to let the key go.
+    const registered: { type: string; capture: boolean }[] = [];
+    const target = new EventTarget();
+    const add = target.addEventListener.bind(target);
+    target.addEventListener = (type: string, listener: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions) => {
+      registered.push({ type, capture: typeof options === 'object' ? Boolean(options.capture) : Boolean(options) });
+      add(type, listener, options);
+    };
+    vi.stubGlobal('window', target);
+    const element = () => Object.assign(new EventTarget(), { style: {} }) as unknown as HTMLElement;
+    const controls = createPlayInput(element(), element(), new EventTarget() as unknown as HTMLElement, element());
+    controls.setActive(true);
+    const key = (type: 'keydown' | 'keyup') =>
+      target.dispatchEvent(Object.assign(new Event(type, { cancelable: true }), { code: 'KeyW', key: 'w', repeat: false, ctrlKey: false, metaKey: false, altKey: false }));
+    key('keydown');
+    expect(controls.read().forward).toBe(1);
+    expect(registered.filter((entry) => entry.type === 'keyup')).toEqual([{ type: 'keyup', capture: true }]);
+    key('keyup');
+    expect(controls.read().forward).toBe(0);
+  });
+
   it("asks for the combat arena's reset on R, once a press, under F's rules, and only on a page that asked for the key", () => {
     const keyR = (fields: Partial<{ repeat: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean }> = {}) => {
       const event = Object.assign(new Event('keydown', { cancelable: true }), { code: 'KeyR', key: 'r', repeat: false, ctrlKey: false, metaKey: false, altKey: false, ...fields });

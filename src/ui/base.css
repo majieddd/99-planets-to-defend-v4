@@ -1,4 +1,11 @@
-@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;600&display=swap');
+/* The two families the pages set their type in, served with the site: Barlow Condensed at 700, the only weight the
+   display font is set in, and Inter at 400 and 600, its latin faces, which hold all the copy. They came from Google
+   Fonts by an @import, which held up the page's first paint until Google answered, and a request that failed logged a
+   console error that failed every browser test's errors check (the arena's phone test, 2026-10-05). Vite copies the
+   files into the build with the site's base path, so they load from Pages as from the dev server. */
+@import '@fontsource/barlow-condensed/latin-700.css';
+@import '@fontsource/inter/latin-400.css';
+@import '@fontsource/inter/latin-600.css';
 
 :root {
   --ink: #14161d;

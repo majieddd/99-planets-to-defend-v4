@@ -6,9 +6,11 @@ import {
   DEFAULT_COMBAT_FEEL,
   defaultCombatFeel,
   feelAddressValue,
+  feelFromAddress,
   parseCombatFeel,
   snapFeel,
 } from '../../../src/labs/world/combatFeel';
+import { frameStep, MAX_FRAME_STEP, WORLD_FOV_DEG } from '../../../src/labs/shared/paintedStage';
 
 describe('the combat feel settings', () => {
   it("follow the ranges' order, which the folder shows, and hold every default inside its range on a step", () => {
@@ -41,5 +43,31 @@ describe('the combat feel settings', () => {
     expect(feelAddressValue({ ...defaultCombatFeel(), crossfade: DEFAULT_COMBAT_FEEL.crossfade + 1e-12 })).toBeNull();
     // What the address carries reads back as the same settings.
     expect({ ...defaultCombatFeel(), ...parseCombatFeel(feelAddressValue(moved)!).feel }).toEqual(moved);
+  });
+});
+
+describe("a page's combat feel from its address", () => {
+  it('takes the defaults, puts what `?feel=` carries over them, and reports only what it skipped', () => {
+    const said: string[] = [];
+    const report = (text: string): number => said.push(text);
+    expect(feelFromAddress(new URLSearchParams(''), report)).toEqual(defaultCombatFeel());
+    expect(feelFromAddress(new URLSearchParams({ feel: '{"crossfade":0.15}' }), report)).toEqual({ ...defaultCombatFeel(), crossfade: 0.15 });
+    expect(said).toEqual([]);
+    // A key that is no setting is skipped and reported with the settings used, which both pages put in their console
+    // and banner.
+    const feel = feelFromAddress(new URLSearchParams({ feel: '{"crossfade":0.15,"lunge":1}' }), report);
+    expect(feel).toEqual({ ...defaultCombatFeel(), crossfade: 0.15 });
+    expect(said).toEqual([`Combat feel: skipped lunge in the address; using ${combatFeelJson(feel)}`]);
+  });
+});
+
+describe("the labs' frame step (labs/shared/paintedStage.ts)", () => {
+  it('moves the scene by the frame interval up to 1/20 s, and not at all while frozen', () => {
+    expect(MAX_FRAME_STEP).toBe(1 / 20);
+    expect(frameStep(16, false)).toBeCloseTo(0.016, 12);
+    // A stall moves the scene one clamped step rather than jumping it.
+    expect(frameStep(2000, false)).toBe(MAX_FRAME_STEP);
+    expect(frameStep(16, true)).toBe(0);
+    expect(WORLD_FOV_DEG).toBe(50);
   });
 });

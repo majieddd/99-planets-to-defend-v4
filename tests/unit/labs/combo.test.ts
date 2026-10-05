@@ -8,10 +8,13 @@ import {
   bufferOpensAt,
   COMBO_HITS,
   COMBO_READY,
+  COMBO_STEP_FLOOR,
   comboPhase,
   comboWeights,
   contractOf,
+  fadeStep,
   FINISHER_FROM_BEFORE_STRIKE,
+  FIRST_FADE_STEP,
   hitFades,
   holdsRunWeight,
   longestComboStep,
@@ -106,6 +109,64 @@ describe('the combo contracts', () => {
       expect(hit.activeTo, hit.name).toBeCloseTo(hit.strike + ACTIVE_AFTER_STRIKE, 12);
     }
     expect([ACTIVE_BEFORE_STRIKE, ACTIVE_AFTER_STRIKE]).toEqual([0.05, 0.08]);
+  });
+
+  it('strike after their first moment, and the step cap stays above 0 for a contract that does not', () => {
+    // A strike at 0 made longestComboStep 0, and the combo then moved no time on any frame.
+    for (const hit of COMBO_HITS) expect(hit.strike, hit.name).toBeGreaterThan(0);
+    expect(longestComboStep()).toBe(Math.min(...COMBO_HITS.map((hit) => hit.strike)));
+    const atZero = [{ ...HIT1, strike: 0, activeFrom: 0, activeTo: 0.08 }, HIT2, HIT3];
+    expect(longestComboStep(atZero)).toBe(COMBO_STEP_FLOOR);
+    expect(COMBO_STEP_FLOOR).toBeCloseTo(1 / 120, 12);
+    // With the floor the clock still moves, 1/120 s a frame however long the frame: a hit begun on such a contract reaches
+    // its 0.55 s end in 66 frames, where it stood at its first moment for good.
+    let state = stepCombo(COMBO_READY, true, 1 / 60, FEEL, 1 / 60, atZero).state;
+    let frames = 0;
+    while (state.hit && frames < 200) {
+      state = stepCombo(state, false, 1 / 60, FEEL, 1 / 60, atZero).state;
+      frames += 1;
+    }
+    expect(state.hit).toBeNull();
+    // The frame that began it moved it too: 66 frames in all.
+    expect(frames + 1).toBe(66);
+  });
+});
+
+/**
+ * Phase B's hit-stop holds the combo's clock and his movement for a few frames while frames still draw (PlayClocks,
+ * play.ts). The page reads the fades at fadeStep's step, the combo's last moving one, so these drive the combo as the
+ * page does through such a stop.
+ */
+describe('the fades through a held clock', () => {
+  it("start a hit begun in a hit-stop from the weight drawn on the frame before, where a step of 0 popped it", () => {
+    const step = 1 / 60;
+    // attack_1, unpressed, run into its fade out past the cancel point: 0.45 s in, its weight falling.
+    let state = stepCombo(COMBO_READY, true, step, FEEL, step).state;
+    let fade = FIRST_FADE_STEP;
+    while (state.hit!.time < 0.45 - 1e-9) {
+      fade = fadeStep(fade, step);
+      state = stepCombo(state, false, step, FEEL, fade).state;
+    }
+    const drawn = comboWeights(state, fade).current;
+    expect(drawn).toBeGreaterThan(0);
+    expect(drawn).toBeLessThan(1);
+    // The stop: the combo's clock and his movement both at 0. The fade step keeps the last moving step, so the weights
+    // drawn in the stop are the frame before's, and a press, past the cancel point, begins attack_2 over that weight.
+    fade = fadeStep(fade, 0);
+    expect(fade).toBe(step);
+    expect(comboWeights(state, fade).current).toBe(drawn);
+    const begun = stepCombo(state, true, 0, FEEL, fade);
+    expect(begun.started).toBe(2);
+    expect(begun.state.outgoing!.weight).toBe(drawn);
+    expect(comboWeights(begun.state, fade)).toEqual({ current: 0, outgoing: drawn });
+    // Read at the movement's step, 0 in a stop that holds him too, the outgoing hit took a weight the frame before never
+    // drew (0.5 against 0.417 here), and the pose jumped by the difference on the stop's first frame.
+    const atZero = stepCombo(state, true, 0, FEEL, 0).state.outgoing!.weight;
+    expect(atZero).toBeCloseTo(0.5, 9);
+    expect(drawn).toBeCloseTo(0.417, 3);
+    // Before the combo's clock has ever moved, the fades read a frame at 60 a second.
+    expect(fadeStep(FIRST_FADE_STEP, 0)).toBe(FIRST_FADE_STEP);
+    expect(FIRST_FADE_STEP).toBeCloseTo(1 / 60, 12);
   });
 });
 

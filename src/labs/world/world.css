@@ -177,15 +177,25 @@
   display: none;
 }
 
+/* The thumb pad's size and its height off the bottom, the Attack button's size, and where the button's top stands. The
+   combat arena's panel stops above the two by these (combat.css), so it follows them wherever they are set; it kept its
+   own copies of the sizes and offsets, which a change here would have left stale and the panel over the controls. */
+:root {
+  --pad-size: 140px;
+  --attack-size: 88px;
+  --pad-bottom: 56px;
+  --attack-top: calc(var(--pad-bottom) + (var(--pad-size) + var(--attack-size)) / 2);
+}
+
 /* The attack button shows with the pad, on a touch screen while playing, in the bottom right under the other thumb and
    level with the pad's centre. 88 px across is twice the 44 px least target and about a thumb pad's width, so the
    thumb finds it without looking; the frame interval chip below it ends 45 px up, under the button's 82 px. */
 .attack-button {
   position: fixed;
   right: 24px;
-  bottom: calc(56px + (140px - 88px) / 2);
-  width: 88px;
-  height: 88px;
+  bottom: calc(var(--pad-bottom) + (var(--pad-size) - var(--attack-size)) / 2);
+  width: var(--attack-size);
+  height: var(--attack-size);
   border-radius: 50%;
   border: 1px solid var(--hairline);
   background: rgba(20, 22, 29, 0.6);
@@ -206,9 +216,9 @@
 .pad {
   position: fixed;
   left: 24px;
-  bottom: 56px;
-  width: 140px;
-  height: 140px;
+  bottom: var(--pad-bottom);
+  width: var(--pad-size);
+  height: var(--pad-size);
   border-radius: 50%;
   border: 1px solid var(--hairline);
   background: rgba(20, 22, 29, 0.45);
@@ -240,6 +250,8 @@
     /* The bottom strip the chips keep: gutter, frame interval chip, gap, look chip at two lines, gap. */
     --chip-reserve: calc(8px + var(--chip-line) + 10px + 4px + 2 * var(--chip-line) + 10px + 8px);
     --view-h: 100vh;
+    /* Over the frame interval chip: its gutter, its line, a gap and 16 px. */
+    --pad-bottom: calc(8px + var(--chip-line) + 10px + 16px);
   }
 
   @supports (height: 100dvh) {
@@ -362,12 +374,10 @@
 
   .pad {
     left: 16px;
-    bottom: calc(8px + var(--chip-line) + 10px + 16px);
   }
 
-  /* Level with the pad's centre, in the corner the frame interval chip leaves free on a phone. */
+  /* Level with the pad's centre (--pad-bottom above), in the corner the frame interval chip leaves free on a phone. */
   .attack-button {
     right: 16px;
-    bottom: calc(8px + var(--chip-line) + 10px + 16px + (140px - 88px) / 2);
   }
 }

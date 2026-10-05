@@ -3,12 +3,11 @@ import type { TierName } from '../../render/quality';
 import { NARROW_SCREEN } from '../style/referenceBoard';
 import type { CombatFeel } from '../world/combatFeel';
 import { addCombatFeelFolder, handFocusBack, type CombatFeelHandlers } from '../world/panel';
+import { RESET_NAME } from './arena';
 
 const TITLE = 'Combat arena';
 /** The phone title: short enough that the closed panel leaves the controls card its room, as the world's "World" does. */
 const NARROW_TITLE = 'Arena';
-/** The reset button's name: what it does, and the key that does the same. */
-export const RESET_NAME = 'Reset the dummies and Pip (R)';
 
 export interface ArenaPanelState {
   tier: TierName;

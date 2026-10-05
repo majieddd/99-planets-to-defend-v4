@@ -60,14 +60,27 @@ export interface CombatFeelHandlers {
  * dropdown focused the arrow keys changed the tier instead of moving him. A keyboard's activation keeps the focus where
  * the keyboard put it: blurring there too, as the first fix did, threw a keyboard user's place in the panel away. A
  * pointer press anywhere in the panel marks the next change as the pointer's and a key marks it as the keyboard's, both
- * read before lil-gui's own listeners stop the event.
+ * read before lil-gui's own listeners stop the event. The mark lasts for one change only, and goes when the focus leaves
+ * the panel: it used to stay up after the change it was for, so after any press in the panel (a slider, the title) a
+ * later change with no key before it, such as a screen reader's activation of a checkbox, was taken for the pointer's
+ * and threw that reader's place in the panel away.
+ *
+ * lil-gui's GUI.onChange is a single slot, so this takes the root's: a page that sets its own root change handler after
+ * this replaces it, and would have to call through to it.
  */
 export function handFocusBack(gui: GUI): void {
   let byPointer = false;
   gui.domElement.addEventListener('pointerdown', () => (byPointer = true), { capture: true });
   gui.domElement.addEventListener('keydown', () => (byPointer = false), { capture: true });
+  // Only when the focus leaves the panel: within it, a press moves the focus from one control to the next after the
+  // pointerdown that marked it, and clearing then would lose the mark before its change.
+  gui.domElement.addEventListener('focusout', (event) => {
+    if (!(event.relatedTarget instanceof Node && gui.domElement.contains(event.relatedTarget))) byPointer = false;
+  });
   gui.onChange(({ controller }) => {
-    if (!byPointer) return;
+    const pointer = byPointer;
+    byPointer = false;
+    if (!pointer) return;
     if (!(controller instanceof BooleanController || controller instanceof OptionController || controller instanceof FunctionController)) return;
     const active = document.activeElement;
     if (active instanceof HTMLElement && gui.domElement.contains(active)) active.blur();

@@ -130,6 +130,22 @@ export function parseCombatFeel(text: string): { feel: Partial<CombatFeel>; reje
 }
 
 /**
+ * A page's combat feel as its address opens it: the defaults, with any settings `?feel=` carries (the panel's readout
+ * JSON) over them, each on its slider's step. A key that is not a setting, or a value outside its slider's range, is
+ * skipped and `report` is told, in a sentence naming what was skipped and the settings used, which the page puts in its
+ * console and its banner. Both pages read the address alike, and each had its own copy of these lines.
+ */
+export function feelFromAddress(params: { get(name: string): string | null }, report: (said: string) => void): CombatFeel {
+  const feel = defaultCombatFeel();
+  const text = params.get('feel');
+  if (!text) return feel;
+  const pasted = parseCombatFeel(text);
+  Object.assign(feel, pasted.feel);
+  if (pasted.rejected.length) report(`Combat feel: skipped ${pasted.rejected.join(', ')} in the address; using ${combatFeelJson(feel)}`);
+  return feel;
+}
+
+/**
  * What the address's `feel` parameter should hold for the settings: their compact JSON, or null when every one stands
  * at its default, so the address names only a feel that was changed. The pages rewrite the parameter whenever a setting
  * moves; read once at load and never written, it kept the opening settings after the sliders moved, so a reload or a

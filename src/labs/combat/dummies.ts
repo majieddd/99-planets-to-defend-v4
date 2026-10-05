@@ -5,7 +5,7 @@ import { syncHullMorphs } from '../../render/ink/hull';
 import { place, type Ground } from '../../render/terrain/place';
 import type { ComboStep } from '../world/combo';
 import { groundReach } from '../world/play';
-import { PLAY_BODY_RADIUS, type Obstacle } from '../world/playMotion';
+import { clampToArea, PLAY_BODY_RADIUS, resolveObstacles, type Obstacle } from '../world/playMotion';
 import { LEAN } from '../world/registry';
 import type { GroundPose } from './arena';
 
@@ -33,13 +33,21 @@ export interface TrainingDummy {
   readonly index: number;
   readonly name: string;
   readonly root: Object3D;
+  /**
+   * Its own mixer, which loops its idle: phase B's flinch plays a reaction on it over the idle, and the page advances it
+   * with the others (TrainingDummies.update).
+   */
+  readonly mixer: AnimationMixer;
   /** Where it stands after a reset. */
   readonly home: Readonly<GroundPose>;
   /** Its body's reach across the ground from its root, from its drawn bounds at home (play.ts, groundReach). */
   readonly reach: number;
   /** Where it stands now. */
   pose(): GroundPose;
-  /** Stands it at a pose on the ground, for phase B's knockback and flinch; the page then refreshes Pip's obstacles. */
+  /**
+   * Stands it at a pose on the ground as given, with no check against the others or Pip (the reset test's debug hook
+   * uses it); knockback goes through TrainingDummies.push, which does check. Pip reads the change on his next frame.
+   */
   moveTo(pose: GroundPose): void;
   /** The hit hook: phase B's hit detection calls it when a strike lands, and its listeners (onHit) react. */
   hit(hit: DummyHit): void;
@@ -52,13 +60,29 @@ export interface TrainingDummy {
 
 export interface TrainingDummies {
   readonly list: readonly TrainingDummy[];
-  /** Adds a listener every dummy's hit hook calls, after it has counted the hit: phase B's reactions. */
-  onHit(listener: (dummy: TrainingDummy, hit: DummyHit) => void): void;
-  /** Each dummy as an obstacle where it stands now: its reach widened by Pip's body, as the Asset World's members are. */
-  obstacles(): Obstacle[];
+  /**
+   * Adds a listener every dummy's hit hook calls, after it has counted the hit: phase B's reactions. Returns the call
+   * that removes it, so a reaction set up for one test or one setting can be taken down again.
+   */
+  onHit(listener: (dummy: TrainingDummy, hit: DummyHit) => void): () => void;
+  /** Adds a listener called after every reset, once all the dummies are home; returns the call that removes it. */
+  onReset(listener: () => void): () => void;
+  /**
+   * Knocks a dummy `dx` and `dz` metres across the tangent plane: it stops at another dummy's body and at Pip's (each
+   * dummy's reach and the other's, or its reach widened by PLAY_BODY_RADIUS, as he walks round it), and inside his play
+   * area. Returns where it ends. The bodies are met where the push ends, as a frame of Pip's own movement meets them
+   * (resolveObstacles), so a push longer than a body is wide (3.1 m past Pip, 4.7 m past a dummy) could carry a dummy
+   * through it; phase B's knockback moves a dummy a little on each frame.
+   */
+  push(index: number, dx: number, dz: number): GroundPose;
+  /**
+   * Each dummy as an obstacle where it stands now: its reach widened by Pip's body, as the Asset World's members are. The
+   * same list every call, kept up to date as the dummies move, so Pip can read it every frame without a list being built.
+   */
+  obstacles(): readonly Obstacle[];
   /** Advances the idles by the frame's step; a step of 0, the lab frozen, holds them. */
   update(dt: number): void;
-  /** Puts every dummy back home. */
+  /** Puts every dummy back home, then tells the reset listeners. */
   reset(): void;
 }
 
@@ -82,14 +106,25 @@ function drawnBounds(root: Object3D, hullMaterial: unknown): Box3 {
  * and a mixer of its own, looping its idle. Each idle starts its own share of the loop in (a third apart for three), so
  * the row does not breathe in step, and a reset takes each back to that moment. Each stands plumb on the ground through
  * place(), as the Asset World's characters do (Kit's ground contract, which roots the Husk at its feet), and its reach
- * is read from its drawn bounds at home, with the formula the Asset World's members use. Null when the Husk has no idle
- * to loop.
+ * is read from its drawn bounds at home, with the formula the Asset World's members use. `pip` gives Pip's root on the
+ * tangent plane (null while he is not out), which a knocked-back dummy stops at. Null when the Husk has no idle to loop.
  */
-export function createTrainingDummies(asset: LoadedAsset, ground: Ground, parent: Object3D, hullMaterial: unknown, homes: readonly GroundPose[], names: readonly string[]): TrainingDummies | null {
+export function createTrainingDummies(
+  asset: LoadedAsset,
+  ground: Ground,
+  parent: Object3D,
+  hullMaterial: unknown,
+  homes: readonly GroundPose[],
+  names: readonly string[],
+  pip: () => { x: number; z: number } | null = () => null,
+): TrainingDummies | null {
   const idle = asset.animations.find((clip) => clip.name === DUMMY_IDLE);
   if (!idle) return null;
-  const listeners: ((dummy: TrainingDummy, hit: DummyHit) => void)[] = [];
+  const listeners = new Set<(dummy: TrainingDummy, hit: DummyHit) => void>();
+  const resetListeners = new Set<() => void>();
   const mixers: AnimationMixer[] = [];
+  // Pip's obstacles, one per dummy, kept in step with where each stands (sync), so he reads one list every frame.
+  const obstacleList: Obstacle[] = [];
 
   const list = homes.map((home, index): TrainingDummy => {
     const root = cloneRig(asset.root);
@@ -114,15 +149,20 @@ export function createTrainingDummies(asset: LoadedAsset, ground: Ground, parent
     parent.add(root);
     mixers.push(mixer);
     const reach = groundReach(root.getWorldPosition(new Vector3()), drawnBounds(root, hullMaterial));
+    const obstacle: Obstacle = { x: home.x, z: home.z, radius: reach + PLAY_BODY_RADIUS };
+    obstacleList.push(obstacle);
     const dummy: TrainingDummy = {
       index,
       name: root.name,
       root,
+      mixer,
       home: Object.freeze({ ...home }),
       reach,
       pose: () => ({ ...pose }),
       moveTo(next) {
         pose = { ...next };
+        obstacle.x = pose.x;
+        obstacle.z = pose.z;
         stand();
       },
       hit(event) {
@@ -137,10 +177,9 @@ export function createTrainingDummies(asset: LoadedAsset, ground: Ground, parent
         return lastHit;
       },
       reset() {
-        pose = { ...home };
+        dummy.moveTo(home);
         hits = 0;
         lastHit = null;
-        stand();
         toHomeMoment();
       },
     };
@@ -150,18 +189,32 @@ export function createTrainingDummies(asset: LoadedAsset, ground: Ground, parent
   return {
     list,
     onHit(listener) {
-      listeners.push(listener);
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
-    obstacles: () =>
-      list.map((dummy) => {
-        const { x, z } = dummy.pose();
-        return { x, z, radius: dummy.reach + PLAY_BODY_RADIUS };
-      }),
+    onReset(listener) {
+      resetListeners.add(listener);
+      return () => resetListeners.delete(listener);
+    },
+    push(index, dx, dz) {
+      const dummy = list[index]!;
+      const from = dummy.pose();
+      // The other dummies by both bodies' reaches, and Pip by the dummy's reach widened by his body, as he walks round it.
+      const bodies: Obstacle[] = list.filter((other) => other !== dummy).map((other) => ({ ...other.pose(), radius: dummy.reach + other.reach }));
+      const at = pip();
+      if (at) bodies.push({ x: at.x, z: at.z, radius: dummy.reach + PLAY_BODY_RADIUS });
+      const free = resolveObstacles(from.x + dx, from.z + dz, from.x, from.z, bodies);
+      const kept = clampToArea(free.x, free.z);
+      dummy.moveTo({ x: kept.x, z: kept.z, yaw: from.yaw });
+      return dummy.pose();
+    },
+    obstacles: () => obstacleList,
     update(dt) {
       for (const mixer of mixers) mixer.update(dt);
     },
     reset() {
       for (const dummy of list) dummy.reset();
+      for (const listener of resetListeners) listener();
     },
   };
 }

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
-import { ARENA_DUMMY_NAMES } from '../../src/labs/combat/arena';
+import { ARENA_DUMMY_NAMES, RESET_NAME } from '../../src/labs/combat/arena';
 
 /** What `__P99__.play()` reads of Play Pip (labs/world/play.ts), as far as these tests read it. */
 interface PlayReading {
@@ -61,19 +61,19 @@ const BLADE_REACH = [1, 2, 3].map((step) => {
 /** The widest a dummy may stand off his facing at a strike, or his facing off the middle dummy at the start, in degrees. */
 const FACING_DEG = 15;
 
-/** The panel's reset button's name (RESET_NAME, labs/combat/panel.ts, which this file does not import: it loads lil-gui). */
-const RESET_NAME = 'Reset the dummies and Pip (R)';
-
 /** The Pages project serves the site under this path (playwright.config.ts). */
 const PAGES_BASE = '/99-planets-to-defend-v4/';
 
 /**
- * Chromium's own GPU process message on the first WebGL page a fresh SwiftShader browser draws, "GL Driver Message
- * (OpenGL, Performance, ...): GPU stall due to ReadPixels". It is the browser's, not the page's: the Asset World and the
- * Style Lab give the same four lines when they are the first page (2026-10-05), the page loaded second gives none, and
- * the arena on the GPU gives none. The page's own warnings, every other one, must be none.
+ * Chromium's own GPU process message on the first WebGL page a fresh SwiftShader browser draws, exactly as it prints it:
+ * "[.WebGL-0x71b400422c00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+ * three times, then a fourth time ending " (this message will no longer repeat)" (the arena's e2e log, 2026-10-05). It
+ * is the browser's, not the page's: the Asset World and the Style Lab give the same four lines when they are the first
+ * page, the page loaded second gives none, and the arena on the GPU gives none. Only that message is left out; every
+ * other warning, the page's own and any other driver message, must be none. The filter let through any line starting
+ * "GL Driver Message", so a driver's report of something else would have passed unread.
  */
-const BROWSER_GPU_MESSAGE = /^\[\.WebGL-[0-9a-fx]+\]GL Driver Message /;
+const BROWSER_GPU_MESSAGE = /^\[\.WebGL-0x[0-9a-f]+\]GL Driver Message \(OpenGL, Performance, [^)]*\): GPU stall due to ReadPixels( \(this message will no longer repeat\))?$/;
 
 function collectConsole(page: Page): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
@@ -346,6 +346,53 @@ test.describe('the combat arena', () => {
       expect(focusAfterClick, line).toBe('the page');
       expect(atStart(byEnter), line).toBe(true);
       expect(focusAfterEnter, line).toBe(RESET_NAME);
+      expect(log.errors, line).toEqual([]);
+    });
+
+    test('is reached from the home page, the Style Lab and the Asset World, whose link carries its combat feel', async ({ page }) => {
+      test.setTimeout(300_000);
+      const log = collectConsole(page);
+      /** Waits for the arena to be up after a link, and returns its address. */
+      const arrived = async (): Promise<URL> => {
+        await page.waitForURL(/\/labs\/combat\.html/, { timeout: 60_000 });
+        await page.waitForFunction(() => window.__P99__?.ready === true && window.__P99__?.page === 'combat', undefined, { timeout: 180_000 });
+        return new URL(page.url());
+      };
+      // The 480 px canvas is under the phone layout's line, so each lab's panel starts closed behind its title.
+      const openPanel = async () => {
+        await page.locator('.lil-gui.lil-root > .lil-title').click();
+        await expect(page.locator('.lil-gui.lil-root')).not.toHaveClass(/\blil-closed\b/);
+      };
+      const ARENA = 'Open the combat arena';
+
+      await page.goto('./');
+      await page.getByRole('link', { name: ARENA }).click();
+      const fromHome = await arrived();
+
+      await page.goto('./labs/style.html?tier=low');
+      await page.waitForFunction(() => window.__P99__?.ready === true && window.__P99__?.page === 'style', undefined, { timeout: 180_000 });
+      await openPanel();
+      await page.locator('.lil-gui button', { hasText: ARENA }).click();
+      const fromStyle = await arrived();
+
+      // A feel moved off the defaults in the world goes with him, in the arena's own `?feel=`.
+      const moved = JSON.stringify({ crossfade: 0.15 });
+      await page.goto(`./labs/world.html?tier=low&feel=${encodeURIComponent(moved)}`);
+      await page.waitForFunction(() => window.__P99__?.ready === true && window.__P99__?.page === 'world', undefined, { timeout: 180_000 });
+      await openPanel();
+      await page.locator('.lil-gui button', { hasText: ARENA }).click();
+      const fromWorld = await arrived();
+      const carried = JSON.parse(fromWorld.searchParams.get('feel') ?? '{}') as Record<string, number>;
+
+      const line =
+        `combat arena links [${test.info().project.name}]: home to ${fromHome.pathname}${fromHome.search}, Style Lab to ${fromStyle.pathname}${fromStyle.search}, ` +
+        `Asset World to ${fromWorld.pathname} with feel ${JSON.stringify(carried)}; console errors ${JSON.stringify(log.errors)}`;
+      console.log(line);
+      for (const at of [fromHome, fromStyle, fromWorld]) expect(at.pathname.endsWith('/labs/combat.html'), line).toBe(true);
+      // The home page and the Style Lab hand over no feel: the arena opens on the defaults.
+      expect(fromHome.searchParams.get('feel'), line).toBeNull();
+      expect(fromStyle.searchParams.get('feel'), line).toBeNull();
+      expect(carried.crossfade, line).toBe(0.15);
       expect(log.errors, line).toEqual([]);
     });
 
