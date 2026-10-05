@@ -1,4 +1,18 @@
-import { AnimationMixer, LoopRepeat, Quaternion, Vector3, type AnimationAction, type AnimationClip, type Box3, type Mesh, type Object3D, type PerspectiveCamera, type SkinnedMesh } from 'three';
+import {
+  AnimationMixer,
+  LoopRepeat,
+  Quaternion,
+  Vector3,
+  type AnimationAction,
+  type AnimationClip,
+  type Box3,
+  type IUniform,
+  type Mesh,
+  type Object3D,
+  type PerspectiveCamera,
+  type SkinnedMesh,
+  type Texture,
+} from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
 import type { LoadedAsset } from '../../render/assets/loadAsset';
@@ -6,7 +20,9 @@ import { syncHullMorphs } from '../../render/ink/hull';
 import { place, type Ground } from '../../render/terrain/place';
 import timings from '../../shared/timings.json';
 import { createCommanderFace } from '../shared/commanderFace';
+import { flatTexture } from '../shared/labAssets';
 import type { FaceDriver } from '../shared/faceDriver';
+import { BLADE_SWING_PIVOT_M, bladeHand, measureBlade, sampleBlade } from './blade';
 import type { CombatFeel } from './combatFeel';
 import {
   bodyWeights,
@@ -27,6 +43,7 @@ import {
 } from './combo';
 import { hitClips, splitClip, upperBodyBones, type HitClip, type HitSource } from './comboClips';
 import type { PlacedMember } from './layout';
+import { freshLunge, stepLunge } from './lunge';
 import {
   blendRunWeight,
   clearance,
@@ -46,6 +63,7 @@ import {
   type SwingMotion,
 } from './playMotion';
 import { THREE_QUARTER_TURN_DEG, toTangent, TOWARD_CAMERAS } from './registry';
+import { createSwordTrail, type SwordTrail, type TrailReading } from './swordTrail';
 
 /** The follow camera's opening distance from his chest, and its pitch above his horizon, in metres and degrees. */
 export const PLAY_CAMERA_DISTANCE = 5.5;
@@ -130,6 +148,17 @@ export interface PlayReading {
    * browser test reads the finisher's step and the frames around its end from these, for a slide or a snap.
    */
   feet: number[][] | null;
+  /** The clocks the last frame ran on (PlayClocks): a hit-stop shows as a combo and motion step under the frame's. */
+  clocks: PlayClocks;
+  /**
+   * The playing hit's lunge: the metres it has carried him so far, the metres it was planned to, the target the assist
+   * chose (an index into the targets, or -1), the turn it adds in degrees, and whether a body or the edge stopped it.
+   */
+  lunge: { moved: number; planned: number; target: number; turnDeg: number; blocked: boolean };
+  /** The sword trail: its samples, its brightest sample's shade and whether it is taking samples. */
+  trail: TrailReading;
+  /** The blade's base and tip in world space as last drawn, or null without a measured blade. */
+  blade: { base: number[]; tip: number[] } | null;
 }
 
 /**
@@ -217,9 +246,10 @@ export interface PipPlay {
   readonly active: boolean;
   /**
    * Puts him out at `start` (the Asset World's, worldPlayStart, by default) among the reaches `obstacles` gives on each
-   * update, his face blinking on `seed` and held while `frozen`.
+   * update, his face blinking on `seed` and held while `frozen`. `targets` gives what the lunge's assist may turn him
+   * toward (the arena's dummies); the Asset World gives none, so there he lunges straight ahead.
    */
-  enter(camera: PerspectiveCamera, controls: OrbitControls, obstacles: ObstacleSource, seed: number, frozen: boolean, start?: PlayStart): void;
+  enter(camera: PerspectiveCamera, controls: OrbitControls, obstacles: ObstacleSource, seed: number, frozen: boolean, start?: PlayStart, targets?: ObstacleSource): void;
   exit(controls: OrbitControls): void;
   /**
    * Stands him back at the start, still and out of any hit, with the camera framing him as it first did, or as `start`
@@ -243,6 +273,11 @@ export interface PipPlay {
    * reads it often (a knocked-back dummy stops at his body on every push), where reading() builds the whole reading.
    */
   at(): Readonly<{ x: number; z: number }> | null;
+  /**
+   * Writes the blade's base and tip in world space as last drawn into `base` and `tip`, and the point its sweep turns
+   * about (his shoulders, BLADE_SWING_PIVOT_M up his up line) into `pivot`; false without a blade.
+   */
+  blade(base: Vector3, tip: Vector3, pivot?: Vector3): boolean;
 }
 
 /** The first bone whose name ends with one of the names, in the order given: GLTFLoader strips Mixamo's colon. */
@@ -307,7 +342,15 @@ interface HalfActions {
  * rig in the bind pose, before the world's mixers pose the loaded one, because the face driver reads the jaw's axis
  * from it.
  */
-export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: Ground, parent: Object3D, hullMaterial: unknown, planetRadius: number, feel: CombatFeel): PipPlay {
+export function createPipPlay(
+  assets: ReadonlyMap<string, LoadedAsset>,
+  ground: Ground,
+  parent: Object3D,
+  hullMaterial: unknown,
+  planetRadius: number,
+  feel: CombatFeel,
+  brush: IUniform<Texture | null> = { value: flatTexture(128) },
+): PipPlay {
   const asset = assets.get(ASSET);
   const template = asset ? cloneRig(asset.root) : null;
   const idleClip = asset?.animations.find((clip) => clip.name === 'idle') ?? null;
@@ -319,6 +362,10 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
   const idleHalves = idleClip ? halvesOf(idleClip) : null;
   const runHalves = runClip ? halvesOf(runClip) : null;
   const hitHalves = hits ? hits.map((hit) => halvesOf(hit.clip)) : null;
+  // The blade, read once from the bind-pose copy (blade.ts): its base and tip in the hand's frame, which every copy of
+  // the rig shares.
+  const bladeMeasure = template ? measureBlade(template) : null;
+  if (template && !bladeMeasure) console.warn('Play Pip: the rig has no blade on its right hand, so no sword trail is drawn');
   let stride: PlayReading['stride'] | undefined;
 
   let root: Object3D | null = null;
@@ -328,8 +375,21 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
   let run: HalfActions | null = null;
   let hitActions: HalfActions[] = [];
   let face: FaceDriver | null = null;
+  let hand: Object3D | null = null;
+  let trail: SwordTrail | null = null;
+  const bladeBase = new Vector3();
+  const bladeTip = new Vector3();
+  const bladePivot = new Vector3();
+  const rootUp = new Vector3();
+  let bladeDrawn = false;
   const noObstacles: readonly Obstacle[] = [];
   let obstacles: ObstacleSource = () => noObstacles;
+  let targets: ObstacleSource = () => noObstacles;
+  // The playing hit's lunge (lunge.ts): planned on the frame it begins, carried by the share of its window the hit's
+  // time has reached, swept against the bodies a frame's share at a time.
+  const lunge = freshLunge();
+  const lungeAt = { x: 0, z: 0, yaw: 0 };
+  const lastClocks: PlayClocks = { combo: 0, motion: 0, frame: 0 };
   let motion: MotionState = { x: 0, z: 0, yaw: 0, speed: 0, drive: 0 };
   let combo: ComboState = COMBO_READY;
   // The step the hits' fades read: the combo's last moving step, kept through a held clock (fadeStep, combo.ts).
@@ -391,9 +451,36 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
    * Stands him at the start, still and out of any hit, and frames him there: the orbit's centre on his chest and the
    * camera on the start's bearing from him, at its distance and pitch. The next update weighs his clips from this.
    */
+  /** Forgets the lunge: a new hit plans its own. */
+  function clearLunge(): void {
+    lunge.plan = null;
+    lunge.done = 0;
+    lunge.moved = 0;
+    lunge.blocked = false;
+  }
+
+  /**
+   * Carries the playing hit's lunge (stepLunge, lunge.ts) on top of what his drive moved him: the plant's locked
+   * steering still holds, and only the lunge moves him. A step of 0, a hit-stop, holds the hit's time and so the lunge.
+   */
+  function carryLunge(): void {
+    const hit = combo.hit;
+    if (!hit) return;
+    const contract = contractOf(hit.step);
+    lungeAt.x = motion.x;
+    lungeAt.z = motion.z;
+    lungeAt.yaw = motion.yaw;
+    const before = lunge.done;
+    stepLunge(lunge, contract, hit.time, contract.planted ? feel.lungeFinisher : feel.lungeLight, lungeAt, targets(), obstacles(), (feel.assistTurn * Math.PI) / 180, planetRadius);
+    if (lunge.done !== before) motion = { ...motion, x: lungeAt.x, z: lungeAt.z, yaw: lungeAt.yaw };
+  }
+
   function toStart(camera: PerspectiveCamera, controls: OrbitControls): void {
     motion = { x: start.x, z: start.z, yaw: start.yaw, speed: 0, drive: 0 };
     combo = COMBO_READY;
+    clearLunge();
+    trail?.clear();
+    bladeDrawn = false;
     // The fades' step starts afresh with the hits: kept from before, a respawn after a stall carried that stall's step
     // into the first hit's fade (fadeStep).
     fadeStepNow = FIRST_FADE_STEP;
@@ -417,7 +504,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
     get active() {
       return root !== null;
     },
-    enter(camera, controls, obstaclesNow, seed, frozenNow, startNow) {
+    enter(camera, controls, obstaclesNow, seed, frozenNow, startNow, targetsNow) {
       if (!template || !idleHalves || !runHalves || !runClip || root) return;
       frozen = frozenNow;
       start = startNow ?? worldPlayStart();
@@ -454,6 +541,9 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       lastStrikeStep = null;
       dropped = 0;
       obstacles = obstaclesNow;
+      targets = targetsNow ?? (() => noObstacles);
+      hand = bladeMeasure ? bladeHand(root, bladeMeasure) : null;
+      trail = hand ? createSwordTrail(parent, brush) : null;
 
       saved = { minDistance: controls.minDistance, maxDistance: controls.maxDistance, maxPolarAngle: controls.maxPolarAngle, enablePan: controls.enablePan };
       controls.minDistance = PLAY_CAMERA_MIN_DISTANCE;
@@ -484,6 +574,12 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       face = null;
       combo = COMBO_READY;
       obstacles = () => noObstacles;
+      targets = () => noObstacles;
+      trail?.dispose();
+      trail = null;
+      hand = null;
+      bladeDrawn = false;
+      clearLunge();
       if (saved) Object.assign(controls, saved);
       saved = null;
     },
@@ -498,6 +594,10 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       fadeStepNow = fadeStep(fadeStepNow, clocks.combo);
       const frame = stepCombo(combo, asked && !frozen, clocks.combo, feel, fadeStepNow);
       combo = frame.state;
+      lastClocks.combo = clocks.combo;
+      lastClocks.motion = clocks.motion;
+      lastClocks.frame = clocks.frame;
+      if (frame.started !== null || !combo.hit) clearLunge();
       if (frame.press === 'dropped') dropped += 1;
       if (frame.struck !== null) {
         strikes += 1;
@@ -516,6 +616,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       turn.setFromUnitVectors(UP, surfaceUp).invert();
       forward.applyQuaternion(turn);
       motion = stepMotion(motion, moveDirection(input, forward.x, forward.z), input.sprint, clocks.motion, obstacles(), planetRadius, swing);
+      carryLunge();
       pose();
 
       // The weights follow the combo on every frame but a frozen one, at the combo's last moving step (fadeStep), so a
@@ -546,6 +647,16 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       // through the swings and hold with the clips, on the combo's clock; so do the idle's and the run's loops, which is
       // why a hit-stop must hold his movement with it (PlayClocks): the figure holds together only while both hold.
       face?.update(clocks.combo);
+      // The blade where this frame draws it, and the trail along its arc through the active frames, on the combo's
+      // clock, so the trail holds through a hit-stop as the swing does.
+      if (hand && bladeMeasure) {
+        sampleBlade(hand, bladeMeasure, bladeBase, bladeTip);
+        // Sampling brought his root's world matrix up to date too: his shoulders, up the root's own up.
+        rootUp.setFromMatrixColumn(root.matrixWorld, 1).normalize();
+        bladePivot.setFromMatrixPosition(root.matrixWorld).addScaledVector(rootUp, BLADE_SWING_PIVOT_M);
+        bladeDrawn = true;
+        trail?.update(clocks.combo, bladeBase, bladeTip, comboPhase(combo) === 'active', feel.trailLength, feel.trailFade);
+      }
 
       // The orbit's centre closes on his chest, and the camera moves with it, so a drag still orbits and the wheel
       // still zooms about him. On the frame's own clock, so the view keeps following through a hit-stop.
@@ -565,6 +676,13 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       here.x = motion.x;
       here.z = motion.z;
       return here;
+    },
+    blade(base, tip, pivot) {
+      if (!bladeDrawn) return false;
+      base.copy(bladeBase);
+      tip.copy(bladeTip);
+      pivot?.copy(bladePivot);
+      return true;
     },
     reading() {
       const at = root ? root.getWorldPosition(new Vector3()).toArray() : null;
@@ -608,6 +726,16 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
         moveScale: swing.moveScale,
         turnScale: swing.turnScale,
         feet: root && feet.every(Boolean) ? feet.map((foot) => foot!.getWorldPosition(new Vector3()).toArray()) : null,
+        clocks: { ...lastClocks },
+        lunge: {
+          moved: lunge.moved,
+          planned: lunge.plan ? lunge.plan.length : 0,
+          target: lunge.plan ? lunge.plan.target : -1,
+          turnDeg: lunge.plan ? (lunge.plan.turn * 180) / Math.PI : 0,
+          blocked: lunge.blocked,
+        },
+        trail: trail ? trail.stroke.reading(feel.trailLength) : { points: 0, alpha: 0, emitting: false },
+        blade: bladeDrawn ? { base: bladeBase.toArray(), tip: bladeTip.toArray() } : null,
       };
     },
   };

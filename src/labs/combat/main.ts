@@ -10,7 +10,7 @@ import { FACE_SEED } from '../shared/commanderFace';
 import { loadNamedAsset } from '../shared/labAssets';
 import { createPaintedStage, frameStep, pickTier, WORLD_FOV_DEG } from '../shared/paintedStage';
 import { feelAddressValue, feelFromAddress } from '../world/combatFeel';
-import { createPipPlay, PLAY_CAMERA_DISTANCE, PLAY_CAMERA_MAX_DISTANCE, type PlayStart } from '../world/play';
+import { createPipPlay, PLAY_CAMERA_DISTANCE, PLAY_CAMERA_MAX_DISTANCE, type PlayClocks, type PlayStart } from '../world/play';
 import { createPlayInput } from '../world/playInput';
 import type { Obstacle } from '../world/playMotion';
 import { FIT_NDC } from '../world/views';
@@ -85,7 +85,8 @@ async function start(): Promise<void> {
   });
   // Play Pip keeps a copy of his rig in the bind pose, whose jaw axis his face reads; only Play Pip uses his loaded rig
   // here, so nothing poses it first, as the world's members would.
-  const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS, feel);
+  // The sword trail paints with the painted materials' brush atlas, through their shared uniform.
+  const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS, feel, ctx.paint.uBrush);
   const homes = dummyHomes();
   // A knocked-back dummy stops at Pip's body, read where he stands on each push through his cheap accessor: the full
   // reading, which this called before, builds every field of the handle's reading on every push.
@@ -135,7 +136,9 @@ async function start(): Promise<void> {
   if (!pipPlay.available) showBanner('The combat arena needs Pip (commander) and his idle and run clips, which this build does not have.');
   else {
     // He reads the dummies' kept list on every frame, so a dummy that moves is walked round from the next frame on.
-    pipPlay.enter(camera, controls, dummies ? () => dummies.obstacles() : () => NO_OBSTACLES, FACE_SEED, frozen, playStart());
+    // The dummies are also the lunge's targets, which its assist may turn him toward.
+    const bodies = dummies ? () => dummies.obstacles() : () => NO_OBSTACLES;
+    pipPlay.enter(camera, controls, bodies, FACE_SEED, frozen, playStart(), bodies);
     input.setActive(true);
   }
   syncTouchUi();
@@ -153,9 +156,9 @@ async function start(): Promise<void> {
 
   /**
    * The reset, from R or the panel's button: every dummy home on its idle with no hits, and Pip back at the start with
-   * the camera behind him, so one key starts a test afresh from the opening view. With the dummies standing still in
-   * phase A, a reset of them alone would change nothing on screen; phase B's knockback will move them, and its
-   * reactions hear of the reset through TrainingDummies.onReset.
+   * the camera behind him, so one key starts a test afresh from the opening view; his respawn drops his trail and his
+   * lunge. With the dummies standing still, a reset of them alone would change nothing on screen; the impact's
+   * knockback will move them, and its reactions hear of the reset through TrainingDummies.onReset.
    */
   function reset(): void {
     dummies?.reset();
@@ -241,7 +244,44 @@ async function start(): Promise<void> {
       controls.target.fromArray(target);
       controls.update();
     },
+    // An evidence hook: runs one frame of the lab's loop on a step of `seconds`, with the freeze lifted for it alone, so
+    // a frozen page can be stepped frame by frame at an even rate however slowly each frame is captured. A press made
+    // just before it (an F keydown) is taken on that frame. Nothing on the page calls it.
+    advance: (seconds: number) => {
+      const wasFrozen = frozen;
+      frozen = false;
+      pipPlay.setFrozen(false);
+      try {
+        tick(seconds, seconds * 1000);
+      } finally {
+        frozen = wasFrozen;
+        pipPlay.setFrozen(wasFrozen);
+      }
+    },
   };
+  // The frame's clocks, one object rewritten each frame: all three on the frame's step until the impact's hit-stop
+  // holds the combo's and the movement's (PlayClocks).
+  const plainClocks: PlayClocks = { combo: 0, motion: 0, frame: 0 };
+
+  /** One frame of the lab on a scene step of `dt` seconds (0 while frozen), `intervalMs` the real interval it stands for. */
+  function tick(dt: number, intervalMs: number): void {
+    frameMs = frameMs * 0.95 + intervalMs * 0.05;
+    // A reset asked since the last frame goes first, so this frame already draws everything home.
+    if (input.takeReset()) reset();
+    plainClocks.combo = plainClocks.motion = plainClocks.frame = dt;
+    dummies?.update(dt);
+    if (pipPlay.active) pipPlay.update(plainClocks, input.read(), input.takeAttack(), camera, controls);
+    controls.update(dt);
+    painted.sky.follow(camera);
+    painted.pipeline.render(dt);
+    frames += 1;
+    if (frames % 30 === 0) fpsBox.textContent = `${painted.tier.name} tier, frame interval ${frameMs.toFixed(1)} ms`;
+    if (frames === 3 && window.__P99__) {
+      window.__P99__['readyMs'] = Math.round(performance.now());
+      window.__P99__.ready = true;
+    }
+  }
+
   loopStarted = true;
   painted.renderer.setAnimationLoop(() => {
     try {
@@ -249,23 +289,7 @@ async function start(): Promise<void> {
       const interval = now - last;
       last = now;
       // Only the scene's step is clamped, so a stall does not jump it; the reading keeps the real interval (Style Lab).
-      const dt = frameStep(interval, frozen);
-      frameMs = frameMs * 0.95 + interval * 0.05;
-      // A reset asked since the last frame goes first, so this frame already draws everything home.
-      if (input.takeReset()) reset();
-      dummies?.update(dt);
-      // His combo, his movement and the camera's follow share the frame's step here; phase B's hit-stop will hold the
-      // combo's and the movement's and leave the frame's running (PlayClocks).
-      if (pipPlay.active) pipPlay.update({ combo: dt, motion: dt, frame: dt }, input.read(), input.takeAttack(), camera, controls);
-      controls.update(frameStep(interval, frozen));
-      painted.sky.follow(camera);
-      painted.pipeline.render(dt);
-      frames += 1;
-      if (frames % 30 === 0) fpsBox.textContent = `${painted.tier.name} tier, frame interval ${frameMs.toFixed(1)} ms`;
-      if (frames === 3 && window.__P99__) {
-        window.__P99__['readyMs'] = Math.round(performance.now());
-        window.__P99__.ready = true;
-      }
+      tick(frameStep(interval, frozen), interval);
     } catch (error) {
       fail(error);
     }

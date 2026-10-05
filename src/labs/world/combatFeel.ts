@@ -5,9 +5,10 @@
  * strike and cancel point) are not here: they belong to the clips, in combo.ts, whose lengths and strikes come from
  * src/shared/timings.json.
  *
- * Phase B of the combat feel research adds its impact numbers (hit-stop length, lunge distance, shake strength, trail
- * length) as further keys of CombatFeel, DEFAULT_COMBAT_FEEL and COMBAT_FEEL_RANGES; the folder, the readout, the copy
- * button and the address parameter all follow those three tables, so nothing else needs to change for them.
+ * Phase B of the combat feel research adds its impact numbers as further keys of CombatFeel, DEFAULT_COMBAT_FEEL and
+ * COMBAT_FEEL_RANGES (the lunges and their target assist and the sword trail so far, lab numbers with rows of their own
+ * in Numbers, Asset World layout); the folder, the readout, the copy button and the address parameter follow those
+ * three tables, so nothing else changes for them.
  */
 
 export interface CombatFeel {
@@ -25,6 +26,16 @@ export interface CombatFeel {
   moveScale: number;
   /** The share of his turn rate he keeps during a light hit's wind-up. */
   windupTurn: number;
+  /** Metres a light hit's lunge carries him forward around its strike. */
+  lungeLight: number;
+  /** Metres the finisher's lunge carries him. */
+  lungeFinisher: number;
+  /** The most a lunge turns him toward a target ahead, in degrees; 0 turns the target assist off. */
+  assistTurn: number;
+  /** Seconds of the blade's arc the sword trail keeps behind the blade. */
+  trailLength: number;
+  /** Seconds the sword trail takes to fade once the active frames end. */
+  trailFade: number;
 }
 
 /** The defaults, the one place they are set. Frozen so a slider writes a copy, never these. */
@@ -36,6 +47,11 @@ export const DEFAULT_COMBAT_FEEL: Readonly<CombatFeel> = Object.freeze({
   reset: 0.3,
   moveScale: 0.4,
   windupTurn: 0.5,
+  lungeLight: 0.35,
+  lungeFinisher: 0.55,
+  assistTurn: 15,
+  trailLength: 0.09,
+  trailFade: 0.12,
 });
 
 /** A setting's slider: its least and greatest value, its step and its name in the panel. */
@@ -59,6 +75,11 @@ export const COMBAT_FEEL_RANGES: { readonly [K in keyof CombatFeel]: FeelRange }
   reset: { min: 0, max: 1, step: 0.05, label: 'chain reset after a hit (s)' },
   moveScale: { min: 0, max: 1, step: 0.05, label: 'pace kept in a light hit' },
   windupTurn: { min: 0, max: 1, step: 0.05, label: 'turn rate kept in the wind-up' },
+  lungeLight: { min: 0, max: 0.8, step: 0.05, label: 'lunge on a light hit (m)' },
+  lungeFinisher: { min: 0, max: 1.2, step: 0.05, label: 'lunge on the finisher (m)' },
+  assistTurn: { min: 0, max: 45, step: 1, label: 'lunge turn toward a target (degrees)' },
+  trailLength: { min: 0.02, max: 0.2, step: 0.01, label: 'sword trail length (s)' },
+  trailFade: { min: 0.03, max: 0.3, step: 0.01, label: 'sword trail fade (s)' },
 };
 
 /**

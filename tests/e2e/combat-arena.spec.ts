@@ -21,6 +21,9 @@ interface PlayReading {
   sources: ('clip' | 'placeholder')[] | null;
   clipLengthOff: number[] | null;
   feet: number[][] | null;
+  clocks: { combo: number; motion: number; frame: number };
+  lunge: { moved: number; planned: number; target: number; turnDeg: number; blocked: boolean };
+  trail: { points: number; alpha: number; emitting: boolean };
 }
 
 /** What `__P99__.dummies()` reads of one training dummy (labs/combat/main.ts). */
@@ -174,7 +177,7 @@ test.describe('the combat arena', () => {
       // from the finisher's first frame to ten frames past its end it keeps his root and his feet on every frame.
       await page.evaluate(() => {
         type Strike = { step: number; dummies: DummyReading[] };
-        type Frame = { step: number; time: number | null; weight: number; tangent: number[]; feet: number[][] };
+        type Frame = { step: number; time: number | null; weight: number; tangent: number[]; position: number[]; feet: number[][]; lunge: number };
         const store = window as unknown as { strikes: Strike[]; frames: Frame[]; presses: number; done: boolean };
         const p99 = window.__P99__!;
         const play = () => (p99['play'] as () => PlayReading)();
@@ -195,7 +198,15 @@ test.describe('the combat arena', () => {
           if (sample.strikes > last) store.strikes.push({ step: sample.lastStrikeStep ?? 0, dummies: (p99['dummies'] as () => DummyReading[])() });
           last = sample.strikes;
           if (sample.comboStep === 3 || store.frames.length) {
-            store.frames.push({ step: sample.comboStep, time: sample.attackTime, weight: sample.attackWeight, tangent: sample.tangent!, feet: sample.feet! });
+            store.frames.push({
+              step: sample.comboStep,
+              time: sample.attackTime,
+              weight: sample.attackWeight,
+              tangent: sample.tangent!,
+              position: sample.position!,
+              feet: sample.feet!,
+              lunge: sample.lunge.moved,
+            });
             if (sample.comboStep === 0) after += 1;
           }
           if (after >= 10) {
@@ -216,7 +227,7 @@ test.describe('the combat arena', () => {
       const result = await page.evaluate(() => {
         const store = window as unknown as {
           strikes: { step: number; dummies: DummyReading[] }[];
-          frames: { step: number; time: number | null; weight: number; tangent: number[]; feet: number[][] }[];
+          frames: { step: number; time: number | null; weight: number; tangent: number[]; position: number[]; feet: number[][]; lunge: number }[];
           presses: number;
         };
         return { strikes: store.strikes, frames: store.frames, presses: store.presses, play: (window.__P99__!['play'] as () => PlayReading)() };
@@ -226,19 +237,23 @@ test.describe('the combat arena', () => {
         const nearest = [...strike.dummies].sort((a, b) => a.fromPip!.distance - a.reach - (b.fromPip!.distance - b.reach))[0]!;
         return { step: strike.step, middle, nearest };
       });
-      // The finisher plants him while its front (left) boot steps forward and back inside the clip: his root must not
-      // move, the boot must travel about its 22 cm, the frame on which the hit ends must move neither foot more than the
-      // frames before it did, and the feet must then stand still, or the step would read as a slide or a snap. That the
-      // boot comes home inside the clip is the unit test's (combo-clips.test.ts); here, ten frames after the end, it
-      // stands where the idle puts it, which is not where the hits stand it (the idle's stance is 9.4 cm wider at the
-      // left toe than the rest pose's, which every authored clip holds), so that distance is read, not held.
+      // The finisher plants him while its front (left) boot steps forward and back inside the clip: nothing but its lunge
+      // may move his root (his steering is held), the boot must travel about its 22 cm from his root, the frame on which
+      // the hit ends must move neither foot more than the frames before it did, and the feet must then stand still, or
+      // the step would read as a slide or a snap. That the boot comes home inside the clip is the unit test's
+      // (combo-clips.test.ts); here, ten frames after the end, it stands where the idle puts it, which is not where the
+      // hits stand it (the idle's stance is 9.4 cm wider at the left toe than the rest pose's, which every authored clip
+      // holds), so that distance is read, not held.
       const frames = result.frames;
       const finisher = frames.filter((frame) => frame.step === 3);
       const end = frames.findIndex((frame) => frame.step === 0);
       const gap = (a: number[], b: number[]) => Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
       const rootDrift = Math.max(...finisher.map((frame) => Math.hypot(frame.tangent[0]! - finisher[0]!.tangent[0]!, frame.tangent[1]! - finisher[0]!.tangent[1]!)));
-      const stepOut = Math.max(...finisher.map((frame) => gap(frame.feet[0]!, finisher[0]!.feet[0]!)));
-      const home = gap(frames.at(-1)!.feet[0]!, finisher[0]!.feet[0]!);
+      const lunged = finisher.at(-1)!.lunge;
+      // The boot's place from his root, so the lunge carrying both does not count as the step.
+      const fromRoot = (frame: (typeof frames)[number], foot: number) => frame.feet[foot]!.map((value, k) => value - frame.position[k]!);
+      const stepOut = Math.max(...finisher.map((frame) => gap(fromRoot(frame, 0), fromRoot(finisher[0]!, 0))));
+      const home = gap(fromRoot(frames.at(-1)!, 0), fromRoot(finisher[0]!, 0));
       const footMove = (index: number) => Math.max(gap(frames[index]!.feet[0]!, frames[index - 1]!.feet[0]!), gap(frames[index]!.feet[1]!, frames[index - 1]!.feet[1]!));
       const atEnd = footMove(end);
       const lateMoves = frames.slice(1, end).map((_, i) => i + 1).filter((index) => (frames[index]!.time ?? 0) >= 0.55).map(footMove);
@@ -252,8 +267,8 @@ test.describe('the combat arena', () => {
               `at ${s.middle.fromPip!.angleDeg.toFixed(2)} degrees, the nearest ${s.nearest.name} at ${s.nearest.fromPip!.distance.toFixed(3)} m and ${s.nearest.fromPip!.angleDeg.toFixed(2)} degrees`,
           )
           .join('; ') +
-        `; strikes by hit ${JSON.stringify(result.play.strikesByStep)}; finisher over ${finisher.length} frames: root moved ${(rootDrift * 1000).toFixed(2)} mm, ` +
-        `left boot out ${(stepOut * 100).toFixed(1)} cm at most, and ten frames after the end ${(home * 1000).toFixed(1)} mm from where it stood at the start (the idle's stance against the hits'); ` +
+        `; strikes by hit ${JSON.stringify(result.play.strikesByStep)}; finisher over ${finisher.length} frames: root moved ${(rootDrift * 1000).toFixed(2)} mm against its lunge's ${(lunged * 1000).toFixed(2)} mm, ` +
+        `left boot out ${(stepOut * 100).toFixed(1)} cm from his root at most, and ten frames after the end ${(home * 1000).toFixed(1)} mm from where it stood from his root at the start (the idle's stance against the hits'); ` +
         `largest foot move in a frame ${(Math.max(...lateMoves) * 1000).toFixed(1)} mm from 0.55 s to the end, ${(atEnd * 1000).toFixed(1)} mm on the frame it ended, ` +
         `${(Math.max(...afterMoves) * 1000).toFixed(1)} mm in the ten after; console errors ${JSON.stringify(log.errors)}`;
       console.log(line);
@@ -264,7 +279,8 @@ test.describe('the combat arena', () => {
         expect(s.middle.fromPip!.distance - s.middle.reach, line).toBeLessThanOrEqual(BLADE_REACH[s.step - 1]!);
         expect(Math.abs(s.middle.fromPip!.angleDeg), line).toBeLessThan(FACING_DEG);
       }
-      expect(rootDrift, line).toBe(0);
+      // Only the lunge moved him: his root went the lunge's metres and no more (a straight lunge, read on the plane).
+      expect(Math.abs(rootDrift - lunged), line).toBeLessThan(0.001);
       expect(stepOut, line).toBeGreaterThan(0.15);
       expect(stepOut, line).toBeLessThan(0.3);
       expect(atEnd, line).toBeLessThanOrEqual(Math.max(...lateMoves) + 1e-6);

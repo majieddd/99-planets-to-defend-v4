@@ -167,7 +167,9 @@ async function start(): Promise<void> {
     console.warn(`${PAGE}: ${said}`);
     showBanner(`${said}.`);
   });
-  const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS, feel);
+  // His sword trail paints with the painted materials' brush atlas, through their shared uniform. The world has no
+  // training dummies, so here he swings, lunges and trails, and the hits land only in the combat arena.
+  const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS, feel, ctx.paint.uBrush);
   // A member whose model or clip this build lacks is left out rather than built, where a member put in ahead of its clip
   // would stop the page with "has no clip". The coverage gaps above, read from the manifest, name most such members;
   // one the loaded GLBs drop that the manifest does not (a GLB rebuilt without a clip the manifest lists) is named here.
