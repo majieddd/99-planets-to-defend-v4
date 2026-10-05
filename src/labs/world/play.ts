@@ -238,6 +238,11 @@ export interface PipPlay {
   update(clocks: PlayClocks, input: MoveInput, attack: boolean, camera: PerspectiveCamera, controls: OrbitControls): ComboFrame | null;
   setFrozen(on: boolean): void;
   reading(): PlayReading;
+  /**
+   * His root on the tangent plane, or null when he is not out: one object, rewritten on each call, for a caller that
+   * reads it often (a knocked-back dummy stops at his body on every push), where reading() builds the whole reading.
+   */
+  at(): Readonly<{ x: number; z: number }> | null;
 }
 
 /** The first bone whose name ends with one of the names, in the order given: GLTFLoader strips Mixamo's colon. */
@@ -340,6 +345,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
   let swing: SwingMotion = FREE_MOTION;
   let timeScale = 0;
   const follow = new Vector3();
+  const here = { x: 0, z: 0 };
   let saved: { minDistance: number; maxDistance: number; maxPolarAngle: number; enablePan: boolean } | null = null;
   const surfaceUp = new Vector3();
   const right = new Vector3();
@@ -388,6 +394,9 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
   function toStart(camera: PerspectiveCamera, controls: OrbitControls): void {
     motion = { x: start.x, z: start.z, yaw: start.yaw, speed: 0, drive: 0 };
     combo = COMBO_READY;
+    // The fades' step starts afresh with the hits: kept from before, a respawn after a stall carried that stall's step
+    // into the first hit's fade (fadeStep).
+    fadeStepNow = FIRST_FADE_STEP;
     runShare = 0;
     weights = { current: 0, outgoing: 0 };
     body = bodyWeights(0, 0, false, 0, false);
@@ -550,6 +559,12 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
     setFrozen(on) {
       frozen = on;
       face?.setFrozen(on);
+    },
+    at() {
+      if (!root) return null;
+      here.x = motion.x;
+      here.z = motion.z;
+      return here;
     },
     reading() {
       const at = root ? root.getWorldPosition(new Vector3()).toArray() : null;

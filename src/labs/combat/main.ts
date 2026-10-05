@@ -87,11 +87,9 @@ async function start(): Promise<void> {
   // here, so nothing poses it first, as the world's members would.
   const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS, feel);
   const homes = dummyHomes();
-  // A knocked-back dummy stops at Pip's body, read where he stands when it moves.
-  const pipAt = (): { x: number; z: number } | null => {
-    const tangent = pipPlay.reading().tangent;
-    return tangent ? { x: tangent[0]!, z: tangent[1]! } : null;
-  };
+  // A knocked-back dummy stops at Pip's body, read where he stands on each push through his cheap accessor: the full
+  // reading, which this called before, builds every field of the handle's reading on every push.
+  const pipAt = (): Readonly<{ x: number; z: number }> | null => pipPlay.at();
   const dummies: TrainingDummies | null = husk ? createTrainingDummies(husk, patch, scene, ctx.hullMaterial, homes, ARENA_DUMMY_NAMES, pipAt) : null;
   if (husk && !dummies) showBanner('The combat arena needs the Husk\'s idle clip for its training dummies, which this build does not have.');
 

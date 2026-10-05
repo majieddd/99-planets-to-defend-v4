@@ -55,12 +55,21 @@ describe("Pip's recorded clip checks", () => {
     expect(meta.notes.attack_checks.min_z).toBeLessThanOrEqual(0.005);
   });
 
-  it('holds the sword at its clearance or above in every clip the ground pass measured', () => {
+  it('holds the sword at its clearance or above, and the boots on the ground, in every clip', () => {
     expect(BLADE_CLEARANCE_M).toBeGreaterThan(0);
-    const measured = Object.entries(meta.notes.clip_ground).filter(([, record]) => record.sword_turn_deg !== undefined);
-    // The idle and the run go through the pass; the attack and the combo's hits, authored with their boots planted, do not.
-    expect(measured.map(([clip]) => clip).sort()).toEqual(['idle', 'run']);
-    for (const [clip, record] of measured) expect(record.sword_min_z, clip).toBeGreaterThanOrEqual(BLADE_CLEARANCE_M - BLADE_TOLERANCE_M);
+    const ground = Object.entries(meta.notes.clip_ground);
+    // The idle and the run go through the ground pass, which turns the hand to put the sword there; the attack and the
+    // combo's hits are authored with the blade clear and their boots planted, so they reach it as authored. The combo's
+    // hits were left out of this, and the finisher's chop took the blade 4.4 mm under the ground and its stepping boot
+    // 3.9 mm under it; its follow-through keys now hold the blade up and the steps never go below the ground.
+    const passed = ground.filter(([, record]) => record.sword_turn_deg !== undefined);
+    expect(passed.map(([clip]) => clip).sort()).toEqual(['idle', 'run']);
+    expect(ground.map(([clip]) => clip).sort()).toEqual(meta.animations.map((clip) => clip.name).sort());
+    for (const [clip, record] of ground) {
+      expect(record.sword_min_z, clip).toBeGreaterThanOrEqual(BLADE_CLEARANCE_M - BLADE_TOLERANCE_M);
+      // The ground pass stands a clip's boots on the ground within 0.1 mm; an authored clip's stand there by IK.
+      expect(Math.abs(record.boot_min_z!), clip).toBeLessThanOrEqual(1e-4);
+    }
   });
 });
 
@@ -95,13 +104,15 @@ describe("Pip's combo hits", () => {
     }
   });
 
-  it("stands the finisher's lowest points, its stepping boot and its sword, within the contract's 5 mm of the ground", () => {
-    // The finisher's front boot sets down at the strike and the spline through its step overshoots the ground a little
-    // after it (3.9 mm), and its sword's follow-through reaches 4.4 mm under it; both inside the Kit's 5 mm, which the
-    // test above holds every clip to, and the browser test's 1 cm sink allowance for the characters.
+  it("stands the finisher's stepping boot on the ground and holds its sword clear of it, where both dipped under", () => {
+    // The finisher's front boot set down at the strike and the spline through its step overshot the ground after it
+    // (3.9 mm under), and its sword's follow-through reached 4.4 mm under it, both inside the Kit's 5 mm and so passed.
+    // The step is now held at the ground or above (lib/motion.py _grounded), and the follow-through's blade keys point
+    // a little higher, so the boot stands at 0 and the blade clears BLADE_CLEARANCE_M, as every other clip's does.
     const finisher = meta.notes.clip_ground['attack_3']!;
-    expect(finisher.boot_min_z!).toBeGreaterThanOrEqual(-0.005);
-    expect(finisher.sword_min_z!).toBeGreaterThanOrEqual(-0.005);
+    expect(Math.abs(finisher.boot_min_z!)).toBeLessThanOrEqual(1e-4);
+    expect(finisher.sword_min_z!).toBeGreaterThanOrEqual(BLADE_CLEARANCE_M - BLADE_TOLERANCE_M);
+    expect(finisher.min_z).toBeGreaterThanOrEqual(-1e-4);
     // The light hits' boots never leave their rest pose, on the ground (the sidecar may write it as -0.0).
     for (const light of ['attack_1', 'attack_2']) expect(Math.abs(meta.notes.clip_ground[light]!.boot_min_z!), light).toBeLessThanOrEqual(1e-4);
   });

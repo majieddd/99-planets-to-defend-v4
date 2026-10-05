@@ -9,6 +9,7 @@ import {
   groundForward,
   groundToTangent,
   isAttackClick,
+  KNOCKBACK_SWEEP_STEP,
   moveDirection,
   PLAY_AREA_RADIUS,
   PLAY_BODY_RADIUS,
@@ -25,6 +26,7 @@ import {
   runWeight,
   stepMotion,
   stickInput,
+  sweepMove,
   turnToward,
   wrapAngle,
   yawOf,
@@ -33,6 +35,8 @@ import {
   type Obstacle,
   type Vec3,
 } from '../../../src/labs/world/playMotion';
+import { DEFAULT_COMBAT_FEEL } from '../../../src/labs/world/combatFeel';
+import { COMBO_HITS, COMBO_READY, comboPhase, stepCombo, swingMotion } from '../../../src/labs/world/combo';
 import { MEMBERS, toTangent } from '../../../src/labs/world/registry';
 import { DEFAULT_DIALS } from '../../../src/render/defaults';
 import { createPaintUniforms } from '../../../src/render/materials/painted';
@@ -147,6 +151,37 @@ describe('the play prototype movement', () => {
     // into his drive, the ease restarted from it every frame and he crawled.
     const share = PLAY_SPRINT_SPEED * Math.abs(heading[0] * (-along.z / r) + heading[1] * (along.x / r));
     expect(along.speed / share).toBeGreaterThan(0.9);
+  });
+
+  it('sweeps a move in steps of at most 0.12 m and stops at the first body or edge it meets, never through one', () => {
+    expect(KNOCKBACK_SWEEP_STEP).toBe(0.12);
+    const body: Obstacle = { x: 0, z: 0, radius: 1.55 };
+    // From contact, driven 3 m straight at the body: met where the whole move ended, the point came out 1.45 m past its
+    // root, on the far side; swept, it does not move at all.
+    const endpoint = resolveObstacles(0, -1.55 + 3, 0, -1.55, [body]);
+    expect(endpoint.z).toBeGreaterThan(0);
+    const swept = sweepMove(0, -1.55, 0, 3, [body]);
+    expect(swept).toMatchObject({ blocked: true, moved: 0 });
+    expect(swept.z).toBeCloseTo(-1.55, 12);
+    // From 1 m off the body's reach, it stops on the reach's edge, on its own side.
+    const short = sweepMove(0, -2.55, 0, 3, [body]);
+    expect(short.blocked).toBe(true);
+    expect(short.z).toBeCloseTo(-1.55, 9);
+    expect(short.moved).toBeCloseTo(1, 9);
+    // Into the area's edge, it stops on the edge; on open ground it goes the whole way.
+    const out = sweepMove(20, 0, 10, 0, []);
+    expect(out).toMatchObject({ blocked: true });
+    expect(Math.hypot(out.x, out.z)).toBeCloseTo(PLAY_AREA_RADIUS, 12);
+    const open = sweepMove(0, 0, 0.5, 0.25, []);
+    expect(open).toMatchObject({ blocked: false });
+    expect([open.x, open.z]).toEqual([expect.closeTo(0.5, 12), expect.closeTo(0.25, 12)]);
+    // A body on the area's edge: pushed off it and then clamped inside the area, the point would land back inside it, so
+    // the move stops where its last free step stood.
+    const atEdge: Obstacle = { x: PLAY_AREA_RADIUS, z: 0, radius: 1 };
+    const pinned = sweepMove(PLAY_AREA_RADIUS - 1.05, 0.9, 0.3, -0.6, [atEdge]);
+    expect(pinned.blocked).toBe(true);
+    expect(Math.hypot(pinned.x - atEdge.x, pinned.z - atEdge.z)).toBeGreaterThanOrEqual(atEdge.radius - 1e-9);
+    expect(Math.hypot(pinned.x, pinned.z)).toBeLessThanOrEqual(PLAY_AREA_RADIUS + 1e-9);
   });
 
   it('turns no faster than the cap, the short way round', () => {
@@ -399,6 +434,40 @@ describe('a swing holding him back (stepMotion)', () => {
     const again = stepMotion(state, moveDirection(sprintKey, 0, 1), true, DT, [], R, active);
     expect(again.drive).toBeGreaterThan(0.4 * PLAY_WALK_SPEED);
     expect(again.drive).toBeLessThanOrEqual(0.4 * PLAY_SPRINT_SPEED);
+  });
+
+  it('brings a sprint down to a low pace kept by the active frames, where the stop rate alone entered them at 1.6 m/s', () => {
+    // At a pace kept of 0.1, from a sprint, attack_1's ceiling is 0.56 m/s. Frame by frame through its wind-up, as the
+    // page runs it (the combo first, then his movement), he must stand at or under it on the first active frame.
+    const feel = { ...DEFAULT_COMBAT_FEEL, moveScale: 0.1 };
+    const hit = COMBO_HITS[0]!;
+    const ceiling = 0.1 * PLAY_SPRINT_SPEED;
+    const stopRate = PLAY_WALK_SPEED / PLAY_SECONDS_TO_STOP;
+    let combo = stepCombo(COMBO_READY, true, DT, feel).state;
+    let state: MotionState = { x: 0, z: 0, yaw: 0, speed: PLAY_SPRINT_SPEED, drive: PLAY_SPRINT_SPEED };
+    let previous = state.drive;
+    while (comboPhase(combo) === 'windup') {
+      state = stepMotion(state, moveDirection(sprintKey, 0, 1), true, DT, [], R, swingMotion(combo, feel));
+      // Never faster than the deadline needs: the drive comes down in steps no larger than the remaining gap allows.
+      expect(previous - state.drive).toBeLessThanOrEqual(Math.max(stopRate * DT, previous - ceiling) + 1e-12);
+      previous = state.drive;
+      combo = stepCombo(combo, false, DT, feel).state;
+    }
+    expect(combo.hit!.time).toBeGreaterThanOrEqual(hit.activeFrom);
+    expect(state.drive).toBeLessThanOrEqual(ceiling + 1e-9);
+    // At the stop rate alone, which is what the wind-up had, 5.6 m/s fell only to 1.6 m/s in its 0.15 s.
+    expect(PLAY_SPRINT_SPEED - stopRate * hit.activeFrom).toBeCloseTo(1.6, 9);
+    // In the active frames he holds the ceiling with the key held.
+    const active = stepMotion(state, moveDirection(sprintKey, 0, 1), true, DT, [], R, swingMotion(combo, feel));
+    expect(active.drive).toBeCloseTo(ceiling, 9);
+    // At the default 0.4 the stop rate gets there first, so the deadline changes nothing: a frame of the stop rate.
+    const atDefault = stepMotion({ x: 0, z: 0, yaw: 0, speed: PLAY_WALK_SPEED, drive: PLAY_WALK_SPEED }, moveDirection(walkKey, 0, 1), false, DT, [], R, {
+      moveScale: 0.4,
+      turnScale: 0.5,
+      cap: false,
+      settleBy: 0.14,
+    });
+    expect(atDefault.drive).toBeCloseTo(PLAY_WALK_SPEED - stopRate * DT, 12);
   });
 
   it("holds the run's weight only while it is told to, and otherwise follows his speed", () => {

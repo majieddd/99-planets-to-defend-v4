@@ -461,13 +461,106 @@ def test_motion_spline_track_passes_its_keys_eases_its_ends_and_reads_each_part_
     right = (motion.hermite(times, values, 7.0 + 1e-6) - motion.hermite(times, values, 7.0)) / 1e-6
     assert abs(left - right) < 1e-3, (left, right)
     # Each part reads the track at its own lag, clamped to the clip: the hips 1.5 frames ahead, the shield 1.5 behind.
+    # A lead eases in over the clip's first LAG_RAMP frames, so on the first frame every part stands on the first key
+    # (the hips read frame 2.5 there, already off toward the next key, so a chained hit began 13 to 47 mm from the pose
+    # it was keyed from); from frame 1 + LAG_RAMP on, the hips read their full 1.5 frames ahead.
     guard = motion.spec(sword=((0, 0, -1),) * 3, shield=((0, 0, -1),) * 2)
     keys = [(t, {**guard, 'hips_turn': np.array([v]), 'h_up': np.array([v, 0.0, -1.0])}) for t, v in zip(times, values)]
-    for t in (1.0, 2.5, 5.0, 12.5):
+    first = motion.track_at(keys, 1.0)
+    assert abs(first['hips_turn'][0] - values[0]) < 1e-12 and abs(first['h_up'][0] - values[0]) < 1e-12, first['hips_turn']
+    for t in (2.5, 1.0 + motion.LAG_RAMP, 5.0, 12.5):
         at = motion.track_at(keys, t)
-        ahead = motion.hermite(times, values, min(max(t + motion.LAGS['hips'], 1.0), 13.0))
+        lead = motion.LAGS['hips'] * float(np.clip((t - 1.0) / motion.LAG_RAMP, 0.0, 1.0) ** 2 * (3 - 2 * np.clip((t - 1.0) / motion.LAG_RAMP, 0.0, 1.0)))
+        ahead = motion.hermite(times, values, min(max(t + lead, 1.0), 13.0))
         behind = motion.hermite(times, values, min(max(t + motion.LAGS['shield'], 1.0), 13.0))
         assert abs(at['hips_turn'][0] - ahead) < 1e-9 and abs(at['h_up'][0] - behind) < 1e-9, (t, at['hips_turn'], at['h_up'])
+    full = motion.track_at(keys, 5.0)
+    assert abs(full['hips_turn'][0] - motion.hermite(times, values, 6.5)) < 1e-9, full['hips_turn']
+    # A foot never steps under its rest height: the spline's overshoot past a set-down sank the finisher's boot 3.9 mm.
+    assert motion._grounded((0.0, -0.22, -0.004)) == (0.0, -0.22, 0.0)
+    assert motion._grounded((0.01, -0.08, 0.05)) == (0.01, -0.08, 0.05)
+    # A direction that has collapsed to nothing stops the build with what it was, where it used to aim straight down.
+    try:
+        motion._unit((0.0, 0.0, 0.0), 'the blade (s_want)')
+    except ValueError as error:
+        assert 'the blade (s_want)' in str(error), error
+    else:
+        raise AssertionError('a zero direction was taken')
+    assert motion._unit((0.0, 3.0, 4.0)) == (0.0, 0.6, 0.8)
+
+
+def test_motion_strike_window_counts_the_wind_up_from_its_own_look_back(tmp):
+    from lib import motion
+    # A right hand that moves steadily, stops at the top of its back-swing (step 12), cuts to its fastest step (15) and
+    # settles. The strike is 16, so the 18-step look-back is cut at step 0, and the slowest step was counted from
+    # s - 18 = -2 instead: the wind-up began at 7, two steps early, where it begins three before the stop, at 9.
+    def hand(speeds):
+        pos = np.zeros((len(speeds) + 1, 1, 3))
+        pos[1:, 0, 0] = np.cumsum(speeds)
+        return pos
+
+    names = ['RightHand']
+    swing = [0.05] * 12 + [0.001, 0.1, 0.3, 1.0, 0.2, 0.05, 0.02, 0.01, 0.01, 0.01, 0.01, 0.01]
+    a, s, _, _ = motion.strike_window(hand(swing), names)
+    assert (a, s) == (9, 16), (a, s)
+    # Ten steps earlier in a longer take the look-back is whole, and the start is three before the stop as it always was.
+    a2, s2, _, _ = motion.strike_window(hand([0.05] * 10 + swing), names)
+    assert (a2, s2) == (19, 26), (a2, s2)
+
+
+def test_commander_pip_combo_sources_are_checked_before_anything_is_baked(tmp):
+    from recipes import commander_pip as pip
+    for bad, word in (({'attack_1': 'hand', 'attack_2': 'mocap', 'attack_3': 'hand'}, 'mocap'), ({'attack_1': 'hand'}, 'attack_2')):
+        try:
+            pip.check_combo_sources(tmp, bad)
+        except ValueError as error:
+            assert word in str(error), error
+        else:
+            raise AssertionError(f'COMBO_SOURCE {bad} was taken')
+    # The shipped sources pass against the repository, and hand-keyed hits need no file at all.
+    pip.check_combo_sources(ROOT)
+    pip.check_combo_sources(tmp, {hit: 'hand' for hit in pip.COMBO})
+    # Two hits selecting UniMate with no generation committed: both files are named at once, before anything is baked.
+    picks = {'attack_1': 'unimate', 'attack_2': 'hand', 'attack_3': 'unimate'}
+    try:
+        pip.check_combo_sources(tmp, picks)
+    except FileNotFoundError as error:
+        assert 'attack_1.json' in str(error) and 'attack_3.json' in str(error) and 'attack_2' not in str(error), error
+    else:
+        raise AssertionError('a UniMate pick without its file was taken')
+    # A generation without a key the retarget reads, or not JSON at all, is named too.
+    folder = tmp / pip.UNIMATE_DIR
+    folder.mkdir(parents=True)
+    (folder / 'attack_1.json').write_text(json.dumps({'positions': [[[0, 0, 0]]]}), encoding='utf-8')
+    (folder / 'attack_3.json').write_text('not json', encoding='utf-8')
+    try:
+        pip.check_combo_sources(tmp, picks)
+    except FileNotFoundError as error:
+        assert "'joint_names'" in str(error) and 'attack_3.json is not JSON' in str(error), error
+    else:
+        raise AssertionError('a generation without joint_names was taken')
+    for hit in ('attack_1', 'attack_3'):
+        (folder / f'{hit}.json').write_text(json.dumps({'positions': [], 'joint_names': []}), encoding='utf-8')
+    pip.check_combo_sources(tmp, picks)
+
+
+def test_commander_pip_hand_keys_rise_inside_each_clip(tmp):
+    from recipes import commander_pip as pip
+    timings = json.loads((ROOT / 'src' / 'shared' / 'timings.json').read_text(encoding='utf-8'))
+    for hit in pip.COMBO:
+        strike, end, _ = pip.combo_timing(timings, hit)
+        times = pip.hand_key_times(hit, strike, end)
+        assert times[0] == 1.0 and abs(times[-1] - end) < 1e-9 and all(b > a for a, b in zip(times, times[1:])), (hit, times)
+    g = pip.GUARD_SPEC
+    for keys, words in (([(('1', 0), g), (('s', 1), g), (('s', 0), g), (('e', 0), g)], ('attack_1 key 2', 'rise strictly')),
+                        ([(('1', 0), g), (('s', 0), g), (('e', 2), g)], ('attack_1 key 2', 'outside the clip')),
+                        ([(('1', -1), g), (('e', 0), g)], ('attack_1 key 0', 'outside the clip'))):
+        try:
+            pip.hand_key_times('attack_1', 7.0, 17.5, {'attack_1': keys})
+        except ValueError as error:
+            assert all(word in str(error) for word in words), error
+        else:
+            raise AssertionError(f'keys {[k for k, _ in keys]} were taken')
 
 
 def test_charforge_leg_ik_moves_the_ankle_by_a_step_and_keeps_the_foot_level(tmp):
@@ -511,6 +604,14 @@ def test_charforge_leg_ik_moves_the_ankle_by_a_step_and_keeps_the_foot_level(tmp
         assert (head - want).length < 1e-4, (step, tuple(head), tuple(want))
         turned = (basis @ rest.matrix_local.to_3x3().inverted()).to_quaternion().angle
         assert turned < 1e-4, (step, turned)
+    # Hips raised 20 cm, the ankle is out of the leg's reach: the build stops with the side named, where the solve used
+    # to stretch the leg straight and leave the boot hanging short of the ground.
+    try:
+        posed_foot([('move', P + 'Hips', (0.0, 0.0, 0.2)), ('leg', 'Left')])
+    except ValueError as error:
+        assert 'Left leg' in str(error) and 'beyond' in str(error), error
+    else:
+        raise AssertionError('an ankle out of reach was taken')
 
 
 def _flat(value, shape=(4, 4)):

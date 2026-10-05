@@ -32,16 +32,19 @@ export const WORLD_FOV_DEG = 50;
 /**
  * The quality tier a page opens on: the address's `?tier=`, or the one the GPU suggests. The WebGL2 context made to ask
  * the GPU is released once it has answered: it was left to the garbage collector, holding one of the few contexts a
- * browser allows a page, beside the renderer's own.
+ * browser allows a page, beside the renderer's own. It is released in a `finally`, so a detection that throws (an odd
+ * driver string) still lets it go, where the release used to be skipped along with the rest.
  */
 export function pickTier(param: string | null): TierName {
   const parsed = parseTier(param);
   if (parsed) return parsed;
   const probe = document.createElement('canvas').getContext('webgl2');
   if (!probe) return 'low';
-  const tier = detectTier(probe, navigator.userAgent);
-  probe.getExtension('WEBGL_lose_context')?.loseContext();
-  return tier;
+  try {
+    return detectTier(probe, navigator.userAgent);
+  } finally {
+    probe.getExtension('WEBGL_lose_context')?.loseContext();
+  }
 }
 
 export interface PaintedStageOptions {

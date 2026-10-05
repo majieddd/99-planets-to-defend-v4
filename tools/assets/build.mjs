@@ -141,7 +141,10 @@ try {
 } catch (error) {
   fail('while publishing; public/assets/manifest.json is removed until a build passes, so assets:check fails:', error);
 }
-if (previews) await composeSheets(PREVIEWS, SHEETS);
+if (previews) {
+  const { warnings } = await composeSheets(PREVIEWS, SHEETS);
+  for (const warning of warnings) console.log(`assets: WARNING ${warning}`);
+}
 const failed = results.filter((r) => !r.ok).map((r) => r.name);
 console.log(`assets: built=${built.size} failed=${failed.length}${failed.length ? ` (${failed.join(', ')})` : ''} manifest=${staged.manifest.assets.length}`);
 if (failed.length) process.exit(1);

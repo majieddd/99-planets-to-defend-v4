@@ -383,8 +383,40 @@ describe('the combo chain', () => {
     expect(past.started).toBe(2);
     expect(past.state.hit).toMatchObject({ step: 2, time: 0, crossfaded: true, chainedAt: 0.4 });
     expect(past.state.outgoing!.weight).toBe(ownWeight(HIT1, 0.4, hitFades(false, FEEL), 1 / 60));
-    // A press the buffer would drop is dropped on a held clock too.
-    expect(stepCombo({ ...COMBO_READY, hit: hitAt(1, 0.05) }, true, 0, FEEL, 1 / 60).press).toBe('dropped');
+    // A second press while one is kept is dropped on a held clock too.
+    expect(stepCombo({ ...inBuffer, queued: true }, true, 0, FEEL, 1 / 60).press).toBe('dropped');
+  });
+
+  it('keeps a press made in a hit-stop whatever the buffer, and starts the next hit with it at the cancel point once the clock resumes', () => {
+    // At a buffer of 0.05 s a light hit keeps a press only from 0.25 s in. A press on a moving frame at the strike, 0.2 s
+    // in, is dropped as before; the same press in the stop that the strike's contact begins is kept.
+    const tight = { ...FEEL, buffer: 0.05 };
+    const atStrike: ComboState = { ...COMBO_READY, hit: hitAt(1, HIT1.strike, { struck: true }) };
+    expect(bufferOpensAt(HIT1, tight.buffer)).toBeCloseTo(0.25, 12);
+    expect(stepCombo(atStrike, true, 1 / 60, tight).press).toBe('dropped');
+    const inStop = stepCombo(atStrike, true, 0, tight, 1 / 60);
+    expect(inStop.press).toBe('queued');
+    expect(inStop.state.queued).toBe(true);
+    // Held for the stop's frames, nothing moves; then the clock runs and the kept press starts attack_2 exactly at
+    // attack_1's cancel point, the step it takes the hit there carried in, as any kept press does.
+    let state = inStop.state;
+    for (let i = 0; i < 3; i++) {
+      const frame = stepCombo(state, false, 0, tight, 1 / 60);
+      expect(frame.state.hit!.time).toBe(HIT1.strike);
+      state = frame.state;
+    }
+    const resumed = play(state, 20, [1 / 60], () => false, tight);
+    const second = resumed.find((frame) => frame.started !== null)!;
+    expect(second.started).toBe(2);
+    expect(second.state.hit!.chainedAt).toBe(HIT1.cancel);
+    expect(second.state.hit!.time).toBeLessThan(1 / 60);
+    // In the finisher's stop, a press is kept for a new chain at its end, and the finisher's recovery plays out first.
+    const finisherStop = stepCombo({ ...COMBO_READY, hit: hitAt(3, HIT3.strike, { struck: true }) }, true, 0, tight, 1 / 60);
+    expect(finisherStop.press).toBe('queued');
+    const after = play(finisherStop.state, 60, [1 / 60], () => false, tight);
+    const next = after.find((frame) => frame.started !== null)!;
+    expect(next.started).toBe(1);
+    expect(next.state.hit!.chainedAt).toBe(HIT3.duration);
   });
 
   it('plays each hit with the fades it began with, so a slider moved mid-hit changes the next hit and not this one', () => {
@@ -475,7 +507,8 @@ describe('how a hit holds him back', () => {
   it('slows a light hit from its start to its cancel point, locks his facing from its active frames, and plants the finisher', () => {
     const at = (step: ComboStep, time: number): ComboState => ({ ...COMBO_READY, hit: hitAt(step, time) });
     expect(swingMotion(COMBO_READY, FEEL)).toBe(FREE_MOTION);
-    expect(swingMotion(at(1, 0.05), FEEL)).toEqual({ moveScale: FEEL.moveScale, turnScale: FEEL.windupTurn, cap: false });
+    // In the wind-up his drive must reach the hit's share by its active frames, 0.1 s on from 0.05 s in.
+    expect(swingMotion(at(1, 0.05), FEEL)).toEqual({ moveScale: FEEL.moveScale, turnScale: FEEL.windupTurn, cap: false, settleBy: expect.closeTo(HIT1.activeFrom - 0.05, 12) });
     expect(swingMotion(at(1, 0.2), FEEL)).toEqual({ moveScale: FEEL.moveScale, turnScale: 0, cap: true });
     // Between the active frames and the cancel point the pace stays reduced, so a chain runs at one even pace.
     expect(swingMotion(at(2, 0.29), FEEL)).toEqual({ moveScale: FEEL.moveScale, turnScale: 0, cap: false });

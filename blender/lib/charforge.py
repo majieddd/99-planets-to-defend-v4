@@ -2381,8 +2381,8 @@ def pose_rotations(arm, ops):
     twists it so a direction carried by a child (given in the rest pose, such as a blade's axis) points as close to
     `want` as the twist allows; ('move', bone, offset) translates a bone (the hips) in world space; ('leg', side[,
     offset]) solves that leg's thigh and shin as a two-bone chain so its ankle stays on its rest position (or that
-    position moved by `offset`, world metres, for a step), the knee bending forward, and puts the foot back at its rest
-    orientation, so the boot stays planted however the hips move.
+    position moved by `offset`, in metres in the armature's own space, as the rest position is, for a step), the knee
+    bending forward, and puts the foot back at its rest orientation, so the boot stays planted however the hips move.
     A moved bone's offset comes back as '<bone>@loc' (its local translation), as lib/anim's poses carry it.
     Children follow their parents, so a torso turn carries the arms, and a later 'aim'
     of an arm is absolute again. Mixamo bones have different local axes bone to bone, which makes Euler angles hard to
@@ -2443,10 +2443,13 @@ def pose_rotations(arm, ops):
 
 
 def _solve_leg(arm, side, offset=None):
-    """Two-bone IK for one Mixamo leg ('Left' or 'Right'): the ankle on its rest position, or moved by `offset` (world
-    metres) for a step such as the finisher's (recipes/commander_pip.py), the knee in the plane of the hip, the ankle and
-    the forward direction, then the foot at its rest orientation. The ankle can only be reached while the hip is no
-    further from it than the leg's length, so callers lower the hips, never raise them."""
+    """Two-bone IK for one Mixamo leg ('Left' or 'Right'): the ankle on its rest position, or moved by `offset` (metres
+    in the armature's own space, where the rest position is read) for a step such as the finisher's
+    (recipes/commander_pip.py), the knee in the plane of the hip, the ankle and the forward direction, then the foot at
+    its rest orientation. The ankle can only be reached while the hip is no further from it than the leg's length, so
+    callers lower the hips, never raise them, and a pose that leaves an ankle out of reach by more than a millimetre
+    stops the build with the side and the shortfall named: the solve used to stretch the leg straight toward it and
+    leave the boot short of where it should stand, hanging off the ground or off its step, with nothing said."""
     up, lo, ft = (arm.pose.bones[f'{P}{side}{n}'] for n in ('UpLeg', 'Leg', 'Foot'))
     rest = arm.data.bones
     hip = up.head.copy()
@@ -2456,6 +2459,9 @@ def _solve_leg(arm, side, offset=None):
     l1 = (rest[lo.name].head_local - rest[up.name].head_local).length
     l2 = (rest[ft.name].head_local - rest[lo.name].head_local).length
     d = ankle - hip
+    if d.length > l1 + l2 + 1e-3:
+        raise ValueError(f"{side} leg: the ankle target is {d.length:.4f} m from the hip, beyond the leg's {l1 + l2:.4f} m "
+                         f'by {(d.length - l1 - l2) * 1000:.1f} mm, so the boot cannot reach it; lower the hips or shorten the step')
     dist = min(max(d.length, 1e-4), l1 + l2 - 1e-5)
     u = d.normalized()
     a = (l1 * l1 - l2 * l2 + dist * dist) / (2 * dist)

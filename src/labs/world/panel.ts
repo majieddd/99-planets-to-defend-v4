@@ -59,32 +59,63 @@ export interface CombatFeelHandlers {
  * and, before this covered every such control, after the labels or pause checkbox or the quality tier, where with the
  * dropdown focused the arrow keys changed the tier instead of moving him. A keyboard's activation keeps the focus where
  * the keyboard put it: blurring there too, as the first fix did, threw a keyboard user's place in the panel away. A
- * pointer press anywhere in the panel marks the next change as the pointer's and a key marks it as the keyboard's, both
- * read before lil-gui's own listeners stop the event. The mark lasts for one change only, and goes when the focus leaves
- * the panel: it used to stay up after the change it was for, so after any press in the panel (a slider, the title) a
- * later change with no key before it, such as a screen reader's activation of a checkbox, was taken for the pointer's
- * and threw that reader's place in the panel away.
+ * pointer press in the panel marks what it landed on and a key clears the mark, both read before lil-gui's own
+ * listeners stop the event, and a change counts as the pointer's only when the control that changed holds what the press
+ * landed on (PointerMark). The mark lasts for one change only, and goes when the focus leaves the panel: it used to stay
+ * up after the change it was for, so after any press in the panel (a slider, the title) a later change with no key
+ * before it, such as a screen reader's activation of a checkbox, was taken for the pointer's and threw that reader's
+ * place in the panel away. And a press on one control used to mark a change of any other: a press on the title, then a
+ * screen reader's activation of a checkbox in the same breath, blurred the checkbox.
  *
  * lil-gui's GUI.onChange is a single slot, so this takes the root's: a page that sets its own root change handler after
  * this replaces it, and would have to call through to it.
  */
 export function handFocusBack(gui: GUI): void {
-  let byPointer = false;
-  gui.domElement.addEventListener('pointerdown', () => (byPointer = true), { capture: true });
-  gui.domElement.addEventListener('keydown', () => (byPointer = false), { capture: true });
+  const mark = createPointerMark();
+  gui.domElement.addEventListener('pointerdown', (event) => mark.press(event.target), { capture: true });
+  gui.domElement.addEventListener('keydown', () => mark.clear(), { capture: true });
   // Only when the focus leaves the panel: within it, a press moves the focus from one control to the next after the
   // pointerdown that marked it, and clearing then would lose the mark before its change.
   gui.domElement.addEventListener('focusout', (event) => {
-    if (!(event.relatedTarget instanceof Node && gui.domElement.contains(event.relatedTarget))) byPointer = false;
+    if (!(event.relatedTarget instanceof Node && gui.domElement.contains(event.relatedTarget))) mark.clear();
   });
   gui.onChange(({ controller }) => {
-    const pointer = byPointer;
-    byPointer = false;
+    const pointer = mark.take((pressed) => pressed instanceof Node && controller.domElement.contains(pressed));
     if (!pointer) return;
     if (!(controller instanceof BooleanController || controller instanceof OptionController || controller instanceof FunctionController)) return;
     const active = document.activeElement;
     if (active instanceof HTMLElement && gui.domElement.contains(active)) active.blur();
   });
+}
+
+/** What a pointer press in the panel landed on, kept for the one change it may have made (handFocusBack). */
+export interface PointerMark {
+  /** A pointer pressed on `target`. */
+  press(target: unknown): void;
+  /** A key was pressed, or the focus left the panel: the next change is not the pointer's. */
+  clear(): void;
+  /**
+   * Whether a change was the pointer's: a press is marked and the control that changed holds what it landed on
+   * (`holds`). The mark goes either way, so it serves one change only.
+   */
+  take(holds: (pressed: unknown) => boolean): boolean;
+}
+
+export function createPointerMark(): PointerMark {
+  let pressed: unknown = null;
+  return {
+    press(target) {
+      pressed = target ?? null;
+    },
+    clear() {
+      pressed = null;
+    },
+    take(holds) {
+      const was = pressed;
+      pressed = null;
+      return was !== null && holds(was);
+    },
+  };
 }
 
 /** The combat feel folder's handle: redraws its sliders and its readout from the settings. */

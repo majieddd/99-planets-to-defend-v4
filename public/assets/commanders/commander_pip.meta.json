@@ -135,14 +135,14 @@
       "attack_2": {
         "offset_m": 0.0,
         "boot_min_z": -0.0,
-        "sword_min_z": 0.3865,
+        "sword_min_z": 0.3818,
         "min_z": -0.0
       },
       "attack_3": {
         "offset_m": 0.0,
-        "boot_min_z": -0.0039,
-        "sword_min_z": -0.0044,
-        "min_z": -0.0044
+        "boot_min_z": -0.0,
+        "sword_min_z": 0.0195,
+        "min_z": -0.0
       }
     },
     "combo": {
@@ -198,12 +198,12 @@
           "blade_body_overlaps": 0,
           "frames_crossing_shield": [],
           "frames_blade_in_body": [],
-          "min_z": -0.0044,
-          "boot_shift_mm": 229.06,
+          "min_z": -0.0,
+          "boot_shift_mm": 229.05,
           "strike_blade_tip": {
-            "z": 0.404,
-            "y": -1.353,
-            "x": -0.014
+            "z": 0.402,
+            "y": -1.352,
+            "x": -0.018
           }
         },
         "blade": {

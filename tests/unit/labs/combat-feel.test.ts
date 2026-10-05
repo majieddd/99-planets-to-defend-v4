@@ -11,6 +11,7 @@ import {
   snapFeel,
 } from '../../../src/labs/world/combatFeel';
 import { frameStep, MAX_FRAME_STEP, WORLD_FOV_DEG } from '../../../src/labs/shared/paintedStage';
+import { createPointerMark } from '../../../src/labs/world/panel';
 
 describe('the combat feel settings', () => {
   it("follow the ranges' order, which the folder shows, and hold every default inside its range on a step", () => {
@@ -58,6 +59,34 @@ describe("a page's combat feel from its address", () => {
     const feel = feelFromAddress(new URLSearchParams({ feel: '{"crossfade":0.15,"lunge":1}' }), report);
     expect(feel).toEqual({ ...defaultCombatFeel(), crossfade: 0.15 });
     expect(said).toEqual([`Combat feel: skipped lunge in the address; using ${combatFeelJson(feel)}`]);
+  });
+});
+
+describe("the panel's pointer mark (labs/world/panel.ts, handFocusBack)", () => {
+  // Stand-ins for the panel's elements: a control holds what a press landed on when the press landed inside it.
+  const checkbox = { inside: new Set(['checkbox', 'checkbox label']) };
+  const holds = (control: { inside: Set<string> }) => (pressed: unknown) => control.inside.has(pressed as string);
+
+  it('counts a change as the pointer\'s only when the control that changed holds what the press landed on, once', () => {
+    const mark = createPointerMark();
+    // No press: a screen reader's activation keeps its place.
+    expect(mark.take(holds(checkbox))).toBe(false);
+    // A press on the checkbox's label, then its change: the pointer's.
+    mark.press('checkbox label');
+    expect(mark.take(holds(checkbox))).toBe(true);
+    // The mark served that one change: the next change, with no press before it, is not the pointer's.
+    expect(mark.take(holds(checkbox))).toBe(false);
+    // A press on the panel's title, then a change of the checkbox: not the pointer's, where any press used to mark any
+    // change and blurred a screen reader's checkbox.
+    mark.press('title');
+    expect(mark.take(holds(checkbox))).toBe(false);
+    // A key between the press and the change, or the focus leaving the panel, clears the mark.
+    mark.press('checkbox');
+    mark.clear();
+    expect(mark.take(holds(checkbox))).toBe(false);
+    // A press on nothing marks nothing.
+    mark.press(null);
+    expect(mark.take(() => true)).toBe(false);
   });
 });
 

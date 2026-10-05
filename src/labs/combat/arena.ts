@@ -89,9 +89,9 @@ export function fromBody(x: number, z: number, yaw: number, toX: number, toZ: nu
  * The opening camera's pitch above his horizon, in degrees, straight behind him. At the Asset World's 16 degrees his
  * body hid the middle dummy whole: the line over his head met the dummy 1.31 m up, and a Husk stands lower. At 30 it
  * meets the dummy 0.48 m up, so the Husk's back shows over his shoulders (its eyes, on the face turned to him, do not),
- * while the horizon and the planet's curve stay in the frame's top. Turning the camera off his back instead, over a shoulder, showed the dummy beside him
- * but turned W off his facing by the same angle, since W runs up the screen: he veered off the dummy he faced. The
- * follow and the orbit take over from this framing as in the world.
+ * while the horizon and the planet's curve stay in the frame's top. Turning the camera off his back instead, over a
+ * shoulder, showed the dummy beside him but turned W off his facing by the same angle, since W runs up the screen: he
+ * veered off the dummy he faced. The follow and the orbit take over from this framing as in the world.
  */
 export const ARENA_CAMERA_PITCH_DEG = 30;
 

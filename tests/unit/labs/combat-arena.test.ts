@@ -31,7 +31,7 @@ const MEASURED_HUSK_REACH = 1.2;
 const HUSK_REACH = MEASURED_HUSK_REACH / 2;
 /**
  * How far across the ground from his root each hit's blade tip reaches at its strike, from his build's own measure of
- * each combo clip (the sidecar's strike_blade_tip, Blender's -y ahead): 1.144, 1.484 and 1.353 m. The shortest must reach
+ * each combo clip (the sidecar's strike_blade_tip, Blender's -y ahead): 1.144, 1.484 and 1.352 m. The shortest must reach
  * the middle dummy's body from where W stops him, and the longest must not reach a neighbour's from there. It read the
  * attack clip's 1.12 m while placeholders warped that clip for every hit.
  */
@@ -85,7 +85,7 @@ describe('the combat arena layout', () => {
     // within the longest blade's reach of its body, and no swing from there reaches a neighbour unstepped.
     const stand = { lateral: 0, ahead: ARENA_DUMMY_DISTANCE - MEASURED_HUSK_REACH - PLAY_BODY_RADIUS };
     expect(stand.ahead).toBeCloseTo(1.45, 9);
-    expect(BLADE_REACHES).toEqual([expect.closeTo(1.144, 3), expect.closeTo(1.484, 3), expect.closeTo(1.353, 3)]);
+    expect(BLADE_REACHES).toEqual([expect.closeTo(1.144, 3), expect.closeTo(1.484, 3), expect.closeTo(1.352, 3)]);
     expect(ARENA_DUMMY_DISTANCE - stand.ahead - HUSK_REACH).toBeLessThan(Math.min(...BLADE_REACHES));
     const next = Math.hypot(frame[2]!.lateral - stand.lateral, frame[2]!.ahead - stand.ahead);
     expect(next).toBeCloseTo(2.4883, 4);
@@ -107,8 +107,17 @@ describe('the combat arena layout', () => {
     expect(Math.abs(fromBody(spawn.x, spawn.z, spawn.yaw, spawn.x + bearing.x, spawn.z + bearing.z).angleDeg)).toBeCloseTo(180, 9);
     // 30 degrees, where the sightline over his head meets the middle dummy 0.48 m up, against 1.31 m at the world's 16
     // (the blueprint's Combat arena row, worked from his 1.1 m chest, 1.78 m head and the camera 5.5 m from his chest).
+    // The pins hold the numbers and the sightline is worked out beside them, so a change to either shows here.
     expect(ARENA_CAMERA_PITCH_DEG).toBe(30);
     expect(PLAY_CAMERA_DISTANCE).toBe(5.5);
+    const overHead = (pitchDeg: number): number => {
+      const pitch = (pitchDeg * Math.PI) / 180;
+      const up = 1.1 + PLAY_CAMERA_DISTANCE * Math.sin(pitch);
+      const back = PLAY_CAMERA_DISTANCE * Math.cos(pitch);
+      return 1.78 - ((up - 1.78) / back) * ARENA_DUMMY_DISTANCE;
+    };
+    expect(overHead(ARENA_CAMERA_PITCH_DEG)).toBeCloseTo(0.48, 2);
+    expect(overHead(16)).toBeCloseTo(1.31, 2);
     const lens = (aspect: number): ArenaLens => ({
       fovDeg: 50,
       aspect,
@@ -124,7 +133,12 @@ describe('the combat arena layout', () => {
     expect(arenaCameraDistance(dummies, lens(844 / 390))).toBe(PLAY_CAMERA_DISTANCE);
     // A square screen opens 7.29 m back, between the play camera's distance and the wheel's greatest; a 4:3 one keeps
     // the play camera's 5.5 m; a phone held upright, the wheel's greatest, 16 m.
-    expect(arenaCameraDistance(dummies, lens(1))).toBeCloseTo(7.2936, 4);
+    const square = arenaCameraDistance(dummies, lens(1));
+    expect(square).toBeCloseTo(7.2936, 4);
+    // At the square screen's distance the outer dummies' reaches stand at FIT_NDC across by the fit's own reckoning.
+    const across = FIT_NDC * Math.tan((25 * Math.PI) / 180);
+    const pitch = (ARENA_CAMERA_PITCH_DEG * Math.PI) / 180;
+    for (const outer of [dummies[0]!, dummies[2]!]) expect((Math.abs(outer.lateral) + outer.reach) / (square + outer.ahead * Math.cos(pitch))).toBeCloseTo(across, 9);
     expect(arenaCameraDistance(dummies, lens(4 / 3))).toBe(5.5);
     expect(arenaCameraDistance(dummies, lens(390 / 844))).toBe(16);
     expect([PLAY_CAMERA_DISTANCE, PLAY_CAMERA_MAX_DISTANCE]).toEqual([5.5, 16]);

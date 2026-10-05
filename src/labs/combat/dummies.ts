@@ -5,7 +5,7 @@ import { syncHullMorphs } from '../../render/ink/hull';
 import { place, type Ground } from '../../render/terrain/place';
 import type { ComboStep } from '../world/combo';
 import { groundReach } from '../world/play';
-import { clampToArea, PLAY_BODY_RADIUS, resolveObstacles, type Obstacle } from '../world/playMotion';
+import { PLAY_BODY_RADIUS, sweepMove, type Obstacle } from '../world/playMotion';
 import { LEAN } from '../world/registry';
 import type { GroundPose } from './arena';
 
@@ -68,11 +68,14 @@ export interface TrainingDummies {
   /** Adds a listener called after every reset, once all the dummies are home; returns the call that removes it. */
   onReset(listener: () => void): () => void;
   /**
-   * Knocks a dummy `dx` and `dz` metres across the tangent plane: it stops at another dummy's body and at Pip's (each
-   * dummy's reach and the other's, or its reach widened by PLAY_BODY_RADIUS, as he walks round it), and inside his play
-   * area. Returns where it ends. The bodies are met where the push ends, as a frame of Pip's own movement meets them
-   * (resolveObstacles), so a push longer than a body is wide (3.1 m past Pip, 4.7 m past a dummy) could carry a dummy
-   * through it; phase B's knockback moves a dummy a little on each frame.
+   * Knocks a dummy `dx` and `dz` metres across the tangent plane, swept in steps of at most KNOCKBACK_SWEEP_STEP
+   * (sweepMove, playMotion.ts): each step is met against another dummy's body and Pip's (each dummy's reach and the
+   * other's, or its reach widened by PLAY_BODY_RADIUS, as he walks round it) and then held inside his play area, and the
+   * push stops at the first step either holds back, as the blueprint's knockback stops at illegal edges. Returns where it
+   * ends. The bodies used to be met only where the whole push ended, so a dummy touching Pip and driven straight at him
+   * came out on his far side once the push passed its reach and his body, about 1.55 m (the old note said 3.1 m, his
+   * body's width plus the dummy's, but it only had to pass half of that), and the area's clamp, which ran after the
+   * bodies, could put a dummy pushed out of Pip at the edge back into him.
    */
   push(index: number, dx: number, dz: number): GroundPose;
   /**
@@ -116,7 +119,7 @@ export function createTrainingDummies(
   hullMaterial: unknown,
   homes: readonly GroundPose[],
   names: readonly string[],
-  pip: () => { x: number; z: number } | null = () => null,
+  pip: () => Readonly<{ x: number; z: number }> | null = () => null,
 ): TrainingDummies | null {
   const idle = asset.animations.find((clip) => clip.name === DUMMY_IDLE);
   if (!idle) return null;
@@ -125,6 +128,8 @@ export function createTrainingDummies(
   const mixers: AnimationMixer[] = [];
   // Pip's obstacles, one per dummy, kept in step with where each stands (sync), so he reads one list every frame.
   const obstacleList: Obstacle[] = [];
+  // What a push is met against (push), one slot per dummy, rewritten in place on every push.
+  const bodies: Obstacle[] = homes.map(() => ({ x: 0, z: 0, radius: 0 }));
 
   const list = homes.map((home, index): TrainingDummy => {
     const root = cloneRig(asset.root);
@@ -198,14 +203,25 @@ export function createTrainingDummies(
     },
     push(index, dx, dz) {
       const dummy = list[index]!;
-      const from = dummy.pose();
-      // The other dummies by both bodies' reaches, and Pip by the dummy's reach widened by his body, as he walks round it.
-      const bodies: Obstacle[] = list.filter((other) => other !== dummy).map((other) => ({ ...other.pose(), radius: dummy.reach + other.reach }));
-      const at = pip();
-      if (at) bodies.push({ x: at.x, z: at.z, radius: dummy.reach + PLAY_BODY_RADIUS });
-      const free = resolveObstacles(from.x + dx, from.z + dz, from.x, from.z, bodies);
-      const kept = clampToArea(free.x, free.z);
-      dummy.moveTo({ x: kept.x, z: kept.z, yaw: from.yaw });
+      const from = obstacleList[index]!;
+      // The other dummies by both bodies' reaches, and Pip, in the dummy's own slot, by its reach widened by his body,
+      // as he walks round it; with Pip not out his slot has no reach and stops nothing. The list is reused, so a
+      // knockback that pushes on every frame builds nothing.
+      list.forEach((other, i) => {
+        const body = bodies[i]!;
+        if (other !== dummy) {
+          body.x = obstacleList[i]!.x;
+          body.z = obstacleList[i]!.z;
+          body.radius = dummy.reach + other.reach;
+          return;
+        }
+        const at = pip();
+        body.x = at ? at.x : 0;
+        body.z = at ? at.z : 0;
+        body.radius = at ? dummy.reach + PLAY_BODY_RADIUS : 0;
+      });
+      const kept = sweepMove(from.x, from.z, dx, dz, bodies);
+      dummy.moveTo({ x: kept.x, z: kept.z, yaw: dummy.pose().yaw });
       return dummy.pose();
     },
     obstacles: () => obstacleList,

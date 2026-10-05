@@ -237,10 +237,10 @@ HAND = {
                                sword=((-0.15, -0.92, -0.36), (-0.05, -0.85, -0.52), (0.05, -0.7, -0.71)),
                                shield=((0.85, 0.1, -0.5), (0.45, -0.75, -0.45)), step_l=(0.0, -0.22, 0.0))),
         (('s', 3), motion.spec(hips_off=(0.02, -0.14, -0.1), hips_turn=0.2, torso=(0.25, 0.4), head=(-0.08, 0.18),
-                               sword=((-0.05, -0.8, -0.6), (0.05, -0.7, -0.71), (0.15, -0.6, -0.78)),
+                               sword=((-0.05, -0.8, -0.6), (0.05, -0.7, -0.71), (0.15, -0.66, -0.73)),
                                shield=((0.85, 0.15, -0.5), (0.45, -0.7, -0.55)), step_l=(0.0, -0.22, 0.0))),
         (('e', -8), motion.spec(hips_off=(0.015, -0.12, -0.09), hips_turn=0.15, torso=(0.2, 0.34), head=(-0.06, 0.15),
-                                sword=((-0.08, -0.8, -0.6), (0.03, -0.7, -0.71), (0.12, -0.62, -0.77)),
+                                sword=((-0.08, -0.8, -0.6), (0.03, -0.7, -0.71), (0.12, -0.68, -0.72)),
                                 shield=((0.8, 0.1, -0.58), (0.4, -0.75, -0.5)), step_l=(0.0, -0.22, 0.0))),
         (('e', -4), motion.spec(hips_off=(0.0, -0.05, -0.05), hips_turn=0.05, torso=(0.08, 0.15), head=(0.0, 0.08),
                                 sword=((-0.15, -0.3, -0.94), (-0.05, -0.6, -0.8), (0.0, -0.8, -0.6)),
@@ -273,25 +273,41 @@ def combo_timing(timings, attack):
     return 1 + entry['strike'] * anim.FPS, 1 + entry['duration'] * anim.FPS, None if cancel is None else 1 + cancel * anim.FPS
 
 
+def hand_key_times(attack, strike_frame, end_frame, hand=None):
+    """Each of a hand-keyed hit's key times in frames, checked: they must rise strictly and lie inside the clip, from
+    frame 1 to its end. A key out of order or outside the clip used to reach the spline as it was, which reads a key out
+    of order as a curve that doubles back and holds a key past the end at the end pose, so a strike key moved past its
+    neighbour, or past a timing change that shortened the hit, built a clip that quietly played something else."""
+    keys = (hand or HAND)[attack]
+    times = [_key_time(at, strike_frame, end_frame) for at, _ in keys]
+    for i, ((base, offset), t) in enumerate(zip([at for at, _ in keys], times)):
+        if not 1.0 - 1e-6 <= t <= end_frame + 1e-6:
+            raise ValueError(f"{attack} key {i} ('{base}' {offset:+g} frames) falls at frame {t:.2f}, outside the clip's frames 1 to {end_frame:.2f}")
+        if i and t <= times[i - 1] + 1e-6:
+            prev_base, prev_offset = keys[i - 1][0]
+            raise ValueError(f"{attack} key {i} ('{base}' {offset:+g} frames, frame {t:.2f}) does not come after key {i - 1} "
+                             f"('{prev_base}' {prev_offset:+g} frames, frame {times[i - 1]:.2f}): key times must rise strictly")
+    return times
+
+
 def hand_spec_at(attack, frames, start=None):
     """spec_at(frame) for a hand-keyed hit; frames = {hit: (strike, end, cancel)}, and `start` the pose its first key
     takes when HAND leaves that key to the hit before it."""
     strike_frame, end_frame, _ = frames[attack]
     first = start if start is not None else GUARD_SPEC
-    keys = [(_key_time(k, strike_frame, end_frame), first if sp is None else sp) for k, sp in HAND[attack]]
+    times = hand_key_times(attack, strike_frame, end_frame)
+    keys = [(t, first if sp is None else sp) for t, (_, sp) in zip(times, HAND[attack])]
     return lambda f: motion.track_at(keys, f)
 
 
 def unimate_spec_at(ctx, attack, arm, frames, start=None):
     """The stored UniMate generation retimed to the hit's contract and blended out of and back into the guard; the
     finisher's step stays the designed one. The generation is read from the repository, never from UniMate or a
-    scratch folder, so the build keeps to the repository and Blender; selected without its file, it stops the build."""
+    scratch folder, so the build keeps to the repository and Blender; selected without its file, or with one that lacks
+    `positions` or `joint_names`, check_combo_sources stops the build before any hit is baked."""
     import json
+    # check_combo_sources, at the top of build_combo, has already held the file and its keys to this.
     path = ctx.root / UNIMATE_DIR / f'{attack}.json'
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"COMBO_SOURCE selects 'unimate' for {attack}, but {UNIMATE_DIR}/{attack}.json is not in the repository: commit the "
-            f"generation's joint positions there, or set {attack} back to 'hand'")
     data = json.loads(path.read_text(encoding='utf-8'))
     strike_frame, end_frame, _ = frames[attack]
     pos = np.array(data['positions'], float)
@@ -311,13 +327,45 @@ def unimate_spec_at(ctx, attack, arm, frames, start=None):
     return at
 
 
+def check_combo_sources(root, sources=None):
+    """Stops the build before anything is baked unless COMBO_SOURCE gives each hit 'hand' or 'unimate' and every hit
+    that selects 'unimate' has its generation in the repository with the `positions` and `joint_names` it is read from,
+    naming every fault at once. The file was looked for only when its hit came to be baked, so a missing finisher
+    generation stopped the build after the two light hits had been baked and measured, and a file without either key
+    stopped it with a bare KeyError."""
+    import json
+    sources = COMBO_SOURCE if sources is None else sources
+    unknown = {k: v for k, v in sources.items() if v not in ('hand', 'unimate')}
+    if unknown or set(sources) != set(COMBO):
+        raise ValueError(f"COMBO_SOURCE must give each of {', '.join(COMBO)} 'hand' or 'unimate', not {sources}")
+    faults = []
+    for attack in COMBO:
+        if sources[attack] != 'unimate':
+            continue
+        path = root / UNIMATE_DIR / f'{attack}.json'
+        if not path.is_file():
+            faults.append(f"COMBO_SOURCE selects 'unimate' for {attack}, but {UNIMATE_DIR}/{attack}.json is not in the repository: "
+                          f"commit the generation's joint positions there, or set {attack} back to 'hand'")
+            continue
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+        except ValueError as error:
+            faults.append(f'{UNIMATE_DIR}/{attack}.json is not JSON ({error})')
+            continue
+        missing = [key for key in ('positions', 'joint_names') if not isinstance(data, dict) or key not in data]
+        if missing:
+            faults.append(f"{UNIMATE_DIR}/{attack}.json has no {' or '.join(repr(key) for key in missing)}, which the retarget reads")
+    if faults:
+        raise FileNotFoundError('; '.join(faults))
+
+
 def build_combo(ctx, arm, body, armour, blade):
     """attack_1 to attack_3 baked in chain order, each checked (the shield pushed clear where the sword would cross it)
     and measured, and each chained hit started from the pose the hit before it plays at its cancel frame. Returns
-    {hit: (action, strike frame, cancel frame or None, checks, blade speed)}."""
-    unknown = {k: v for k, v in COMBO_SOURCE.items() if v not in ('hand', 'unimate')}
-    if unknown or set(COMBO_SOURCE) != set(COMBO):
-        raise ValueError(f"COMBO_SOURCE must give each of {', '.join(COMBO)} 'hand' or 'unimate', not {COMBO_SOURCE}")
+    {hit: (action, strike frame, cancel frame or None, checks, blade speed)}. Stops the build when a hit still sends the
+    blade through the shield or the body after the shield fix's tries: the checks used to be recorded and nothing failed,
+    so only the sidecar test caught it, after the GLB had been written."""
+    check_combo_sources(ctx.root)
     timings = ctx.timings()
     frames = {attack: combo_timing(timings, attack) for attack in COMBO}
     played = {}
@@ -332,6 +380,10 @@ def build_combo(ctx, arm, body, armour, blade):
         strike_frame, end_frame, cancel = frames[attack]
         action = motion.bake(arm, attack, at, end_frame, strike_frame, blade)
         action, checks, played[attack] = motion.shield_fix(arm, body, armour, action, strike_frame, at, end_frame, blade, attack)
+        if checks['sword_shield_overlaps'] > 0 or checks['blade_body_overlaps'] > 0:
+            raise ValueError(f"{attack}: the sword still crosses the shield ({checks['sword_shield_overlaps']} overlaps, frames "
+                             f"{checks['frames_crossing_shield']}) or the body ({checks['blade_body_overlaps']} overlaps, frames "
+                             f"{checks['frames_blade_in_body']}) after the shield fix")
         out[attack] = (action, strike_frame, cancel, checks, motion.blade_speed(arm, armour, action, strike_frame))
     return out
 
@@ -342,6 +394,10 @@ def build(ctx, source=SOURCE, name=NAME):
     # The attack's contract is Pip's own entry in src/shared/timings.json, which assets:check holds the exported clip to.
     # It once fell back to the Bulwark's entry while Pip had none, and a missing entry now stops the build instead.
     timing = ctx.timings()['commanders'][NAME]['attack']
+    # The preview folder is emptied now (BuildContext.preview_dir), so a build that stops part way leaves no renders of
+    # an older build behind for the contact sheet to take for this one's.
+    if ctx.previews_enabled:
+        ctx.preview_dir(name)
     strike_frame = 1 + timing['strike'] * anim.FPS
     end_frame = 1 + timing['duration'] * anim.FPS
     s = charforge.settings(PIP)

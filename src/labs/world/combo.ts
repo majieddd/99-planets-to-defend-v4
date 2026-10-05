@@ -6,11 +6,11 @@
  * Commander combat), not that controller.
  *
  * Time comes in only as each frame's step, as the simulation's time will. A step of 0 moves no time, but a press on it
- * still counts: it starts a hit at its first moment or is kept for the next, exactly as on a moving frame. That is the
- * seam phase B's hit-stop needs, which holds the combo's clock at 0 for a few frames on contact while the player keeps
- * pressing: a press made in the stop must still chain the next hit. The step used to drop every press on a zero step,
- * so hit-stop would have eaten the very presses that chain a combo. The lab's freeze, which should take no input, drops
- * its presses in play.ts instead, before they reach here.
+ * still counts: it starts a hit at its first moment or is kept for the next. That is the seam the hit-stop needs, which
+ * holds the combo's clock at 0 for a few frames on contact while the player keeps pressing: a press made in the stop
+ * must still chain the next hit. The step used to drop every press on a zero step, so hit-stop would have eaten the
+ * very presses that chain a combo. The lab's freeze, which should take no input, drops its presses in play.ts instead,
+ * before they reach here, so a held clock here is always a hit-stop's.
  */
 // With its import attribute: the browser tests import this module (tests/e2e/asset-world.spec.ts, for COMBO_HITS), and
 // Playwright loads it as Node's own ES module, which refuses a JSON import without one, so the whole suite stopped
@@ -188,7 +188,7 @@ export function fadeStep(previous: number, comboStep: number): number {
 /**
  * A hit's own weight over the idle and run at a time into it: risen over its fades' rise (the crossfade from a hit still
  * showing, or the first hit's fade in from the idle and run), held, and faded out to 0 one frame before its end,
- * `frameStep` (the step the combo's clock last moved by, the best guess at its next: fadeStep) short of it, since the
+ * `weightStep` (the step the combo's clock last moved by, the best guess at its next: fadeStep) short of it, since the
  * hit ends on the frame that reaches its end and a fade that reached 0 only there left that last frame up to a step's
  * share of the fade, which then vanished in one frame (a quarter at SwiftShader's 0.05 s step). The last moving step,
  * not this frame's, because phase B's hit-stop will hold the combo's step at 0 while frames still draw: read at a step
@@ -196,8 +196,8 @@ export function fadeStep(previous: number, comboStep: number): number {
  * its cancel point whatever the fade out, so a buffered hit always takes over from a hit at full weight and no idle
  * shows between two hits.
  */
-export function ownWeight(contract: HitContract, time: number, fades: HitFades, frameStep: number): number {
-  const step = frameStep > 0 ? frameStep : 0;
+export function ownWeight(contract: HitContract, time: number, fades: HitFades, weightStep: number): number {
+  const step = weightStep > 0 ? weightStep : 0;
   const rise = fades.rise > 0 ? time / fades.rise : 1;
   const room = contract.cancel === null ? fades.fadeOut : Math.min(fades.fadeOut, contract.duration - step - contract.cancel);
   const fall = (contract.duration - step - time) / Math.max(1e-6, room);
@@ -208,12 +208,12 @@ export function ownWeight(contract: HitContract, time: number, fades: HitFades, 
  * The weights of the hit playing and of the one fading out under it. The incoming hit rises over its crossfade while
  * the outgoing one falls from the weight it had when the next began, so the two never sum past 1 and, from a hit at
  * full weight, sum to exactly 1 through the crossfade: the idle and run take only what the two leave, and the pose never
- * pops. `frameStep` is the step the combo's clock last moved by (fadeStep; ownWeight says why).
+ * pops. `weightStep` is the step the combo's clock last moved by (fadeStep; ownWeight says why).
  */
-export function comboWeights(state: ComboState, frameStep: number, hits: readonly HitContract[] = COMBO_HITS): { current: number; outgoing: number } {
+export function comboWeights(state: ComboState, weightStep: number, hits: readonly HitContract[] = COMBO_HITS): { current: number; outgoing: number } {
   const { hit, outgoing } = state;
   if (!hit) return { current: 0, outgoing: 0 };
-  const current = ownWeight(contractOf(hit.step, hits), hit.time, hit.fades, frameStep);
+  const current = ownWeight(contractOf(hit.step, hits), hit.time, hit.fades, weightStep);
   const handed = hit.fades.rise > 0 ? Math.min(1, hit.time / hit.fades.rise) : 1;
   return { current, outgoing: outgoing ? outgoing.weight * (1 - handed) : 0 };
 }
@@ -224,8 +224,8 @@ export function comboWeights(state: ComboState, frameStep: number, hits: readonl
  * hits' 0.30 s cancel point, so a hit has always finished fading in, and dropped the hit under it, by the time the next
  * can begin. The new hit takes its fades from the settings now and keeps them (HitFades).
  */
-function startHit(step: ComboStep, time: number, from: HitPlay | null, fromTime: number, feel: CombatFeel, frameStep: number, hits: readonly HitContract[]): { hit: HitPlay; outgoing: FadingHit | null } {
-  const weight = from ? ownWeight(contractOf(from.step, hits), fromTime, from.fades, frameStep) : 0;
+function startHit(step: ComboStep, time: number, from: HitPlay | null, fromTime: number, feel: CombatFeel, weightStep: number, hits: readonly HitContract[]): { hit: HitPlay; outgoing: FadingHit | null } {
+  const weight = from ? ownWeight(contractOf(from.step, hits), fromTime, from.fades, weightStep) : 0;
   const outgoing = from && weight > 0 ? { step: from.step, time: fromTime, weight } : null;
   const crossfaded = outgoing !== null;
   return { hit: { step, time, struck: false, crossfaded, chainedAt: from ? fromTime : null, fades: hitFades(crossfaded, feel) }, outgoing };
@@ -256,8 +256,14 @@ export function longestComboStep(hits: readonly HitContract[] = COMBO_HITS): num
  * - During the finisher, a press in the buffer before its end is kept and begins a new chain at its end; one before that
  *   is dropped. Three hits at most, then the finisher's recovery.
  * - A press before the buffer opens and a second press while one is kept are dropped.
- * - A press on a step of 0 counts as on any other: it starts a hit at its first moment or is kept, and the time it
- *   would have moved waits for a step that moves it (the module's comment says why).
+ * - A press on a step of 0, a hit-stop, starts a hit at its first moment or is kept, and the time it would have moved
+ *   waits for a step that moves it (the module's comment says why). One the buffer would drop for coming early is kept
+ *   too. Judged at the held clip time, a press made in a light hit's stop fell before any buffer under 0.10 s and was
+ *   dropped, though the player made it on contact. Judging it again when the clock resumes would not help: the stop
+ *   moves no clip time, so the clock resumes at the very moment it held, still before that buffer. It is safe to keep:
+ *   a stop begins on contact, inside the active frames, at least 0.15 s after the press that began the hit, past the
+ *   0.1 s in which the buffer's early drop catches a key's bounce or a double click. In the finisher's stop such a press
+ *   is kept for a new chain at its end, as one in its buffer is, and its recovery still plays out.
  * - A kept press survives the crossfade: it belongs to the hit that was playing when it was made, and that hit's own
  *   cancel point starts the next one, so nothing a crossfade does can lose it.
  * - Each hit strikes once, on the frame that reaches its strike moment; a step is cut to longestComboStep, so a hit
@@ -266,30 +272,32 @@ export function longestComboStep(hits: readonly HitContract[] = COMBO_HITS): num
  *   attack_1; after the finisher it starts again from attack_1 at once.
  *
  * `dt` is the combo's own step, which phase B's hit-stop holds at 0 (and a NaN step moves no time either, so it cannot
- * leave a hit whose time never reaches its end); `frameStep` is the step the weights read (fadeStep: the combo's last
+ * leave a hit whose time never reaches its end); `weightStep` is the step the weights read (fadeStep: the combo's last
  * moving step), the same as `dt` unless the combo's clock is held, so a hit begun on a held frame takes over from the
  * weight drawn on the frame before.
  */
-export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel: CombatFeel, frameStep: number = dt, hits: readonly HitContract[] = COMBO_HITS): ComboFrame {
+export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel: CombatFeel, weightStep: number = dt, hits: readonly HitContract[] = COMBO_HITS): ComboFrame {
   let { hit, outgoing, queued, next, sinceEnd } = state;
   let started: ComboStep | null = null;
   let struck: ComboStep | null = null;
   let press: PressResult = 'none';
+  // Written as "not above 0" so that a NaN step, which compares false both ways, counts as held and moves no time.
+  const held = !(dt > 0);
 
   if (pressed) {
     if (!hit) {
-      ({ hit, outgoing } = startHit(next, 0, null, 0, feel, frameStep, hits));
+      ({ hit, outgoing } = startHit(next, 0, null, 0, feel, weightStep, hits));
       started = hit.step;
       press = 'started';
       queued = false;
     } else {
       const contract = contractOf(hit.step, hits);
       if (contract.cancel !== null && hit.time >= contract.cancel) {
-        ({ hit, outgoing } = startHit(followingStep(hit.step), 0, hit, hit.time, feel, frameStep, hits));
+        ({ hit, outgoing } = startHit(followingStep(hit.step), 0, hit, hit.time, feel, weightStep, hits));
         started = hit.step;
         press = 'started';
         queued = false;
-      } else if (!queued && hit.time >= bufferOpensAt(contract, feel.buffer)) {
+      } else if (!queued && (held || hit.time >= bufferOpensAt(contract, feel.buffer))) {
         queued = true;
         press = 'queued';
       } else {
@@ -298,8 +306,7 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
     }
   }
 
-  // Written as "not above 0" so that a NaN step, which compares false both ways, moves no time.
-  if (!(dt > 0)) {
+  if (held) {
     if (press === 'none' || press === 'dropped') return { state, struck: null, started: null, press };
     if (hit) sinceEnd = 0;
     return { state: { hit, outgoing, queued, next, sinceEnd }, struck: null, started, press };
@@ -320,7 +327,7 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
     if (queued && contract.cancel !== null && after >= contract.cancel) {
       // The kept press begins the next hit exactly at the cancel point: it starts the time past the cancel point in,
       // and the hit it takes over from fades from its weight at the cancel point, full by ownWeight's rule.
-      ({ hit, outgoing } = startHit(followingStep(playing.step), after - contract.cancel, { ...playing, time: contract.cancel }, contract.cancel, feel, frameStep, hits));
+      ({ hit, outgoing } = startHit(followingStep(playing.step), after - contract.cancel, { ...playing, time: contract.cancel }, contract.cancel, feel, weightStep, hits));
       outgoing = outgoing ? { ...outgoing, time: after } : null;
       started = hit.step;
       queued = false;
@@ -328,7 +335,7 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
       if (queued) {
         // Only the finisher can still hold a press at its end, kept in its buffer for a new chain. Its weight has
         // already reached 0 a frame early, so the new chain fades in from the idle and run.
-        ({ hit, outgoing } = startHit(followingStep(playing.step), after - contract.duration, null, 0, feel, frameStep, hits));
+        ({ hit, outgoing } = startHit(followingStep(playing.step), after - contract.duration, null, 0, feel, weightStep, hits));
         hit = { ...hit, chainedAt: contract.duration };
         started = hit.step;
         queued = false;
@@ -352,9 +359,10 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
 
 /**
  * How the hit playing slows and turns him. A light hit keeps `moveScale` of his pace from its start to its cancel point:
- * through the wind-up his drive eases down to it at the stop rate, and through the active frames it is held at or under
- * it (`cap`, stepMotion), so the blow lands at a steady, reduced pace while his legs keep running, and a key let go
- * there eases him down rather than stopping him dead. Freed at the end of the active
+ * through the wind-up his drive comes down to it at the stop rate, or faster where the stop rate would not get there by
+ * the active frames (`settleBy`, stepMotion), so the blow lands at a steady, reduced pace while his legs keep running;
+ * through the active frames the pace asked stays under it, and a key let go there eases him down rather than stopping
+ * him dead (`cap` stops him only at a pace kept of 0). Freed at the end of the active
  * frames instead, he surged from 1.28 m/s to 1.6 m/s in the 20 ms before the cancel point and slowed again in the next
  * hit's wind-up, a bump in every chain; held to the cancel point, a chain runs at one even pace. His turn rate falls to
  * `windupTurn` of its cap in the wind-up, so he can still aim the blow, and his facing is locked from the active frames
@@ -368,7 +376,7 @@ export function swingMotion(state: ComboState, feel: CombatFeel, hits: readonly 
   if (!hit) return FREE_MOTION;
   const contract = contractOf(hit.step, hits);
   if (contract.planted) return { moveScale: 0, turnScale: 0, cap: true };
-  if (hit.time < contract.activeFrom) return { moveScale: feel.moveScale, turnScale: feel.windupTurn, cap: false };
+  if (hit.time < contract.activeFrom) return { moveScale: feel.moveScale, turnScale: feel.windupTurn, cap: false, settleBy: contract.activeFrom - hit.time };
   if (hit.time < contract.activeTo) return { moveScale: feel.moveScale, turnScale: 0, cap: true };
   if (contract.cancel !== null && hit.time < contract.cancel) return { moveScale: feel.moveScale, turnScale: 0, cap: false };
   return FREE_MOTION;

@@ -1,5 +1,6 @@
 """What a recipe receives and what it returns."""
 import json
+import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -62,6 +63,8 @@ class BuildContext:
     seed: int = 1
     previews_enabled: bool = True
     recipe: str = ''
+    # The preview folders this run has emptied (preview_dir).
+    _fresh_previews: set = field(default_factory=set, repr=False)
 
     def ensure_dirs(self):
         for path in (self.out, self.previews, self.textures):
@@ -78,7 +81,14 @@ class BuildContext:
         return path
 
     def preview_dir(self, name):
+        """The folder an asset's preview renders go in, emptied the first time the run asks for it, so the contact sheet
+        (tools/assets/sheet.mjs, which tiles every PNG in it) shows this build's renders only. It used to keep whatever
+        an earlier build left there: renders a recipe no longer makes, such as the combo's filmstrips from before they
+        moved to a folder of their own, went on feeding the sheet."""
         path = self.previews / name
+        if name not in self._fresh_previews:
+            self._fresh_previews.add(name)
+            shutil.rmtree(path, ignore_errors=True)
         path.mkdir(parents=True, exist_ok=True)
         return path
 

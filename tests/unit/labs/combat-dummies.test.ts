@@ -67,6 +67,30 @@ describe("the training dummies' knockback seam", () => {
     expect(apart(free, middle!.home)).toBeCloseTo(1.2, 9);
   });
 
+  it('sweeps a knockback in steps, so a dummy touching Pip and driven 3 m straight at him stays on its own side', () => {
+    const pip = arenaSpawn();
+    const dummies = arena(pip);
+    const middle = dummies.list[1]!;
+    const contact = middle.reach + PLAY_BODY_RADIUS;
+    // Stood touching him on the line from his spawn to its home, then driven 3 m straight at him.
+    const toward = { x: pip.x - middle.home.x, z: pip.z - middle.home.z };
+    const length = Math.hypot(toward.x, toward.z);
+    const unit = { x: toward.x / length, z: toward.z / length };
+    middle.moveTo({ x: pip.x - unit.x * contact, z: pip.z - unit.z * contact, yaw: middle.home.yaw });
+    const pushed = dummies.push(1, unit.x * 3, unit.z * 3);
+    // Met only where the push ended, it came out 1.45 m past him, on his far side (dot product with the push above 0).
+    const side = (pushed.x - pip.x) * unit.x + (pushed.z - pip.z) * unit.z;
+    expect(side).toBeLessThan(0);
+    expect(apart(pushed, pip)).toBeCloseTo(contact, 9);
+    // Pushed out toward the play area's edge, it stops on the edge.
+    const right = dummies.list[2]!;
+    const outward = Math.hypot(right.home.x, right.home.z);
+    const out = dummies.push(2, (right.home.x / outward) * 30, (right.home.z / outward) * 30);
+    expect(Math.hypot(out.x, out.z)).toBeCloseTo(PLAY_AREA_RADIUS, 9);
+    // The obstacle list Pip reads is still the one it was, moved with the dummies.
+    expect(dummies.obstacles()[1]!.x).toBe(pushed.x);
+  });
+
   it('tells its reset listeners once every dummy is home, and lets a hit listener go', () => {
     const dummies = arena();
     const heard: string[] = [];

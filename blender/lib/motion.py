@@ -28,6 +28,15 @@ GROUPS = {'hips': ('hips_off', 'hips_turn', 'step_l', 'step_r'), 'torso': ('tors
 # Frames each part reads ahead (+) or behind (-) the clip's clock: the hips start each move, the shoulders and the
 # sword follow a frame later, the shield arm and the head arrive two frames after the torso and settle last.
 LAGS = {'hips': 1.5, 'torso': 0.5, 'sword': 0.0, 'shield': -1.5, 'head': -2.0}
+# Frames over which a part that reads ahead of the clock (the hips, the torso) eases into its lead from a clip's first
+# frame, a smoothstep, so every part stands on the first key there. Read at its full lead from the first frame, the
+# hips stood 1.5 frames into the clip on frame 1 and the torso 0.5, already off toward the next key, so a chained hit,
+# keyed from the pose the hit before holds at its cancel frame, began 13 to 47 mm from it at the hands, hips and head.
+# Over three frames the lead is whole again from frame 4, before any hit's active frames (5.5 for the light hits), so
+# the strikes and everything after them are read as before; meanwhile the hips run at up to 1.75 times the clock's
+# speed and meet a hit's first key after its start (frame 3.4 for the finisher, 4 for the light hits) up to 0.7 frames
+# later than they did.
+LAG_RAMP = 3.0
 
 
 def spec(hips_off=(0.0, 0.0, 0.0), hips_turn=0.0, torso=(0.0, 0.0), head=(0.0, 0.0), sword=None, shield=None,
@@ -68,12 +77,16 @@ def hermite(times, values, t):
     return (2 * s ** 3 - 3 * s ** 2 + 1) * values[i] + (s ** 3 - 2 * s ** 2 + s) * m0 + (-2 * s ** 3 + 3 * s ** 2) * values[i + 1] + (s ** 3 - s ** 2) * m1
 
 
-def track_at(keys, t, lags=LAGS):
-    """The spec at clip time t (frames) from keys [(time, spec)], each part read at its own lag."""
+def track_at(keys, t, lags=LAGS, ramp=LAG_RAMP):
+    """The spec at clip time t (frames) from keys [(time, spec)], each part read at its own lag, a lead eased in over
+    the clip's first `ramp` frames (LAG_RAMP)."""
     times = [k[0] for k in keys]
     out = {}
     for group, params in GROUPS.items():
-        tg = min(max(t + lags.get(group, 0.0), times[0]), times[-1])
+        lag = lags.get(group, 0.0)
+        if lag > 0.0 and ramp > 0.0:
+            lag *= float(cf.ss(0.0, ramp, t - times[0]))
+        tg = min(max(t + lag, times[0]), times[-1])
         for name in params:
             out[name] = hermite(times, [k[1][name] for k in keys], tg)
     return out
@@ -89,10 +102,15 @@ def torso_ops(twist, bend):
     return ops
 
 
-def _unit(v):
+def _unit(v, what='a direction'):
+    """v as a unit vector. A zero vector stops the build with `what` named: it used to come back as straight down, so a
+    spec whose arm direction had collapsed (two keys that cancel, a blend through zero) posed the arm hanging and built a
+    clip that looked authored."""
     v = np.asarray(v, float)
     n = float(np.linalg.norm(v))
-    return tuple(v / n) if n > 1e-9 else (0.0, 0.0, -1.0)
+    if not n > 1e-9:
+        raise ValueError(f'{what} is a zero vector ({tuple(float(x) for x in v)}), which gives no direction to aim along')
+    return tuple(v / n)
 
 
 def solve(arm, s, blade_rest):
@@ -101,11 +119,21 @@ def solve(arm, s, blade_rest):
     ops += torso_ops(float(s['torso'][0]), float(s['torso'][1]))
     turn, nod = float(s['head'][0]), float(s['head'][1])
     ops += [('turn', P + 'Neck', UP, turn * 0.4), ('turn', P + 'Head', UP, turn * 0.6), ('turn', P + 'Head', AHEAD, nod)]
-    ops += [('aim', P + 'RightArm', _unit(s['s_up'])),
-            ('aim_carry', P + 'RightForeArm', _unit(s['s_fore']), P + 'RightHand', blade_rest, _unit(s['s_want'])),
-            ('aim', P + 'LeftArm', _unit(s['h_up'])), ('aim', P + 'LeftForeArm', _unit(s['h_fore'])),
-            ('leg', 'Left', tuple(s['step_l'])), ('leg', 'Right', tuple(s['step_r']))]
+    ops += [('aim', P + 'RightArm', _unit(s['s_up'], 'the sword upper arm (s_up)')),
+            ('aim_carry', P + 'RightForeArm', _unit(s['s_fore'], 'the sword forearm (s_fore)'), P + 'RightHand', blade_rest,
+             _unit(s['s_want'], 'the blade (s_want)')),
+            ('aim', P + 'LeftArm', _unit(s['h_up'], 'the shield upper arm (h_up)')),
+            ('aim', P + 'LeftForeArm', _unit(s['h_fore'], 'the shield forearm (h_fore)')),
+            ('leg', 'Left', _grounded(s['step_l'])), ('leg', 'Right', _grounded(s['step_r']))]
     return cf.pose_rotations(arm, ops)
+
+
+def _grounded(step):
+    """A foot's step offset with its height held at 0 or above: a boot stands on the ground at its rest height, so any
+    step under 0 sinks it. The tracks are Catmull-Rom splines, which overshoot past a key that a move ends on: the
+    finisher's front boot set down at its strike (0.04 m to 0 in a frame and a half) and the spline carried it on to
+    3.9 mm under the ground before the next key, and dipped again before it lifted for the step back."""
+    return (float(step[0]), float(step[1]), max(0.0, float(step[2])))
 
 
 def bake(arm, name, spec_at, end_frame, strike_frame, blade_rest):
@@ -189,8 +217,12 @@ def strike_window(pos, names, lo=4, hi=None):
     speed = np.linalg.norm(np.diff(hand, axis=0), axis=1)
     hi = hi or len(speed) - 3
     s = lo + int(np.argmax(speed[lo:hi])) + 1
-    before = speed[max(0, s - 18):s - 1]
-    a = max(0, s - 18 + int(np.argmin(before)) - 3) if len(before) else max(0, s - 6)
+    # The look-back window starts at b0, not at s - 18: near the clip's start the window is cut at frame 0, and the
+    # slowest frame's index, which counts from the window's start, was read as if counted from s - 18, putting the
+    # wind-up's start up to 18 frames too early (clamped to 0).
+    b0 = max(0, s - 18)
+    before = speed[b0:s - 1]
+    a = max(0, b0 + int(np.argmin(before)) - 3) if len(before) else max(0, s - 6)
     after = np.flatnonzero(speed[s:] < 0.25 * speed[s - 1])
     b = min(len(hand) - 1, s + (int(after[0]) if len(after) else 8) + 4)
     return a, s, b, float(speed.max() * 30)
@@ -305,7 +337,7 @@ def combo_preview(arm, segments, name='combo_preview', fade=2.0):
     and the hips' offset, the way the runtime chains them. Returns the action and its length in frames."""
     from . import anim
     samples = []
-    for k, (action, until) in enumerate(segments):
+    for action, until in segments:
         restore = anim.play(arm, action)
         start = action.frame_range[0]
         n = int(round(until))
@@ -321,9 +353,13 @@ def combo_preview(arm, segments, name='combo_preview', fade=2.0):
             frames.extend(seg)
             continue
         f = int(round(fade))
+        # The crossfade rewrites the last f frames already laid down and reads the first f of this segment, so both must
+        # be that long; shorter, frames[-f + i] reached back past the start of the list and blended the wrong frames.
+        if len(frames) < f or len(seg) < f:
+            raise ValueError(f'combo_preview: segment {k} has {len(seg)} frames after {len(frames)} laid down, under the {f}-frame fade')
         for i in range(f):
             w = (i + 1) / (f + 1)
-            prev = frames[-f + i] if len(frames) >= f else frames[-1]
+            prev = frames[-f + i]
             cur = seg[i]
             frames[-f + i] = {bn: (prev[bn][0].slerp(cur[bn][0], w), prev[bn][1].lerp(cur[bn][1], w)) for bn in cur}
         frames.extend(seg[f:])

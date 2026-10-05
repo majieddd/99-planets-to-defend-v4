@@ -147,14 +147,13 @@ describe("Play Pip's combo clips", () => {
     }
   });
 
-  it('starts each chained hit about where the hit before stands at its cancel point, so the crossfade between them hides no jump', () => {
+  it('starts each chained hit where the hit before stands at its cancel point, so the crossfade between them hides no jump', () => {
     // The recipe keys attack_2's first pose from attack_1's at its cancel frame, and attack_3's from attack_2's (CHAIN,
-    // blender/recipes/commander_pip.py). The two are not exactly one pose: on a hit's first frame its hips read their
-    // track 1.5 frames ahead and its torso 0.5 ahead (lib/motion.py LAGS), so they have already set off toward the next
-    // key. Read back through the export and the loader, the hands, the hips and the head stand 13 to 47 mm from where
-    // the hit before left them, each about a frame's motion at that seam (the finisher moves the sword hand 129 mm in its
-    // first frame), which the 0.10 s crossfade carries; a gap of a whole pose, as a hit keyed from the guard would leave,
-    // is tens of centimetres.
+    // blender/recipes/commander_pip.py). On a hit's first frame its hips used to read their track 1.5 frames ahead and
+    // its torso 0.5 ahead (lib/motion.py LAGS), already off toward the next key, so the hands, the hips and the head
+    // stood 13 to 47 mm from where the hit before left them; the leads now ease in over the clip's first three frames
+    // (LAG_RAMP), and read back through the export and the loader every one stands within 0.1 mm of it. A gap of a
+    // whole pose, as a hit keyed from the guard would leave, is tens of centimetres.
     const hits = hitClips(animations, SOURCE_STRIKE)!;
     for (const [from, to] of [
       [hits[0]!, hits[1]!],
@@ -162,7 +161,7 @@ describe("Play Pip's combo clips", () => {
     ] as const) {
       for (const bone of ['mixamorigRightHand', 'mixamorigLeftHand', 'mixamorigHips', 'mixamorigHead']) {
         const gap = handAt(from.clip, from.contract.cancel!, bone).distanceTo(handAt(to.clip, 0, bone));
-        expect(gap, `${from.contract.name} at its cancel point to ${to.contract.name}'s start, ${bone}`).toBeLessThan(0.05);
+        expect(gap, `${from.contract.name} at its cancel point to ${to.contract.name}'s start, ${bone}`).toBeLessThan(1e-4);
       }
     }
   });

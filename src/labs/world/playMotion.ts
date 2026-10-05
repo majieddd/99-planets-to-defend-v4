@@ -218,14 +218,72 @@ export function clampToArea(x: number, z: number, radius = PLAY_AREA_RADIUS): { 
 }
 
 /**
- * How a swing holds him back on one frame (combo.ts, swingMotion): the share of the pace asked that he keeps, the share
- * of his turn rate, and whether his drive is held at or under that share of the walk's or the sprint's pace at once
- * rather than eased down to it.
+ * The longest step a swept move takes at once, in metres: a training dummy's knockback and Pip's lunge both go this far
+ * at a time, each step met against the bodies and the area's edge (Mechanics, Commander movement: "knockback sweeps in
+ * steps of at most 0.12 m and stops at illegal edges", v3). A body's reach is at least 0.55 m across the ground (the
+ * least member reach, 0.2 m, widened by his 0.35 m body), so no step can jump a body from one side to the other.
+ */
+export const KNOCKBACK_SWEEP_STEP = 0.12;
+
+/** Where a swept move ended, how far it went from where it began, and whether a body or the area's edge stopped it. */
+export interface SweptMove {
+  x: number;
+  z: number;
+  moved: number;
+  blocked: boolean;
+}
+
+/** Whether a point stands outside every obstacle's reach (a point on a reach's edge counts as outside). */
+function outsideAll(x: number, z: number, obstacles: readonly Obstacle[]): boolean {
+  for (const obstacle of obstacles) if (Math.hypot(x - obstacle.x, z - obstacle.z) < obstacle.radius - 1e-9) return false;
+  return true;
+}
+
+/**
+ * Moves a point `dx` and `dz` across the tangent plane in steps of at most `maxStep`, each step pushed out of every
+ * obstacle's reach (resolveObstacles) and then held inside the area (clampToArea), and stops at the first step either
+ * holds back, at the point it was met: a body's edge or the area's. A clamp at the area's edge can put that point back
+ * inside a body it was just pushed out of, and then it stays where the last free step left it. Met only where the whole
+ * move ended, a knocked-back dummy touching Pip and driven straight at him by more than its reach and his body (about
+ * 1.55 m) came out on his far side, and the area's clamp, which ran after the bodies, could push it back into him.
+ */
+export function sweepMove(x: number, z: number, dx: number, dz: number, obstacles: readonly Obstacle[], radius = PLAY_AREA_RADIUS, maxStep = KNOCKBACK_SWEEP_STEP): SweptMove {
+  const length = Math.hypot(dx, dz);
+  if (!(length > 0)) return { x, z, moved: 0, blocked: false };
+  const steps = Math.ceil(length / Math.max(1e-6, maxStep));
+  const sx = dx / steps;
+  const sz = dz / steps;
+  let cx = x;
+  let cz = z;
+  for (let i = 0; i < steps; i++) {
+    const free = resolveObstacles(cx + sx, cz + sz, cx, cz, obstacles);
+    const kept = clampToArea(free.x, free.z, radius);
+    if (!free.blocked && !kept.blocked) {
+      cx = kept.x;
+      cz = kept.z;
+      continue;
+    }
+    if (outsideAll(kept.x, kept.z, obstacles)) {
+      cx = kept.x;
+      cz = kept.z;
+    }
+    return { x: cx, z: cz, moved: Math.hypot(cx - x, cz - z), blocked: true };
+  }
+  return { x: cx, z: cz, moved: Math.hypot(cx - x, cz - z), blocked: false };
+}
+
+/**
+ * How a swing holds him back on one frame (combo.ts, swingMotion): the share of the pace asked that he keeps (its
+ * ceiling is that share of the walk's or the sprint's pace), the share of his turn rate, and two rules for a drive over
+ * the ceiling. `cap`: a swing that keeps no pace stops him on this very frame (the finisher's plant), where any other
+ * swing eases him down. `settleBy`: the seconds within which his drive must have come down to the ceiling (a light hit's
+ * wind-up, until its active frames), absent when there is no such deadline.
  */
 export interface SwingMotion {
   moveScale: number;
   turnScale: number;
   cap: boolean;
+  settleBy?: number;
 }
 
 /** Out of a swing: his full pace and turn rate, his drive eased at the Commander table's rates. */
@@ -239,19 +297,23 @@ export const FREE_MOTION: SwingMotion = Object.freeze({ moveScale: 1, turnScale:
  * carries on. Fed back into the drive, the held-back speed restarted every frame's ease from it, so a slide along a
  * wall settled far below its share of the pace asked along the wall.
  *
- * A swing (`swing`) scales the pace asked and the turn rate, and with `cap` holds his drive at or under the swing's
- * ceiling, its share of the walk's or the sprint's pace. A swing that keeps no pace holds it there on this very frame:
- * the finisher's plant (no pace, no turn) stops him dead on its first frame, as it must under boots the clip holds
- * planted, where easing down at the stop rate took 0.12 s from a walk and 0.21 s from a sprint and slid him about
- * 0.19 m and 0.59 m (2026-10-05). A light hit's active frames keep him from speeding up past its share; its wind-up has
- * already eased him down to it (0.07 s from a walk, 0.13 s from a sprint, inside the 0.15 s wind-up), so the blow lands
- * at the reduced pace. The cap is the hit's ceiling, not the pace the input asks: capped to the input, letting go of W in a light hit's active frames, or asking for a way more
- * than a quarter turn from the locked facing, dropped his drive from 1.28 m/s to 0 in one frame, the run's weight from 1
- * to 0 with it, and his legs and hips jumped from the run to the idle. Under the ceiling his drive eases down at the stop
- * rate as it does out of a swing. A ceiling that falls under the drive while the swing keeps some pace (Shift let go in
- * a light hit's active frames: 0.4 of the sprint's pace to 0.4 of the walk's) is eased down to at the stop rate too,
- * where the cap snapped his drive from 2.24 m/s to 1.28 m/s in one frame; a swing that keeps no pace, the finisher's
- * plant, still stops him dead.
+ * A swing (`swing`) scales the pace asked and the turn rate; the pace asked never rises past the swing's ceiling, its
+ * share of the walk's or the sprint's pace. Three rules bring a drive over the ceiling down to it:
+ * - A swing that keeps no pace (a share of 0) with `cap` stops him on this very frame: the finisher's plant (no pace, no
+ *   turn) stops him dead on its first frame, as it must under boots the clip holds planted, where easing down at the
+ *   stop rate took 0.12 s from a walk and 0.21 s from a sprint and slid him about 0.19 m and 0.59 m (2026-10-05).
+ * - With `settleBy`, a light hit's wind-up, he comes down at the stop rate or faster, whichever reaches the ceiling by
+ *   the deadline, the hit's active frames, so the blow always lands at the reduced pace. At the stop rate alone a low
+ *   pace kept did not get there: at 0.1, from a sprint, 5.6 m/s fall to 0.56 m/s at 26.7 m/s squared in 0.19 s, longer
+ *   than the 0.15 s wind-up, and he entered the active frames at 1.6 m/s; the old cap, which looked like a hold at the
+ *   ceiling, held nothing there, since the pace asked never rises past the ceiling and so the eased drive was always
+ *   under it. At the default 0.4 the stop rate gets there first (0.07 s from a walk, 0.13 s from a sprint).
+ * - Otherwise he eases down at the stop rate, as out of a swing. This covers a light hit's active frames: the ceiling
+ *   is the hit's, not the pace the input asks, since capped to the input, letting go of W there, or asking for a way
+ *   more than a quarter turn from the locked facing, dropped his drive from 1.28 m/s to 0 in one frame, the run's weight
+ *   from 1 to 0 with it, and his legs and hips jumped from the run to the idle; and a ceiling that falls under the drive
+ *   there (Shift let go: 0.4 of the sprint's pace to 0.4 of the walk's), where a cap snapped his drive from 2.24 m/s to
+ *   1.28 m/s in one frame. That is a best effort, not a hold: the drive takes three frames at 60 fps to come down.
  */
 export function stepMotion(
   state: MotionState,
@@ -275,9 +337,13 @@ export function stepMotion(
   }
   const speedUp = PLAY_WALK_SPEED / PLAY_SECONDS_TO_WALK;
   const slowDown = PLAY_WALK_SPEED / PLAY_SECONDS_TO_STOP;
-  const eased = target > state.drive ? Math.min(target, state.drive + speedUp * dt) : Math.max(target, state.drive - slowDown * dt);
-  const cap = share > 0 ? Math.max(ceiling, state.drive - slowDown * dt) : ceiling;
-  const drive = swing.cap ? Math.min(eased, cap) : eased;
+  let fall = slowDown * dt;
+  // A deadline closes the gap to the ceiling in a straight line: the share of it this frame is of the time left, all of
+  // it once the deadline is a frame or less away.
+  const settleBy = swing.settleBy;
+  if (settleBy !== undefined && state.drive > ceiling) fall = Math.max(fall, (state.drive - ceiling) * Math.min(1, dt / Math.max(settleBy, 1e-9)));
+  const eased = target > state.drive ? Math.min(target, state.drive + speedUp * dt) : Math.max(target, state.drive - fall);
+  const drive = swing.cap && share === 0 ? 0 : eased;
   const [tx, tz] = groundToTangent(state.x, state.z, Math.sin(yaw) * drive * dt, Math.cos(yaw) * drive * dt, planetRadius);
   const free = resolveObstacles(state.x + tx, state.z + tz, state.x, state.z, obstacles);
   const kept = clampToArea(free.x, free.z);
