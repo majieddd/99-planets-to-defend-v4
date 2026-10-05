@@ -142,6 +142,43 @@ describe("morph targets and Pip's attack", () => {
     expect(timedClips(pip({ name: 'commander_bo' }), commanderTimings)).toEqual([]);
     expect(timedClips({ ...pip(), kind: 'texture' }, commanderTimings)).toEqual([]);
   });
+
+  it("holds every clip timings.json times for the model, not only the family's required ones: Pip's combo hits", () => {
+    // Pip's attack_1 to attack_3 as the recipe exports them: 0.55 s contracts exported at 16 frames (0.533 s), the
+    // finisher's 0.85 s at 25 (0.833 s), each struck at its contract strike. The family requires none of them, since
+    // Bulwark ships no combo, so the check walked only idle, run and attack and passed any of them, or none.
+    const comboTimings = {
+      ...timings,
+      commanders: {
+        commander_pip: {
+          attack: { duration: 0.85, strike: 0.34 },
+          attack_1: { duration: 0.55, strike: 0.2 },
+          attack_2: { duration: 0.55, strike: 0.2 },
+          attack_3: { duration: 0.85, strike: 0.38 },
+        },
+      },
+    };
+    const hit = (name: string, duration: number, strike: number, exportedDuration: number) => ({ name, duration, loop: false, strike, exportedDuration });
+    const combo = [hit('attack_1', 0.55, 0.2, 0.5333333), hit('attack_2', 0.55, 0.2, 0.5333333), hit('attack_3', 0.85, 0.38, 0.8333333)];
+    const withCombo = (hits: object[]) => pip({ animations: [...(pip().animations as object[]), ...hits] });
+    expect(evaluateAsset(withCombo(combo), commanders, comboTimings)).toEqual([]);
+    expect(timedClips(withCombo(combo), comboTimings)).toEqual([
+      'attack 0.85 s, strike 0.34 s',
+      'attack_1 0.55 s, strike 0.2 s',
+      'attack_2 0.55 s, strike 0.2 s',
+      'attack_3 0.85 s, strike 0.38 s',
+    ]);
+    // A timed hit the GLB lacks is missing, as a required clip is; one off its strike or length fails by name.
+    expect(evaluateAsset(withCombo(combo.slice(0, 2)), commanders, comboTimings)).toEqual(["missing animation 'attack_3'"]);
+    expect(evaluateAsset(withCombo([combo[0]!, { ...combo[1]!, strike: 0.25 }, combo[2]!]), commanders, comboTimings)).toEqual([
+      'attack_2 strike 0.25 != timings 0.2',
+    ]);
+    expect(evaluateAsset(withCombo([combo[0]!, combo[1]!, { ...combo[2]!, exportedDuration: 0.7 }]), commanders, comboTimings)).toEqual([
+      'attack_3 exported duration 0.700 != timings 0.85',
+    ]);
+    // Bulwark, with no entry for the hits, is not asked for them.
+    expect(evaluateAsset(pip({ name: 'bulwark' }), commanders, { commanders: { bulwark: { attack: { duration: 0.85, strike: 0.34 } } } })).toEqual([]);
+  });
 });
 
 describe('the ground contact rule', () => {

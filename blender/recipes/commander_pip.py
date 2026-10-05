@@ -7,14 +7,16 @@ https://majieddd.github.io/charforge/pip.glb, as published on 2026-10-03 (78,233
 skeleton, a 2,048 albedo, the face morphs blink_L, blink_R, smile, brows_up and pucker, a jaw bone and 19 clips). It
 differs from the first publication (2026-09-28) only in its clips: idle and run carry new arm and leg rotations.
 Every step is a lib/charforge.py function; this file holds what is Pip's own: the settings that differ from the
-template's defaults, the attack, and the record.
+template's defaults, the attack, the three-hit combo, and the record.
 
 Result: 1.78 m and 5.0 heads, 24 bones (the finger bones go: the hands stay culled inside the mitten gauntlets), at most
 24,000 triangles with the face kept dense, two meshes (commander_body with the five morphs, `_ink` and `_skin`;
 commander_armour with `_ink`), one 1,024 atlas for body and armour and a 1,024 head texture. Clips: Pip's idle and run
 retargeted onto the reshaped rig, each moved by one constant so its lowest boot point stands on the ground (both sink
-as retargeted, so both are raised; lib/charforge.py ground_clips), and an attack authored here (0.85 s, strike at
-0.34 s from src/shared/timings.json).
+as retargeted, so both are raised; lib/charforge.py ground_clips), an attack authored here (0.85 s, strike at
+0.34 s from src/shared/timings.json), and the three hits of Play Pip's combo, attack_1 to attack_3, hand-keyed here
+on lib/motion.py's spline tracks to their own entries in the same file (Mechanics, Commander combat). The attack stays:
+the commanders' budget requires a clip of that name, and the Style Lab's cycle plays it.
 Each clip's lowest point is recorded in the sidecar's notes as clip_ground, which a unit test holds to the ground.
 
 The attack is a shield-and-sword cleave. From the guard the torso coils to the right and the sword rises behind the
@@ -34,7 +36,7 @@ import shutil
 import bpy
 import numpy as np
 
-from lib import anim, charforge, export, ink, scene
+from lib import anim, charforge, export, ink, motion, scene
 from lib.ctx import AnimRecord, AssetRecord
 
 NAME = 'commander_pip'
@@ -145,6 +147,195 @@ def attack_keys(arm, blade, strike_frame, end_frame):
     return keys
 
 
+# ---------------------------------------------------------------- the three-hit combo
+
+# The combo's clips in the order they chain. Each takes its length and strike from its own entry under
+# commanders.commander_pip in src/shared/timings.json, which assets:check holds the export to and the page reads its
+# contracts from (labs/world/combo.ts), so the clip and the game cannot time a hit apart.
+COMBO = ('attack_1', 'attack_2', 'attack_3')
+# Each hit's cancel point in seconds, the moment the next hit may take over (None for the finisher, which plays its
+# recovery out). timings.json carries a clip's length and strike and no more, so the cancel lives here and in combo.ts
+# alike; the sidecar records it (notes.combo) and tests/unit/assets/pip-meta.test.ts holds the two equal. The build
+# needs it because a chained hit starts from the pose the hit before it holds at its cancel frame (CHAIN).
+COMBO_CANCEL = {'attack_1': 0.30, 'attack_2': 0.30, 'attack_3': None}
+# The combo's guard: every attack ends here, so each blends into idle; the first one also starts here.
+# Weight settled a little, shield across the front, sword low and forward.
+GUARD_SPEC = motion.spec(hips_off=(0.0, 0.0, -0.02), head=(0.0, 0.05),
+                         sword=((-0.2, -0.05, -0.98), (-0.05, -0.55, -0.83), (0.0, -0.85, -0.5)),
+                         shield=((0.3, 0.05, -1.0), (-0.52, -0.84, -0.05)))
+# Hand-keyed keys, ((base, offset), spec): base '1' is the first frame, 's' the strike, 'e' the end; offset in frames.
+# A first spec of None starts the attack from the previous attack's pose at its cancel frame (CHAIN), so a chained
+# attack picks up where the last one was cut, give or take the hips' and torso's lead, which sets them off toward the
+# next key on the first frame (13 to 47 mm at the hands, hips and head, about a frame's motion there, which the
+# crossfade carries): the forehand ends low on the left, where the backhand loads; the backhand ends out on the right,
+# where the finisher's sword starts to rise. The tracks run through them on splines, each body part on its own lag
+# (lib/motion.py LAGS: hips lead, head and shield trail).
+HAND = {
+    # A quick forehand: the sword loads up behind the right shoulder while the hips and chest coil right and the
+    # shield lifts clear, then cuts diagonally down across the front to the left hip, the hips unwinding first; the
+    # follow-through carries on low to the left and overshoots before settling back to the guard.
+    'attack_1': [
+        (('1', 0), GUARD_SPEC),
+        (('s', -3), motion.spec(hips_off=(-0.02, 0.01, -0.035), hips_turn=-0.22, torso=(-0.4, -0.05), head=(0.14, 0.05),
+                                sword=((-0.55, 0.05, 0.4), (-0.15, 0.25, 0.95), (-0.35, 0.35, 0.87)),
+                                shield=((0.6, -0.3, -0.45), (-0.3, -0.93, 0.15)))),
+        (('s', -1.5), motion.spec(hips_off=(0.0, -0.01, -0.045), hips_turn=0.02, torso=(-0.05, 0.06), head=(0.02, 0.06),
+                                  sword=((-0.5, -0.55, 0.2), (-0.25, -0.6, 0.75), (-0.45, -0.55, 0.7)),
+                                  shield=((0.78, -0.15, -0.3), (0.1, -0.95, 0.2)))),
+        (('s', 0), motion.spec(hips_off=(0.02, -0.03, -0.05), hips_turn=0.25, torso=(0.4, 0.15), head=(-0.1, 0.08),
+                               sword=((-0.05, -0.85, -0.5), (0.45, -0.8, -0.4), (0.65, -0.55, -0.5)),
+                               shield=((0.9, 0.05, -0.2), (0.35, -0.9, 0.2)))),
+        (('s', 3), motion.spec(hips_off=(0.025, -0.035, -0.055), hips_turn=0.3, torso=(0.55, 0.2), head=(-0.18, 0.1),
+                               sword=((0.2, -0.65, -0.73), (0.6, -0.5, -0.62), (0.75, -0.25, -0.62)),
+                               shield=((0.88, 0.1, -0.3), (0.4, -0.85, 0.15)))),
+        (('s', 6.5), motion.spec(hips_off=(0.012, -0.02, -0.04), hips_turn=0.14, torso=(0.25, 0.1), head=(-0.08, 0.07),
+                                 sword=((0.0, -0.4, -0.92), (0.25, -0.6, -0.76), (0.35, -0.7, -0.62)),
+                                 shield=((0.6, 0.08, -0.65), (-0.1, -0.95, 0.05)))),
+        (('e', 0), GUARD_SPEC),
+    ],
+    # The backhand return: from the forehand's low finish the sword loads at the left hip with the chest turned left
+    # (under the raised shield), then sweeps flat to the right at chest height, the hips leading the turn back; it
+    # carries on out to the right and slows before the guard.
+    'attack_2': [
+        (('1', 0), None),
+        (('s', -3), motion.spec(hips_off=(0.02, 0.0, -0.04), hips_turn=0.24, torso=(0.5, 0.08), head=(-0.15, 0.06),
+                                sword=((0.15, -0.72, -0.68), (0.85, -0.25, -0.2), (0.55, 0.6, 0.05)),
+                                shield=((0.82, 0.08, -0.3), (0.35, -0.9, 0.15)))),
+        (('s', -1.5), motion.spec(hips_off=(0.0, -0.01, -0.045), hips_turn=0.0, torso=(0.1, 0.08), head=(0.0, 0.05),
+                                  sword=((0.0, -0.9, -0.3), (0.4, -0.9, -0.1), (0.35, -0.92, 0.1)),
+                                  shield=((0.8, 0.12, -0.4), (0.3, -0.85, 0.05)))),
+        (('s', 0), motion.spec(hips_off=(-0.02, -0.02, -0.05), hips_turn=-0.25, torso=(-0.4, 0.1), head=(0.15, 0.05),
+                               sword=((-0.55, -0.75, -0.2), (-0.65, -0.72, -0.1), (-0.85, -0.45, -0.1)),
+                               shield=((0.6, 0.15, -0.75), (0.2, -0.85, -0.45)))),
+        (('s', 3), motion.spec(hips_off=(-0.025, -0.02, -0.055), hips_turn=-0.3, torso=(-0.55, 0.12), head=(0.2, 0.05),
+                               sword=((-0.85, -0.25, -0.3), (-0.9, 0.15, -0.2), (-0.75, 0.6, -0.1)),
+                               shield=((0.55, -0.3, -0.75), (-0.2, -0.95, 0.1)))),
+        (('s', 6.5), motion.spec(hips_off=(-0.012, -0.01, -0.04), hips_turn=-0.15, torso=(-0.28, 0.08), head=(0.1, 0.05),
+                                 sword=((-0.6, -0.2, -0.75), (-0.5, -0.45, -0.72), (-0.45, -0.7, -0.55)),
+                                 shield=((0.42, -0.1, -0.9), (-0.4, -0.9, -0.05)))),
+        (('e', 0), GUARD_SPEC),
+    ],
+    # The finisher: the sword rises overhead with the weight back while the shield punches forward, holds, then the
+    # left foot steps 22 cm forward as the sword chops down to the strike; the body follows through low and bent and
+    # holds before the foot steps back into the guard, so the clip ends where it began and the play mode, which plants
+    # him for the finisher, never has to move his root to follow the step.
+    'attack_3': [
+        (('1', 0), None),
+        (('s', -9), motion.spec(hips_off=(-0.02, 0.02, -0.025), hips_turn=-0.12, torso=(-0.2, -0.05), head=(0.06, 0.0),
+                                sword=((-0.85, 0.0, 0.1), (-0.6, -0.1, 0.8), (-0.7, -0.2, 0.7)),
+                                shield=((0.4, -0.35, -0.85), (-0.45, -0.88, 0.1)))),
+        (('s', -6), motion.spec(hips_off=(-0.03, 0.04, -0.03), hips_turn=-0.2, torso=(-0.35, -0.15), head=(0.1, -0.05),
+                                sword=((-0.35, 0.2, 0.92), (0.15, 0.55, 0.82), (0.05, 0.85, 0.3)),
+                                shield=((0.45, -0.5, -0.7), (-0.35, -0.9, 0.2)))),
+        (('s', -3), motion.spec(hips_off=(-0.035, 0.03, -0.04), hips_turn=-0.25, torso=(-0.4, -0.2), head=(0.12, -0.08),
+                                sword=((-0.3, 0.3, 0.9), (0.2, 0.65, 0.73), (0.1, 0.9, 0.1)),
+                                shield=((0.5, -0.55, -0.65), (-0.3, -0.92, 0.2)), step_l=(0.0, -0.08, 0.05))),
+        (('s', -1.5), motion.spec(hips_off=(-0.005, -0.06, -0.07), hips_turn=-0.03, torso=(-0.05, 0.1), head=(0.02, 0.05),
+                                  sword=((-0.25, -0.35, 0.9), (-0.1, -0.75, 0.65), (0.0, -0.8, 0.6)),
+                                  shield=((0.7, -0.15, -0.65), (0.1, -0.85, -0.3)), step_l=(0.0, -0.17, 0.04))),
+        (('s', 0), motion.spec(hips_off=(0.02, -0.12, -0.09), hips_turn=0.15, torso=(0.2, 0.32), head=(-0.05, 0.15),
+                               sword=((-0.15, -0.92, -0.36), (-0.05, -0.85, -0.52), (0.05, -0.7, -0.71)),
+                               shield=((0.85, 0.1, -0.5), (0.45, -0.75, -0.45)), step_l=(0.0, -0.22, 0.0))),
+        (('s', 3), motion.spec(hips_off=(0.02, -0.14, -0.1), hips_turn=0.2, torso=(0.25, 0.4), head=(-0.08, 0.18),
+                               sword=((-0.05, -0.8, -0.6), (0.05, -0.7, -0.71), (0.15, -0.6, -0.78)),
+                               shield=((0.85, 0.15, -0.5), (0.45, -0.7, -0.55)), step_l=(0.0, -0.22, 0.0))),
+        (('e', -8), motion.spec(hips_off=(0.015, -0.12, -0.09), hips_turn=0.15, torso=(0.2, 0.34), head=(-0.06, 0.15),
+                                sword=((-0.08, -0.8, -0.6), (0.03, -0.7, -0.71), (0.12, -0.62, -0.77)),
+                                shield=((0.8, 0.1, -0.58), (0.4, -0.75, -0.5)), step_l=(0.0, -0.22, 0.0))),
+        (('e', -4), motion.spec(hips_off=(0.0, -0.05, -0.05), hips_turn=0.05, torso=(0.08, 0.15), head=(0.0, 0.08),
+                                sword=((-0.15, -0.3, -0.94), (-0.05, -0.6, -0.8), (0.0, -0.8, -0.6)),
+                                shield=((0.5, 0.05, -0.85), (-0.3, -0.9, -0.2)), step_l=(0.0, -0.08, 0.04))),
+        (('e', 0), GUARD_SPEC),
+    ],
+}
+# The hit each chained hit starts from, at that hit's cancel frame.
+CHAIN = {'attack_2': 'attack_1', 'attack_3': 'attack_2'}
+# Where each hit's motion comes from: 'hand' (HAND above), the default for all three, or 'unimate', a UniMate (CC BY-NC,
+# accepted by the owner) generation stored as joint positions in UNIMATE_DIR/<hit>.json and retargeted at build time.
+# Hand-keyed won against UniMate's text-to-motion for all three hits in the study. No generation is committed, so the
+# UniMate path stays off; selecting it without its file stops the build with that file named (unimate_spec_at).
+COMBO_SOURCE = {'attack_1': 'hand', 'attack_2': 'hand', 'attack_3': 'hand'}
+UNIMATE_DIR = 'blender/sources/unimate'
+
+
+def _key_time(at, strike_frame, end_frame):
+    base, offset = at
+    return {'1': 1.0, 's': strike_frame, 'e': end_frame}[base] + offset
+
+
+def combo_timing(timings, attack):
+    """A hit's timing in frames from 1: (strike frame, end frame, cancel frame or None). The length and strike are its
+    entry under commanders.commander_pip in timings.json, and a missing entry stops the build, as the attack's does."""
+    entry = timings['commanders'][NAME].get(attack)
+    if entry is None:
+        raise ValueError(f'src/shared/timings.json has no commanders.{NAME}.{attack} entry, which times that hit of the combo')
+    cancel = COMBO_CANCEL[attack]
+    return 1 + entry['strike'] * anim.FPS, 1 + entry['duration'] * anim.FPS, None if cancel is None else 1 + cancel * anim.FPS
+
+
+def hand_spec_at(attack, frames, start=None):
+    """spec_at(frame) for a hand-keyed hit; frames = {hit: (strike, end, cancel)}, and `start` the pose its first key
+    takes when HAND leaves that key to the hit before it."""
+    strike_frame, end_frame, _ = frames[attack]
+    first = start if start is not None else GUARD_SPEC
+    keys = [(_key_time(k, strike_frame, end_frame), first if sp is None else sp) for k, sp in HAND[attack]]
+    return lambda f: motion.track_at(keys, f)
+
+
+def unimate_spec_at(ctx, attack, arm, frames, start=None):
+    """The stored UniMate generation retimed to the hit's contract and blended out of and back into the guard; the
+    finisher's step stays the designed one. The generation is read from the repository, never from UniMate or a
+    scratch folder, so the build keeps to the repository and Blender; selected without its file, it stops the build."""
+    import json
+    path = ctx.root / UNIMATE_DIR / f'{attack}.json'
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"COMBO_SOURCE selects 'unimate' for {attack}, but {UNIMATE_DIR}/{attack}.json is not in the repository: commit the "
+            f"generation's joint positions there, or set {attack} back to 'hand'")
+    data = json.loads(path.read_text(encoding='utf-8'))
+    strike_frame, end_frame, _ = frames[attack]
+    pos = np.array(data['positions'], float)
+    hip_height = float(charforge.bone_head(arm, P + 'Hips').z)
+    specs = motion.smooth_specs(motion.unimate_specs(pos, data['joint_names'], hip_height, GUARD_SPEC), 1.0)
+    window = motion.strike_window(pos, data['joint_names'])[:3]
+    base = motion.retimed(specs, window, strike_frame, end_frame, start if start is not None else GUARD_SPEC, end_spec=GUARD_SPEC)
+    if attack != 'attack_3':
+        return base
+    hand = hand_spec_at(attack, frames, start)
+
+    def at(f):
+        sp = dict(base(f))
+        sp['step_l'] = hand(f)['step_l']
+        sp['hips_off'] = sp['hips_off'] + (hand(f)['hips_off'] - GUARD_SPEC['hips_off']) * np.array([0.0, 1.0, 0.0])
+        return sp
+    return at
+
+
+def build_combo(ctx, arm, body, armour, blade):
+    """attack_1 to attack_3 baked in chain order, each checked (the shield pushed clear where the sword would cross it)
+    and measured, and each chained hit started from the pose the hit before it plays at its cancel frame. Returns
+    {hit: (action, strike frame, cancel frame or None, checks, blade speed)}."""
+    unknown = {k: v for k, v in COMBO_SOURCE.items() if v not in ('hand', 'unimate')}
+    if unknown or set(COMBO_SOURCE) != set(COMBO):
+        raise ValueError(f"COMBO_SOURCE must give each of {', '.join(COMBO)} 'hand' or 'unimate', not {COMBO_SOURCE}")
+    timings = ctx.timings()
+    frames = {attack: combo_timing(timings, attack) for attack in COMBO}
+    played = {}
+    out = {}
+    for attack in COMBO:
+        prev = CHAIN.get(attack)
+        start = played[prev](frames[prev][2]) if prev else None
+        if COMBO_SOURCE[attack] == 'unimate':
+            at = unimate_spec_at(ctx, attack, arm, frames, start)
+        else:
+            at = hand_spec_at(attack, frames, start)
+        strike_frame, end_frame, cancel = frames[attack]
+        action = motion.bake(arm, attack, at, end_frame, strike_frame, blade)
+        action, checks, played[attack] = motion.shield_fix(arm, body, armour, action, strike_frame, at, end_frame, blade, attack)
+        out[attack] = (action, strike_frame, cancel, checks, motion.blade_speed(arm, armour, action, strike_frame))
+    return out
+
+
 def build(ctx, source=SOURCE, name=NAME):
     """Builds commanders/<name>.glb from `source`; both default to Pip's, and a comparison build of another CharForge
     publication passes its own."""
@@ -185,16 +376,28 @@ def build(ctx, source=SOURCE, name=NAME):
     arm.name = 'commander_rig'
     clips = charforge.retarget_clips(arm, src.actions, shape.scale, s['clips'])
     ground = charforge.ground_clips(arm, body, armour, clips)
-    attack = charforge.make_action_quat(arm, 'attack', attack_keys(arm, blade_axis(armour, arm), strike_frame, end_frame), loc_bones=(P + 'Hips',))
+    blade = blade_axis(armour, arm)
+    attack = charforge.make_action_quat(arm, 'attack', attack_keys(arm, blade, strike_frame, end_frame), loc_bones=(P + 'Hips',))
     checks = charforge.attack_checks(arm, body, armour, attack, strike_frame)
-    # The attack needs no offset: its boots are held by IK where they stand in the rest pose, on the ground.
-    ground['attack'] = dict(offset_m=0.0, min_z=checks['min_z'])
+    # The authored clips need no offset: their boots are held by IK where they stand in the rest pose, on the ground (the
+    # finisher's step lifts one boot and sets it down again on the ground). Each records its lowest boot and sword points.
+    ground['attack'] = motion.clip_ground(arm, body, armour, attack, checks)
+    combo = build_combo(ctx, arm, body, armour, blade)
+    for key, (action, _strike, _cancel, combo_checks, _speed) in combo.items():
+        ground[key] = motion.clip_ground(arm, body, armour, action, combo_checks)
     if ctx.previews_enabled:
         out = ctx.preview_dir(name)
         export.render_views([body, armour], out, name, views=4, size=640)
-        front = export.render_action(arm, [body, armour], attack, out, name, frames=6)
-        side = charforge.render_action_side(arm, [body, armour], attack, out, name, frames=6)
-        charforge.filmstrip([front, side], out / f'{name}_attack_strip.png')
+        # The combo's filmstrips go in a folder of their own, which the contact sheet (tools/assets/sheet.mjs) does not
+        # read: it tiles every render in the asset's folder at the size of the widest, a filmstrip, and with the three
+        # hits' 39 renders beside the attack's the sheet grew to 9,216 x 34,600 px, past what sharp will write, and the
+        # build failed after publishing.
+        combo_out = out / 'combo'
+        combo_out.mkdir(parents=True, exist_ok=True)
+        for action, folder in [(attack, out)] + [(entry[0], combo_out) for entry in combo.values()]:
+            front = export.render_action(arm, [body, armour], action, folder, name, frames=6)
+            side = charforge.render_action_side(arm, [body, armour], action, folder, name, frames=6)
+            charforge.filmstrip([front, side], folder / f'{name}_{action.name}_strip.png')
         charforge.render_face([body, armour], out / f'{name}_face.png', shape.chin)
     meta = charforge.export_commander(arm, [body, armour], ctx.raw_path('commanders', name))
     shutil.rmtree(work, ignore_errors=True)
@@ -205,8 +408,10 @@ def build(ctx, source=SOURCE, name=NAME):
             AnimRecord('idle', meta['clips']['idle'], True),
             AnimRecord('run', meta['clips']['run'], True),
             AnimRecord('attack', anim.duration(attack), False, strike=(strike_frame - 1) / anim.FPS),
-        ],
+        ] + [AnimRecord(key, anim.duration(action), False, strike=(sf - 1) / anim.FPS) for key, (action, sf, *_rest) in combo.items()],
         notes=dict(source=source, bones=meta['bones'], morphs=meta['meshes']['commander_body']['morphs'],
                    height_m=meta['height_m'], decimation=decimation, morph_transfer=morphs, attack_checks=checks,
-                   clip_ground=ground),
+                   clip_ground=ground,
+                   combo={key: dict(source=COMBO_SOURCE[key], cancel=None if c is None else round((c - 1) / anim.FPS, 3), checks=chk, blade=spd)
+                          for key, (_action, _sf, c, chk, spd) in combo.items()}),
     )]

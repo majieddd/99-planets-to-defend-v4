@@ -441,6 +441,78 @@ def test_charforge_ground_pass_refuses_a_sword_point_the_hand_turn_does_not_carr
         raise AssertionError('a sword point the hand does not carry passed the ground pass')
 
 
+def test_motion_spline_track_passes_its_keys_eases_its_ends_and_reads_each_part_at_its_lag(tmp):
+    from lib import motion
+    times, values = [1.0, 4.0, 7.0, 13.0], [0.0, 1.0, 3.0, 2.0]
+
+    def slope(t, eps=1e-5):
+        return (motion.hermite(times, values, t + eps) - motion.hermite(times, values, t - eps)) / (2 * eps)
+
+    # Through every key, held at the first and last outside them.
+    for t, v in zip(times, values):
+        assert abs(motion.hermite(times, values, t) - v) < 1e-9, (t, motion.hermite(times, values, t))
+    assert motion.hermite(times, values, -5.0) == 0.0 and motion.hermite(times, values, 99.0) == 2.0
+    # The clip eases out of its first pose and into its last: no speed at either end.
+    assert abs(slope(1.0 + 1e-4)) < 1e-2 and abs(slope(13.0 - 1e-4)) < 1e-2, (slope(1.0 + 1e-4), slope(13.0 - 1e-4))
+    # Inside, it flows through a key at the Catmull-Rom slope, the same on both sides (C1), where per-segment easing
+    # stopped at every key: through 4, (3 - 0) / (7 - 1) = 0.5.
+    assert abs(slope(4.0) - 0.5) < 1e-4, slope(4.0)
+    left = (motion.hermite(times, values, 7.0) - motion.hermite(times, values, 7.0 - 1e-6)) / 1e-6
+    right = (motion.hermite(times, values, 7.0 + 1e-6) - motion.hermite(times, values, 7.0)) / 1e-6
+    assert abs(left - right) < 1e-3, (left, right)
+    # Each part reads the track at its own lag, clamped to the clip: the hips 1.5 frames ahead, the shield 1.5 behind.
+    guard = motion.spec(sword=((0, 0, -1),) * 3, shield=((0, 0, -1),) * 2)
+    keys = [(t, {**guard, 'hips_turn': np.array([v]), 'h_up': np.array([v, 0.0, -1.0])}) for t, v in zip(times, values)]
+    for t in (1.0, 2.5, 5.0, 12.5):
+        at = motion.track_at(keys, t)
+        ahead = motion.hermite(times, values, min(max(t + motion.LAGS['hips'], 1.0), 13.0))
+        behind = motion.hermite(times, values, min(max(t + motion.LAGS['shield'], 1.0), 13.0))
+        assert abs(at['hips_turn'][0] - ahead) < 1e-9 and abs(at['h_up'][0] - behind) < 1e-9, (t, at['hips_turn'], at['h_up'])
+
+
+def test_charforge_leg_ik_moves_the_ankle_by_a_step_and_keeps_the_foot_level(tmp):
+    from mathutils import Vector
+    from lib import charforge
+    P = charforge.P
+    data = bpy.data.armatures.new('legs')
+    arm = bpy.data.objects.new('legs', data)
+    bpy.context.scene.collection.objects.link(arm)
+    scene.select_only([arm])
+    bpy.ops.object.mode_set(mode='EDIT')
+    hips = data.edit_bones.new(P + 'Hips')
+    hips.head, hips.tail = (0, 0, 1.0), (0, 0, 1.1)
+    parent = hips
+    for name, head, tail in (('LeftUpLeg', (0.1, 0, 0.95), (0.1, 0, 0.5)), ('LeftLeg', (0.1, 0, 0.5), (0.1, 0, 0.1)),
+                             ('LeftFoot', (0.1, 0, 0.1), (0.1, -0.1, 0.02))):
+        bone = data.edit_bones.new(P + name)
+        bone.head, bone.tail = head, tail
+        bone.parent = parent
+        parent = bone
+    bpy.ops.object.mode_set(mode='OBJECT')
+    rest = arm.data.bones[P + 'LeftFoot']
+
+    def posed_foot(ops):
+        pose = charforge.pose_rotations(arm, ops)
+        for pb in arm.pose.bones:
+            pb.rotation_mode = 'QUATERNION'
+            pb.rotation_quaternion = pose[pb.name]
+            pb.location = pose.get(f'{pb.name}@loc', (0.0, 0.0, 0.0))
+        bpy.context.view_layer.update()
+        foot = arm.pose.bones[P + 'LeftFoot']
+        return foot.head.copy(), foot.matrix.to_3x3()
+
+    # The hips drop 5 cm: without a step the ankle stays on its rest point; with one it lands on that point moved by the
+    # step, 12 cm ahead (-y) and 3 cm up, as the finisher's front boot does; either way the foot keeps its rest
+    # orientation, so the boot sets down level.
+    for step in (None, (0.0, -0.12, 0.03)):
+        ops = [('move', P + 'Hips', (0.0, 0.0, -0.05)), ('leg', 'Left') if step is None else ('leg', 'Left', step)]
+        head, basis = posed_foot(ops)
+        want = rest.head_local + (Vector(step) if step else Vector())
+        assert (head - want).length < 1e-4, (step, tuple(head), tuple(want))
+        turned = (basis @ rest.matrix_local.to_3x3().inverted()).to_quaternion().angle
+        assert turned < 1e-4, (step, turned)
+
+
 def _flat(value, shape=(4, 4)):
     return np.full(shape, value, np.float64)
 

@@ -2379,9 +2379,10 @@ def pose_rotations(arm, ops):
     smallest rotation and then twists it about that direction; ('turn', bone, axis, angle) rotates the bone about a
     world axis through its head; ('aim_carry', bone, direction, carried_bone, carried_rest, want) aims the bone, then
     twists it so a direction carried by a child (given in the rest pose, such as a blade's axis) points as close to
-    `want` as the twist allows; ('move', bone, offset) translates a bone (the hips) in world space; ('leg', side)
-    solves that leg's thigh and shin as a two-bone chain so its ankle stays on its rest position, the knee bending
-    forward, and puts the foot back at its rest orientation, so the boot stays planted however the hips move.
+    `want` as the twist allows; ('move', bone, offset) translates a bone (the hips) in world space; ('leg', side[,
+    offset]) solves that leg's thigh and shin as a two-bone chain so its ankle stays on its rest position (or that
+    position moved by `offset`, world metres, for a step), the knee bending forward, and puts the foot back at its rest
+    orientation, so the boot stays planted however the hips move.
     A moved bone's offset comes back as '<bone>@loc' (its local translation), as lib/anim's poses carry it.
     Children follow their parents, so a torso turn carries the arms, and a later 'aim'
     of an arm is absolute again. Mixamo bones have different local axes bone to bone, which makes Euler angles hard to
@@ -2399,7 +2400,7 @@ def pose_rotations(arm, ops):
     bpy.context.view_layer.update()
     for op in ops:
         if op[0] == 'leg':
-            _solve_leg(arm, op[1])
+            _solve_leg(arm, op[1], op[2] if len(op) > 2 else None)
             continue
         pb = arm.pose.bones[op[1]]
         h = pb.head.copy()
@@ -2441,14 +2442,17 @@ def pose_rotations(arm, ops):
     return out
 
 
-def _solve_leg(arm, side):
-    """Two-bone IK for one Mixamo leg ('Left' or 'Right'): the ankle back on its rest position, the knee in the plane
-    of the hip, the ankle and the forward direction, then the foot at its rest orientation. The ankle can only be
-    reached while the hip is no further from it than the leg's length, so callers lower the hips, never raise them."""
+def _solve_leg(arm, side, offset=None):
+    """Two-bone IK for one Mixamo leg ('Left' or 'Right'): the ankle on its rest position, or moved by `offset` (world
+    metres) for a step such as the finisher's (recipes/commander_pip.py), the knee in the plane of the hip, the ankle and
+    the forward direction, then the foot at its rest orientation. The ankle can only be reached while the hip is no
+    further from it than the leg's length, so callers lower the hips, never raise them."""
     up, lo, ft = (arm.pose.bones[f'{P}{side}{n}'] for n in ('UpLeg', 'Leg', 'Foot'))
     rest = arm.data.bones
     hip = up.head.copy()
     ankle = rest[ft.name].head_local.copy()
+    if offset is not None:
+        ankle += Vector(offset)
     l1 = (rest[lo.name].head_local - rest[up.name].head_local).length
     l2 = (rest[ft.name].head_local - rest[lo.name].head_local).length
     d = ankle - hip

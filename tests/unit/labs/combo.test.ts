@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { COMBAT_FEEL_RANGES, DEFAULT_COMBAT_FEEL, type CombatFeel } from '../../../src/labs/world/combatFeel';
 import {
+  ACTIVE_AFTER_STRIKE,
+  ACTIVE_BEFORE_STRIKE,
   BACKHAND_STRIKE_BEFORE_STRIKE,
   bodyWeights,
   bufferOpensAt,
@@ -24,6 +26,7 @@ import {
   type HitPlay,
 } from '../../../src/labs/world/combo';
 import { FREE_MOTION } from '../../../src/labs/world/playMotion';
+import timings from '../../../src/shared/timings.json';
 
 const FEEL: CombatFeel = { ...DEFAULT_COMBAT_FEEL };
 const [HIT1, HIT2, HIT3] = COMBO_HITS as [(typeof COMBO_HITS)[number], (typeof COMBO_HITS)[number], (typeof COMBO_HITS)[number]];
@@ -93,6 +96,16 @@ describe('the combo contracts', () => {
     expect([HIT3.duration, HIT3.strike, HIT3.cancel, HIT3.planted]).toEqual([0.85, 0.38, null, true]);
     // The crossfade's ceiling is under the light hits' cancel point, so only two hits ever show at once.
     expect(COMBAT_FEEL_RANGES.crossfade.max).toBeLessThan(HIT1.cancel!);
+  });
+
+  it("take each hit's length and strike from its entry in src/shared/timings.json, the file assets:check holds the clips to", () => {
+    for (const hit of COMBO_HITS) {
+      expect([hit.duration, hit.strike], hit.name).toEqual([timings.commanders.commander_pip[hit.name].duration, timings.commanders.commander_pip[hit.name].strike]);
+      // The active frames follow the strike: 50 ms before it to 80 ms after it.
+      expect(hit.activeFrom, hit.name).toBeCloseTo(hit.strike - ACTIVE_BEFORE_STRIKE, 12);
+      expect(hit.activeTo, hit.name).toBeCloseTo(hit.strike + ACTIVE_AFTER_STRIKE, 12);
+    }
+    expect([ACTIVE_BEFORE_STRIKE, ACTIVE_AFTER_STRIKE]).toEqual([0.05, 0.08]);
   });
 });
 

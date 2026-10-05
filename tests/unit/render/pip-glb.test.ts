@@ -11,6 +11,7 @@ import { createHullMaterial, createInkUniforms } from '../../../src/render/ink/h
 import { LAYERS } from '../../../src/render/layers';
 import { createPaintUniforms } from '../../../src/render/materials/painted';
 import { VERDANT } from '../../../src/render/themes';
+import timings from '../../../src/shared/timings.json';
 import { assetIO } from '../../../tools/assets/optimize.mjs';
 
 // The shipped Pip, as three r186's own GLTFLoader delivers it, so the names the renderer and the face driver read are
@@ -25,8 +26,9 @@ const FACE = ['blink_L', 'blink_R', 'smile', 'brows_up', 'pucker'];
 // check reads both, because a check on the body alone would pass with the head, where the eyes are, left unpainted,
 // uninked or undriven.
 const BODY_PARTS = ['commander_body_1', 'commander_body_2'];
-// His attack's contract (src/shared/timings.json), and the export's frame rounding, which assets:check allows too.
-const ATTACK_SECONDS = 0.85;
+// His clips' contracts (src/shared/timings.json: the attack and the combo's attack_1 to attack_3), and the export's frame
+// rounding, which assets:check allows too.
+const CONTRACTS = timings.commanders.commander_pip;
 const FRAME = 1 / 30;
 
 let scene: Group;
@@ -81,7 +83,7 @@ describe('the shipped Pip through GLTFLoader', () => {
     expect(range(head!)).toEqual([expect.closeTo(1, 3), expect.closeTo(1, 3)]);
   });
 
-  it('carries the five face morphs on the body and the head, positions only, the jaw bone by its exact name, and the idle, run and attack clips', () => {
+  it('carries the five face morphs on the body and the head, positions only, the jaw bone by its exact name, and the idle, run, attack and combo clips', () => {
     for (const part of bodyParts()) {
       expect(Object.keys(part.morphTargetDictionary ?? {})).toEqual(FACE);
       expect(part.geometry.morphAttributes['position']).toHaveLength(5);
@@ -93,9 +95,10 @@ describe('the shipped Pip through GLTFLoader', () => {
     const jaw = scene.getObjectByName(JAW_BONE_NAME) as Bone;
     expect(jaw.isBone).toBe(true);
     expect(jaw.parent?.name).toBe('mixamorigHead');
-    // The exporter writes the clips in name order; the attack, authored in the recipe, lasts its contract to a frame.
-    expect(clips).toEqual(['attack', 'idle', 'run']);
-    expect(Math.abs(durations['attack']! - ATTACK_SECONDS)).toBeLessThanOrEqual(FRAME);
+    // The exporter writes the clips in name order; the attack and the combo's three hits, authored in the recipe, each
+    // last their contract to a frame.
+    expect(clips).toEqual(['attack', 'attack_1', 'attack_2', 'attack_3', 'idle', 'run']);
+    for (const [clip, contract] of Object.entries(CONTRACTS)) expect(Math.abs(durations[clip]! - contract.duration), clip).toBeLessThanOrEqual(FRAME);
   });
 
   it('paints the body and the head as skin out of the edge pass and keeps the armour in it, all inked', () => {

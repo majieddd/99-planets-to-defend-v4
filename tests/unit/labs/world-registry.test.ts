@@ -81,33 +81,38 @@ describe('the Asset World registry', () => {
     const gaps = coverageGaps(grown);
     expect(gaps).toEqual([expect.stringMatching(/"husk" has a clip "leap" that no Asset World member loops and CLIPS_NOT_SHOWN/)]);
     expect(gaps[0]).toContain('src/labs/world/registry.ts');
-    const reason = { 'husk/leap': 'a one-off intro, shown in the cutscene lab' };
+    // Each table given in place of CLIPS_NOT_SHOWN keeps its reasons for Pip's combo hits, which no member loops.
+    const reason = { ...CLIPS_NOT_SHOWN, 'husk/leap': 'a one-off intro, shown in the cutscene lab' };
     expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, reason)).toEqual([]);
     expect(clipHasReason('husk', 'leap', reason)).toBe(true);
     // A blank reason is no reason, and a reason for another entry's clip covers nothing here (and is itself a stale
     // reason, since Bulwark ships no such clip).
-    expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, { 'husk/leap': '  ' })).toHaveLength(1);
+    expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, { ...CLIPS_NOT_SHOWN, 'husk/leap': '  ' })).toHaveLength(1);
     expect(clipHasReason('husk', 'leap', { 'husk/leap': '  ' })).toBe(false);
-    expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, { 'bulwark/leap': 'Bulwark does not leap' })).toEqual([
+    expect(coverageGaps(grown, MEMBERS, NON_PLACEABLE, { ...CLIPS_NOT_SHOWN, 'bulwark/leap': 'Bulwark does not leap' })).toEqual([
       expect.stringContaining('"husk" has a clip "leap"'),
       expect.stringContaining('reason for "bulwark/leap", which is no clip the manifest lists'),
     ]);
-    // The shipped registry loops every shipped clip, so the table of reasons starts empty.
-    expect(CLIPS_NOT_SHOWN).toEqual({});
+    // The shipped registry loops every shipped clip but Pip's three combo hits, which Play Pip shows in their chain.
+    expect(Object.keys(CLIPS_NOT_SHOWN).sort()).toEqual(['commander_pip/attack_1', 'commander_pip/attack_2', 'commander_pip/attack_3']);
+    // Without those reasons, the three hits are gaps by name.
+    expect(coverageGaps(manifest, MEMBERS, NON_PLACEABLE, {})).toEqual(
+      ['attack_1', 'attack_2', 'attack_3'].map((hit) => expect.stringContaining(`"commander_pip" has a clip "${hit}"`)),
+    );
     const withoutIdle = MEMBERS.filter((m) => m.name !== 'husk_idle');
     expect(coverageGaps(manifest, withoutIdle)).toEqual([expect.stringContaining('"husk" has a clip "idle"')]);
-    expect(coverageGaps(manifest, withoutIdle, NON_PLACEABLE, { 'husk/idle': 'the idle Husk stands in the wave lab' })).toEqual([]);
+    expect(coverageGaps(manifest, withoutIdle, NON_PLACEABLE, { ...CLIPS_NOT_SHOWN, 'husk/idle': 'the idle Husk stands in the wave lab' })).toEqual([]);
   });
 
   it('fails a CLIPS_NOT_SHOWN reason whose clip left the manifest, or that a member loops, by its key', () => {
     // The clip left the GLB, so its reason explains nothing, and would silently cover a new clip of that name.
-    const stale = coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { 'husk/leap': 'a one-off intro, shown in the cutscene lab' });
+    const stale = coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { ...CLIPS_NOT_SHOWN, 'husk/leap': 'a one-off intro, shown in the cutscene lab' });
     expect(stale).toEqual([expect.stringMatching(/CLIPS_NOT_SHOWN gives a reason for "husk\/leap", which is no clip the manifest lists/)]);
     // A key that names no entry, or has no clip part, is as stale.
-    expect(coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { 'mortar_bastion/fire': 'not built yet' })).toHaveLength(1);
-    expect(coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { husk: 'every clip' })).toHaveLength(1);
+    expect(coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { ...CLIPS_NOT_SHOWN, 'mortar_bastion/fire': 'not built yet' })).toHaveLength(1);
+    expect(coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { ...CLIPS_NOT_SHOWN, husk: 'every clip' })).toHaveLength(1);
     // A member loops the clip, so the reason says a shown clip is hidden.
-    const looped = coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { 'husk/walk': 'shown in the wave lab instead' });
+    const looped = coverageGaps(manifest, MEMBERS, NON_PLACEABLE, { ...CLIPS_NOT_SHOWN, 'husk/walk': 'shown in the wave lab instead' });
     expect(looped).toEqual([expect.stringMatching(/CLIPS_NOT_SHOWN gives a reason for "husk\/walk", but member "husk_walk" loops that clip/)]);
     for (const gap of [...stale, ...looped]) expect(gap).toContain('src/labs/world/registry.ts');
   });
@@ -219,16 +224,18 @@ describe('the Asset World registry', () => {
     const members = MEMBERS.filter((m) => m.entry === 'bulwark' && m.clip !== 'attack').map((m) => ({ ...m, name: `early_${m.clip}`, entry: entry.name }));
     const early = { ...members[0]!, name: 'early_attack', label: 'Attack', clip: 'attack' };
     const before: CoverageManifest = { assets: [entry] };
-    // Before the clip ships, the model's other members cover it, with no member and no CLIPS_NOT_SHOWN reason for it.
-    expect(coverageGaps(before, members)).toEqual([]);
+    // Before the clip ships, the model's other members cover it, with no member and no CLIPS_NOT_SHOWN reason for it. The
+    // manifest of one entry lists none of Pip's clips, so the shipped reasons for his combo hits are left out with it.
+    const none = {};
+    expect(coverageGaps(before, members, NON_PLACEABLE, none)).toEqual([]);
     // A member put in ahead of the clip is named, and the page leaves it out rather than stopping on a missing clip.
-    const earlyGaps = coverageGaps(before, [...members, early]);
+    const earlyGaps = coverageGaps(before, [...members, early], NON_PLACEABLE, none);
     expect(earlyGaps).toEqual([expect.stringContaining('member "early_attack" loops a clip "attack" that "early_commander" does not export')]);
     expect(showableMembers(new Map([[entry.name, entry.animations.map((animation) => animation.name)]]), earlyGaps, [...members, early])).toEqual({ shown: members, unnamed: [] });
     // The clip ships: the coverage check names exactly it, and one member that loops it closes the gap.
     const shipped: CoverageManifest = { assets: [{ ...entry, animations: [...entry.animations, { name: 'attack' }] }] };
-    expect(coverageGaps(shipped, members)).toEqual([expect.stringContaining('"early_commander" has a clip "attack" that no Asset World member loops')]);
-    expect(coverageGaps(shipped, [...members, early])).toEqual([]);
+    expect(coverageGaps(shipped, members, NON_PLACEABLE, none)).toEqual([expect.stringContaining('"early_commander" has a clip "attack" that no Asset World member loops')]);
+    expect(coverageGaps(shipped, [...members, early], NON_PLACEABLE, none)).toEqual([]);
   });
 
   it('builds every member the loaded models can show, and names any it leaves out that the coverage gaps do not', () => {

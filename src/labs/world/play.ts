@@ -122,6 +122,11 @@ export interface PlayReading {
   /** How the playing hit holds him back this frame: the share of his pace and of his turn rate he keeps. */
   moveScale: number;
   turnScale: number;
+  /**
+   * Each foot's ball (its toe base, or its ankle) in world space as last drawn, left then right (null out of play): the
+   * browser test reads the finisher's step and the frames around its end from these, for a slide or a snap.
+   */
+  feet: number[][] | null;
 }
 
 /**
@@ -296,6 +301,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
   let stride: PlayReading['stride'] | undefined;
 
   let root: Object3D | null = null;
+  let feet: (Object3D | null)[] = [];
   let mixer: AnimationMixer | null = null;
   let idle: HalfActions | null = null;
   let run: HalfActions | null = null;
@@ -391,6 +397,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       if (!stride) console.warn('Play Pip: the run clip gave no stride to read, so it plays at its authored rate');
       root = cloneRig(template);
       root.name = 'play_pip';
+      feet = [findBone(root, ['LeftToeBase', 'LeftFoot']), findBone(root, ['RightToeBase', 'RightFoot'])];
       // A SkeletonUtils copy's hulls hold sliced copies of the body's morph influences until their first draw, as in
       // layout.ts, so the ink would not close with the lids until then.
       root.traverse((child) => {
@@ -443,6 +450,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       // The copy shares the loaded geometry and materials, which the world still draws; only its skeletons are its own.
       root.traverse((child) => (child as SkinnedMesh).isSkinnedMesh && (child as SkinnedMesh).skeleton.dispose());
       root = null;
+      feet = [];
       mixer = idle = run = null;
       hitActions = [];
       face = null;
@@ -561,6 +569,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
         legsRunWeight: body.lower.run,
         moveScale: swing.moveScale,
         turnScale: swing.turnScale,
+        feet: root && feet.every(Boolean) ? feet.map((foot) => foot!.getWorldPosition(new Vector3()).toArray()) : null,
       };
     },
   };

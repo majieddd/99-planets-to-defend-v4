@@ -630,6 +630,8 @@ test.describe('the Asset World', () => {
       expect(before.attacking, attackLine).toBe(false);
       expect(swings, attackLine).toBe(1);
       for (const sample of swing) expect(sample.comboStep, attackLine).toBe(1);
+      // attack_1 is the GLB's own clip since the real hits shipped, picked up with no change to the page.
+      expect(swingStart.source, attackLine).toBe('clip');
       expect(swingStart.attackSeconds, attackLine).toBe(COMBO_HITS[0]!.duration);
       expect(swingStart.strikeAt, attackLine).toBe(COMBO_HITS[0]!.strike);
       // The hit reaches its strike at full weight, once.
@@ -823,6 +825,8 @@ test.describe('the Asset World', () => {
       expect(hits.map((hit) => hit.step), chainLine).toEqual([1, 2, 3, 1, 1]);
       expect(presses.length, chainLine).toBe(5);
       expect(one!.samples[0]!.chainedAt, chainLine).toBeNull();
+      // Every hit plays the GLB's own clip.
+      for (const hit of [one, two, three]) expect(hit!.samples[0]!.source, chainLine).toBe('clip');
       // attack_2 and attack_3 each start at the hit before's cancel point or after it, from a press kept in its buffer.
       for (const hit of [two!, three!]) {
         expect(hit.before.comboStep, chainLine).toBe(hit.step - 1);

@@ -140,6 +140,27 @@
           "loop": false,
           "strike": 0.34,
           "exportedDuration": 0.8333333134651184
+        },
+        {
+          "name": "attack_1",
+          "duration": 0.55,
+          "loop": false,
+          "strike": 0.2,
+          "exportedDuration": 0.5333333611488342
+        },
+        {
+          "name": "attack_2",
+          "duration": 0.55,
+          "loop": false,
+          "strike": 0.2,
+          "exportedDuration": 0.5333333611488342
+        },
+        {
+          "name": "attack_3",
+          "duration": 0.85,
+          "loop": false,
+          "strike": 0.38,
+          "exportedDuration": 0.8333333134651184
         }
       ],
       "morphs": [
@@ -182,7 +203,7 @@
           "sink": 0
         }
       ],
-      "bytes": 710308
+      "bytes": 769008
     },
     {
       "name": "verdant_kit",

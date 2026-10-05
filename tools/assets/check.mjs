@@ -81,7 +81,12 @@ export function evaluateAsset(entry, budgets, timings) {
   // shadow both faces of every mesh using it; a mesh that needs both faces says so in its own extras.
   if (entry.doubleSided) failures.push('double-sided material');
   failures.push(...groundFailures(entry.ground));
-  for (const name of budget.animations ?? []) {
+  // The family's required clips, and every clip src/shared/timings.json times for this model: a timed clip is as
+  // required as the family's, since the game reads its contract from that file. Only the family's clips were walked,
+  // so a timing for a clip the family does not require (Pip's attack_1 to attack_3, which Bulwark does not ship) was
+  // never checked, and the clip could miss it, or be missing, with the model still passing.
+  const timed = Object.keys(timings[entry.family]?.[entry.name] ?? {});
+  for (const name of new Set([...(budget.animations ?? []), ...timed])) {
     const animation = entry.animations.find((a) => a.name === name);
     if (!animation) {
       failures.push(`missing animation '${name}'`);

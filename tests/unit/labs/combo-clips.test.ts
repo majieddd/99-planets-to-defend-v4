@@ -57,6 +57,9 @@ const LOWER = [
 
 let scene: Group;
 let animations: AnimationClip[];
+/** The shipped clips without the real hits, as a GLB from before they shipped, for the placeholder path. */
+let withoutHits: AnimationClip[];
+const HIT_NAMES = COMBO_HITS.map((hit) => hit.name as string);
 
 beforeAll(async () => {
   const io = await assetIO();
@@ -67,6 +70,7 @@ beforeAll(async () => {
   const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, '');
   scene = gltf.scene;
   animations = gltf.animations;
+  withoutHits = animations.filter((clip) => !HIT_NAMES.includes(clip.name));
 });
 
 const nodeOf = (trackName: string): string => PropertyBinding.parseTrackName(trackName).nodeName;
@@ -128,7 +132,63 @@ describe("Play Pip's upper-body mask on the shipped rig", () => {
 });
 
 describe("Play Pip's combo clips", () => {
-  it('stand placeholders in for attack_1 to attack_3, each its contract long, with the strike pose at the contract strike', () => {
+  it("plays the GLB's own attack_1 to attack_3, each within a frame of its contract's length, with no change to the page", () => {
+    const warned: string[] = [];
+    const hits = hitClips(animations, SOURCE_STRIKE, COMBO_HITS, (text) => warned.push(text))!;
+    expect(hits.map((hit) => [hit.contract.name, hit.source, hit.clip.name])).toEqual([
+      ['attack_1', 'clip', 'attack_1'],
+      ['attack_2', 'clip', 'attack_2'],
+      ['attack_3', 'clip', 'attack_3'],
+    ]);
+    expect(warned).toEqual([]);
+    for (const hit of hits) {
+      expect(hit.clip).toBe(animations.find((clip) => clip.name === hit.contract.name));
+      expect(Math.abs(hit.lengthOff), hit.contract.name).toBeLessThanOrEqual(CLIP_LENGTH_TOLERANCE);
+    }
+  });
+
+  it('starts each chained hit about where the hit before stands at its cancel point, so the crossfade between them hides no jump', () => {
+    // The recipe keys attack_2's first pose from attack_1's at its cancel frame, and attack_3's from attack_2's (CHAIN,
+    // blender/recipes/commander_pip.py). The two are not exactly one pose: on a hit's first frame its hips read their
+    // track 1.5 frames ahead and its torso 0.5 ahead (lib/motion.py LAGS), so they have already set off toward the next
+    // key. Read back through the export and the loader, the hands, the hips and the head stand 13 to 47 mm from where
+    // the hit before left them, each about a frame's motion at that seam (the finisher moves the sword hand 129 mm in its
+    // first frame), which the 0.10 s crossfade carries; a gap of a whole pose, as a hit keyed from the guard would leave,
+    // is tens of centimetres.
+    const hits = hitClips(animations, SOURCE_STRIKE)!;
+    for (const [from, to] of [
+      [hits[0]!, hits[1]!],
+      [hits[1]!, hits[2]!],
+    ] as const) {
+      for (const bone of ['mixamorigRightHand', 'mixamorigLeftHand', 'mixamorigHips', 'mixamorigHead']) {
+        const gap = handAt(from.clip, from.contract.cancel!, bone).distanceTo(handAt(to.clip, 0, bone));
+        expect(gap, `${from.contract.name} at its cancel point to ${to.contract.name}'s start, ${bone}`).toBeLessThan(0.05);
+      }
+    }
+  });
+
+  it("steps the finisher's front boot about 22 cm out and home again inside the clip, its back boot and the light hits' boots still", () => {
+    // The play mode plants him for the finisher, so the step is the clip's alone: it must come back by the clip's end, or
+    // the boot would jump home when the hit fades out. In the rig's frame, at the start, the strike and the end.
+    const hits = hitClips(animations, SOURCE_STRIKE)!;
+    const finisher = hits[2]!;
+    const left = (time: number) => handAt(finisher.clip, time, 'mixamorigLeftToeBase');
+    const right = (time: number) => handAt(finisher.clip, time, 'mixamorigRightToeBase');
+    const out = Math.max(...[0.3, 0.38, 0.45, 0.5].map((time) => left(time).distanceTo(left(0))));
+    expect(out).toBeGreaterThan(0.2);
+    expect(out).toBeLessThan(0.25);
+    expect(left(finisher.clip.duration).distanceTo(left(0))).toBeLessThan(0.001);
+    expect(Math.max(...[0.2, 0.38, 0.6, finisher.clip.duration].map((time) => right(time).distanceTo(right(0))))).toBeLessThan(0.001);
+    for (const light of hits.slice(0, 2)) {
+      for (const toe of ['mixamorigLeftToeBase', 'mixamorigRightToeBase']) {
+        const moved = Math.max(...[0.1, 0.2, 0.3, light.clip.duration].map((time) => handAt(light.clip, time, toe).distanceTo(handAt(light.clip, 0, toe))));
+        expect(moved, `${light.contract.name} ${toe}`).toBeLessThan(0.001);
+      }
+    }
+  });
+
+  it('stand placeholders in for attack_1 to attack_3 on a GLB without them, each its contract long, with the strike pose at the contract strike', () => {
+    const animations = withoutHits;
     expect(animations.map((clip) => clip.name)).not.toContain('attack_1');
     const hits = hitClips(animations, SOURCE_STRIKE)!;
     expect(hits.map((hit) => [hit.contract.name, hit.source, hit.clip.name])).toEqual([
@@ -152,6 +212,7 @@ describe("Play Pip's combo clips", () => {
   });
 
   it("plays a clip the GLB exports under a hit's name instead of a placeholder, so the swap is an asset change alone", () => {
+    const animations = withoutHits;
     const attack = animations.find((clip) => clip.name === 'attack')!;
     const real = new AnimationClip('attack_2', 0.55, attack.tracks);
     const hits = hitClips([...animations, real], SOURCE_STRIKE)!;
@@ -162,6 +223,7 @@ describe("Play Pip's combo clips", () => {
   });
 
   it("names a GLB hit clip whose length misses its contract by more than a frame, and keeps the miss for the reading", () => {
+    const animations = withoutHits;
     const attack = animations.find((clip) => clip.name === 'attack')!;
     const warned: string[] = [];
     const warn = (text: string): void => {

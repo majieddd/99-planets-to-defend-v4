@@ -241,12 +241,23 @@ export const NON_PLACEABLE: Readonly<Record<string, string>> = {
   ink_noise: 'the noise the screen-space edge ink wobbles by; used by the ink pass, not shown as a model',
 };
 
+/** Why Pip's combo hits stand no member of their own, the one reason all three carry. */
+const COMBO_HIT_NOT_SHOWN =
+  "a hit of Play Pip's three-hit combo, which reads only in its chain: Play Pip in this world (?play=pip) and the combat " +
+  'arena play it there, to its contract and crossfaded from the hit before, where a member looping it alone would ' +
+  "replay a cut that starts from the last hit's pose and ends in the guard. A member of its own would also move " +
+  "Bulwark's row 2.6 m further out, as the attack's did, and every measure that follows it (Asset World layout)";
+
 /**
- * Clips a model exports that no member loops, each keyed `entry/clip` with the reason it is not shown. Every clip is
- * shown today, so the table is empty; a clip added to a GLB fails the coverage check by name until it has a member or
+ * Clips a model exports that no member loops, each keyed `entry/clip` with the reason it is not shown: Pip's combo hits,
+ * which Play Pip shows in their chain. A clip added to a GLB fails the coverage check by name until it has a member or
  * a reason here, and a reason fails it too once its clip leaves the manifest or a member loops it.
  */
-export const CLIPS_NOT_SHOWN: Readonly<Record<string, string>> = {};
+export const CLIPS_NOT_SHOWN: Readonly<Record<string, string>> = {
+  'commander_pip/attack_1': COMBO_HIT_NOT_SHOWN,
+  'commander_pip/attack_2': COMBO_HIT_NOT_SHOWN,
+  'commander_pip/attack_3': COMBO_HIT_NOT_SHOWN,
+};
 
 /**
  * Whether CLIPS_NOT_SHOWN, or the table given, explains a clip of a manifest entry: a blank reason is no reason. The

@@ -2,7 +2,8 @@
  * The combat feel numbers of Play Pip (prototype), the Asset World's lab for trying the commander's combat, kept in one
  * settings object so the panel's "combat feel" folder, the address's `?feel=` and the play code all read one source.
  * Each number has a row in the blueprint (Numbers, Asset World layout). The combo's clip contracts (each hit's length,
- * strike and cancel point) are not here: they belong to the clips, in combo.ts.
+ * strike and cancel point) are not here: they belong to the clips, in combo.ts, whose lengths and strikes come from
+ * src/shared/timings.json.
  *
  * Phase B of the combat feel research adds its impact numbers (hit-stop length, lunge distance, shake strength, trail
  * length) as further keys of CombatFeel, DEFAULT_COMBAT_FEEL and COMBAT_FEEL_RANGES; the folder, the readout, the copy

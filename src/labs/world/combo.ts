@@ -12,6 +12,10 @@
  * so hit-stop would have eaten the very presses that chain a combo. The lab's freeze, which should take no input, drops
  * its presses in play.ts instead, before they reach here.
  */
+// With its import attribute: the browser tests import this module (tests/e2e/asset-world.spec.ts, for COMBO_HITS), and
+// Playwright loads it as Node's own ES module, which refuses a JSON import without one, so the whole suite stopped
+// before its first test. Vite and Vitest take the attribute as they take the plain import.
+import timings from '../../shared/timings.json' with { type: 'json' };
 import type { CombatFeel } from './combatFeel';
 import { FREE_MOTION, type SwingMotion } from './playMotion';
 
@@ -20,7 +24,7 @@ export type HitName = 'attack_1' | 'attack_2' | 'attack_3';
 
 /** One hit's timing contract, in seconds into its clip. */
 export interface HitContract {
-  /** The clip the hit plays, by its name in the GLB; a placeholder stands in until the GLB exports it. */
+  /** The clip the hit plays, by its name in the GLB; a placeholder stands in for a GLB that does not export it. */
   name: HitName;
   duration: number;
   /** The strike moment, where the hit lands (Pillar 4). */
@@ -37,20 +41,32 @@ export interface HitContract {
   planted: boolean;
 }
 
+/** How long before a hit's strike its active frames begin, and how long after it they end, in seconds. */
+export const ACTIVE_BEFORE_STRIKE = 0.05;
+export const ACTIVE_AFTER_STRIKE = 0.08;
+
 /**
- * The prototype's timing contracts for attack_1, attack_2 and the finisher attack_3. They live here, in the lab, while
- * placeholders stand in for the clips; they move into src/shared/timings.json, with assets:check holding the exported
- * clips to them, when the real attack_1 to attack_3 ship. The light hits are quick (0.55 s, striking at 0.20 s) and
+ * One hit's contract: its length and strike from its entry under commanders.commander_pip in src/shared/timings.json,
+ * the file assets:check holds the exported clip to and the recipe keys the clip from, and what that file has no place
+ * for from here: the cancel point, the active frames around the strike and the plant.
+ */
+function contract(name: HitName, cancel: number | null, planted: boolean): HitContract {
+  const { duration, strike } = timings.commanders.commander_pip[name];
+  return { name, duration, strike, cancel, activeFrom: strike - ACTIVE_BEFORE_STRIKE, activeTo: strike + ACTIVE_AFTER_STRIKE, planted };
+}
+
+/**
+ * The timing contracts for attack_1, attack_2 and the finisher attack_3. The lengths and strikes are the shared ones in
+ * src/shared/timings.json, since the real clips shipped in commander_pip.glb: they lived here while placeholders stood
+ * in, and a clip and the page could have timed a hit apart. The light hits are quick (0.55 s, striking at 0.20 s) and
  * cancel at 0.30 s, after the strike and its active frames; the finisher keeps the cleave's weight (0.85 s, striking at
  * 0.38 s) and has no cancel. Each hit's active frames run from 50 ms before its strike to 80 ms after it, about four
  * frames at 30 fps, where the cut moves fastest; a light hit's active frames end 20 ms before its cancel point, so the
- * cancel never lands inside them.
+ * cancel never lands inside them. The cancel points stay here, as timings.json carries a clip's length and strike only;
+ * the recipe keys each chained hit from the pose the hit before holds at its cancel point, records the cancel it used in
+ * the sidecar, and a unit test holds the two equal (tests/unit/assets/pip-meta.test.ts).
  */
-export const COMBO_HITS: readonly HitContract[] = [
-  { name: 'attack_1', duration: 0.55, strike: 0.2, cancel: 0.3, activeFrom: 0.15, activeTo: 0.28, planted: false },
-  { name: 'attack_2', duration: 0.55, strike: 0.2, cancel: 0.3, activeFrom: 0.15, activeTo: 0.28, planted: false },
-  { name: 'attack_3', duration: 0.85, strike: 0.38, cancel: null, activeFrom: 0.33, activeTo: 0.46, planted: true },
-];
+export const COMBO_HITS: readonly HitContract[] = [contract('attack_1', 0.3, false), contract('attack_2', 0.3, false), contract('attack_3', null, true)];
 
 /**
  * The fades a hit plays with, copied from the combat feel settings on the frame it begins: the seconds it rises over

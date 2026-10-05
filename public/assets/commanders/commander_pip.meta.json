@@ -27,6 +27,24 @@
       "duration": 0.85,
       "loop": false,
       "strike": 0.34
+    },
+    {
+      "name": "attack_1",
+      "duration": 0.55,
+      "loop": false,
+      "strike": 0.2
+    },
+    {
+      "name": "attack_2",
+      "duration": 0.55,
+      "loop": false,
+      "strike": 0.2
+    },
+    {
+      "name": "attack_3",
+      "duration": 0.85,
+      "loop": false,
+      "strike": 0.38
     }
   ],
   "tris": 23999,
@@ -104,7 +122,95 @@
       },
       "attack": {
         "offset_m": 0.0,
+        "boot_min_z": -0.0,
+        "sword_min_z": 0.1517,
         "min_z": -0.0
+      },
+      "attack_1": {
+        "offset_m": 0.0,
+        "boot_min_z": -0.0,
+        "sword_min_z": 0.3818,
+        "min_z": -0.0
+      },
+      "attack_2": {
+        "offset_m": 0.0,
+        "boot_min_z": -0.0,
+        "sword_min_z": 0.3865,
+        "min_z": -0.0
+      },
+      "attack_3": {
+        "offset_m": 0.0,
+        "boot_min_z": -0.0039,
+        "sword_min_z": -0.0044,
+        "min_z": -0.0044
+      }
+    },
+    "combo": {
+      "attack_1": {
+        "source": "hand",
+        "cancel": 0.3,
+        "checks": {
+          "sword_shield_overlaps": 0,
+          "blade_body_overlaps": 0,
+          "frames_crossing_shield": [],
+          "frames_blade_in_body": [],
+          "min_z": -0.0,
+          "boot_shift_mm": 0.0,
+          "strike_blade_tip": {
+            "z": 0.494,
+            "y": -0.89,
+            "x": 0.718
+          }
+        },
+        "blade": {
+          "peak_mps": 61.31,
+          "peak_frame": 7,
+          "strike_frame": 7.0
+        }
+      },
+      "attack_2": {
+        "source": "hand",
+        "cancel": 0.3,
+        "checks": {
+          "sword_shield_overlaps": 0,
+          "blade_body_overlaps": 0,
+          "frames_crossing_shield": [],
+          "frames_blade_in_body": [],
+          "min_z": -0.0,
+          "boot_shift_mm": 0.0,
+          "strike_blade_tip": {
+            "z": 1.128,
+            "y": -0.494,
+            "x": -1.399
+          }
+        },
+        "blade": {
+          "peak_mps": 39.04,
+          "peak_frame": 7,
+          "strike_frame": 7.0
+        }
+      },
+      "attack_3": {
+        "source": "hand",
+        "cancel": null,
+        "checks": {
+          "sword_shield_overlaps": 0,
+          "blade_body_overlaps": 0,
+          "frames_crossing_shield": [],
+          "frames_blade_in_body": [],
+          "min_z": -0.0044,
+          "boot_shift_mm": 229.06,
+          "strike_blade_tip": {
+            "z": 0.404,
+            "y": -1.353,
+            "x": -0.014
+          }
+        },
+        "blade": {
+          "peak_mps": 63.96,
+          "peak_frame": 11,
+          "strike_frame": 12.4
+        }
       }
     }
   },
