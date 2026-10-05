@@ -21,6 +21,7 @@ import { LAYERS } from '../layers';
 import { EMISSIVE_KEY_RANGE, EMISSIVE_PEAK, glslFloat } from '../materials/painted';
 import type { Tier } from '../quality';
 import type { Theme } from '../themes';
+import { EnergyPass } from './energyPass';
 import { FinishEffect } from './finishEffect';
 import { FogEffect, type FogPlanet } from './fogEffect';
 import { GradeEffect } from './gradeEffect';
@@ -354,6 +355,11 @@ export interface PipelineOptions {
   reducedMotion: boolean;
   /** The sphere the camera stands on. With it the fog can thin with altitude (fogHeightFalloff); without it, it cannot. */
   planet?: FogPlanet;
+  /**
+   * The scene player energy is drawn from, on LAYERS.energy, over the frame after the ink and the fog (EnergyPass). A
+   * page without one, the Style Lab, gets the pipeline it always had, pass for pass.
+   */
+  energy?: Scene;
 }
 
 export interface Pipeline {
@@ -361,6 +367,8 @@ export interface Pipeline {
   ink: InkEdgeEffect | null;
   fog: FogEffect;
   bloomKey: BloomKeyMaterial;
+  /** The energy pass, or null on a pipeline given no energy scene. */
+  energy: EnergyPass | null;
   render(deltaSeconds: number): void;
   setSize(width: number, height: number): void;
   applyDials(dials: RenderDials, theme: Theme): void;
@@ -370,10 +378,11 @@ export interface Pipeline {
 }
 
 /**
- * Scene, then (high and medium tiers) normals and depth of the edge set for the edge ink, then ink and fog, then bloom,
- * grade, AgX tone mapping and the finish. The normal pass has its own camera limited to the world layer, so hulls, the
- * sky and the noEdge layer (grass and flowers) never produce edges of their own. The camera must not be parented,
- * because the normal camera copies its local transform only and would draw the normals from the wrong place.
+ * Scene, then (high and medium tiers) normals and depth of the edge set for the edge ink, then ink and fog, then the
+ * player energy when the page gives an energy scene (EnergyPass), then bloom, grade, AgX tone mapping and the finish.
+ * The normal pass has its own camera limited to the world layer, so hulls, the sky and the noEdge layer (grass and
+ * flowers) never produce edges of their own. The camera must not be parented, because the normal camera and the
+ * energy camera copy its local transform only and would draw from the wrong place.
  *
  * Alpha carries the emissive key from the scene to the bloom, which makes one contract for every material the main
  * camera draws: write alpha = emissive key / EMISSIVE_KEY_RANGE, with blending off. A stock three material breaks it
@@ -408,6 +417,10 @@ export function createPipeline(o: PipelineOptions): Pipeline {
   }
   const fog = new FogEffect(o.camera, o.theme, o.sunDirection, o.dials, o.planet);
   composer.addPass(new EffectPass(o.camera, ...(ink ? [ink, fog] : [fog])));
+  // Energy goes on the inked, fogged frame and into the bloom's input, so no ink line or fog lands on it and its key
+  // still reaches the bloom's mask and shield (EnergyPass says why it moved out of the scene pass).
+  const energy = o.energy ? new EnergyPass(o.energy, o.camera) : null;
+  if (energy) composer.addPass(energy);
   const bloomKey = new BloomKeyMaterial(o.dials);
   const bloom = new KeyedBloomEffect(bloomKey, {
     // The default SCREEN blend adds only src * (1 - dst) and dims anything brighter than 1, so the energy cores,
@@ -426,6 +439,7 @@ export function createPipeline(o: PipelineOptions): Pipeline {
     ink,
     fog,
     bloomKey,
+    energy,
     render(deltaSeconds) {
       if (normalCamera) {
         normalCamera.copy(o.camera, false);

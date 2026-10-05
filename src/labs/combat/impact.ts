@@ -74,7 +74,8 @@ const SWINGS_KEPT = 12;
 const UP = new Vector3(0, 1, 0);
 
 export interface CombatImpactOptions {
-  parent: Object3D;
+  /** The page's energy scene (labs/shared/paintedStage.ts), which the sparks go in. */
+  energy: Object3D;
   camera: PerspectiveCamera;
   ground: Ground;
   pip: PipPlay;
@@ -90,7 +91,7 @@ export interface CombatImpactOptions {
 export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
   const { pip, dummies, feel } = o;
   const list = dummies.list;
-  const sparks = createSparks(o.parent, o.brush);
+  const sparks = createSparks(o.energy, o.brush);
   const shake = createCameraShake(o.reducedMotion);
   const numbers: HitNumbers | null = o.numbers ? createHitNumbers(o.numbers, o.reducedMotion) : null;
   const swingHits = new SwingHits(list.length);

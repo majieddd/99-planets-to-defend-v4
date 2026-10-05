@@ -88,7 +88,7 @@ async function start(): Promise<void> {
   // Play Pip keeps a copy of his rig in the bind pose, whose jaw axis his face reads; only Play Pip uses his loaded rig
   // here, so nothing poses it first, as the world's members would.
   // The sword trail paints with the painted materials' brush atlas, through their shared uniform.
-  const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS, feel, ctx.paint.uBrush);
+  const pipPlay = createPipPlay(assets, patch, scene, painted.energy, ctx.hullMaterial, STYLE_PLANET_RADIUS, feel, ctx.paint.uBrush);
   const homes = dummyHomes();
   // A knocked-back dummy stops at Pip's body, read where he stands on each push through his cheap accessor: the full
   // reading, which this called before, builds every field of the handle's reading on every push.
@@ -100,7 +100,7 @@ async function start(): Promise<void> {
   // The impact feel on the dummies: hit detection, the hit-stop, the sparks, the shake, the numbers and the reactions.
   const impact: CombatImpact | null =
     dummies && pipPlay.available
-      ? createCombatImpact({ parent: scene, camera, ground: patch, pip: pipPlay, dummies, feel, reducedMotion, brush: ctx.paint.uBrush, numbers: document.getElementById('hits') })
+      ? createCombatImpact({ energy: painted.energy, camera, ground: patch, pip: pipPlay, dummies, feel, reducedMotion, brush: ctx.paint.uBrush, numbers: document.getElementById('hits') })
       : null;
 
   function resize(): void {
@@ -234,6 +234,11 @@ async function start(): Promise<void> {
     play: () => pipPlay.reading(),
     dummies: dummyReading,
     impact: () => impact?.reading() ?? null,
+    /**
+     * The energy pass (render/post/energyPass.ts): the frames it drew energy in since the load, and whether the last
+     * frame did, so a reading can tell a frame with energy on screen from one the pass left untouched.
+     */
+    energy: () => ({ drawnFrames: painted.pipeline.energy?.drawnFrames ?? 0, drewLast: painted.pipeline.energy?.drewLast ?? false }),
     reset,
     camera: () => {
       camera.updateMatrixWorld();

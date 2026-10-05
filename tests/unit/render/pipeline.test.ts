@@ -1,9 +1,28 @@
 import { BlendFunction, BloomEffect, EffectPass, NormalPass, RenderPass, type Effect, type Pass } from 'postprocessing';
-import { DepthTexture, FloatType, PerspectiveCamera, Scene, SRGBColorSpace, Texture, Vector2, Vector3, type WebGLRenderer, type WebGLRenderTarget } from 'three';
+import {
+  BoxGeometry,
+  DepthTexture,
+  FloatType,
+  Group,
+  Mesh,
+  MeshBasicMaterial,
+  NoBlending,
+  PerspectiveCamera,
+  Scene,
+  SRGBColorSpace,
+  Texture,
+  Vector2,
+  Vector3,
+  type Camera,
+  type Object3D,
+  type WebGLRenderer,
+  type WebGLRenderTarget,
+} from 'three';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DIALS, NUMERIC_RANGES } from '../../../src/render/defaults';
 import { LAYERS } from '../../../src/render/layers';
 import { EMISSIVE_KEY_RANGE, EMISSIVE_PEAK } from '../../../src/render/materials/painted';
+import { drawsEnergy, EnergyCopyMaterial, EnergyPass } from '../../../src/render/post/energyPass';
 import { FogEffect } from '../../../src/render/post/fogEffect';
 import {
   BLOOM_SMOOTHING,
@@ -335,5 +354,103 @@ describe('createPipeline', () => {
     // Starts at the sun direction the options gave (0, 1, 0), so a dropped write fails.
     withPlanet.setSunDirection(new Vector3(3, 4, 0));
     expect((withPlanet.fog.uniforms.get('uSunDirection')!.value as Vector3).distanceTo(new Vector3(0.6, 0.8, 0))).toBeLessThan(1e-12);
+  });
+});
+
+describe('the energy pass (render/post/energyPass.ts)', () => {
+  /** A mesh on the energy layer alone, as the sword trail and the hit sparks are. */
+  const energyMesh = (): Mesh => {
+    const mesh = new Mesh(new BoxGeometry(), new MeshBasicMaterial());
+    mesh.layers.set(LAYERS.energy);
+    return mesh;
+  };
+
+  it('is not built for a page without an energy scene, so the Style Lab keeps the pipeline it always had', () => {
+    for (const tier of ['high', 'medium', 'low'] as const) {
+      const pipeline = build(tier);
+      expect(pipeline.energy).toBeNull();
+      expect(pipeline.composer.passes.some((pass) => pass instanceof EnergyPass)).toBe(false);
+      expect(pipeline.composer.passes.map((pass) => pass.constructor.name)).toEqual(
+        tier === 'low' ? ['RenderPass', 'EffectPass', 'EffectPass'] : ['RenderPass', 'NormalPass', 'EffectPass', 'EffectPass'],
+      );
+    }
+  });
+
+  it('draws the energy after the ink and fog pass and before the bloom, on every tier', () => {
+    for (const tier of ['high', 'medium', 'low'] as const) {
+      const pipeline = build(tier, undefined, { energy: new Scene() });
+      const passes = pipeline.composer.passes;
+      const at = passes.indexOf(pipeline.energy!);
+      expect(pipeline.energy).toBeInstanceOf(EnergyPass);
+      // The ink and fog pass right before it, the bloom's pass right after it.
+      expect(effectsOf(passes[at - 1] as EffectPass).some((effect) => effect instanceof FogEffect)).toBe(true);
+      expect(passes[at + 1]).toBe(passes.at(-1));
+      expect(effectsOf(passes[at + 1] as EffectPass)[0]).toBe(bloomOf(pipeline));
+    }
+  });
+
+  it('counts only visible meshes on the energy layer, under visible parents, as energy to draw', () => {
+    const scene = new Scene();
+    expect(drawsEnergy(scene)).toBe(false);
+    const mesh = energyMesh();
+    scene.add(mesh);
+    expect(drawsEnergy(scene)).toBe(true);
+    mesh.visible = false;
+    expect(drawsEnergy(scene)).toBe(false);
+    // A mesh on the world layer draws nothing through the energy camera.
+    const world = new Mesh(new BoxGeometry(), new MeshBasicMaterial());
+    scene.add(world);
+    expect(drawsEnergy(scene)).toBe(false);
+    // Nested: drawn under a visible group, not under a hidden one.
+    const group = new Group();
+    const nested = energyMesh();
+    group.add(nested);
+    scene.add(group);
+    expect(drawsEnergy(scene)).toBe(true);
+    group.visible = false;
+    expect(drawsEnergy(scene)).toBe(false);
+  });
+
+  it('leaves a frame with no energy untouched and unswapped, and with energy copies the frame then draws the layer over it', () => {
+    const calls: { scene: Object3D; mask: number; target: unknown }[] = [];
+    let target: unknown = 'unset';
+    const renderer = {
+      autoClear: true,
+      setRenderTarget: (value: unknown) => {
+        target = value;
+      },
+      render: (scene: Object3D, camera: Camera) => calls.push({ scene, mask: camera.layers.mask, target }),
+    } as unknown as WebGLRenderer;
+    const energy = new Scene();
+    const camera = new PerspectiveCamera(50, 16 / 9, 0.1, 2500);
+    camera.layers.enableAll();
+    camera.position.set(1, 2, 3);
+    const pass = new EnergyPass(energy, camera);
+    const input = { texture: new Texture() } as unknown as WebGLRenderTarget;
+    const output = { texture: new Texture() } as unknown as WebGLRenderTarget;
+    pass.render(renderer, input, output);
+    expect(calls).toEqual([]);
+    expect(pass.needsSwap).toBe(false);
+    expect([pass.drewLast, pass.drawnFrames]).toEqual([false, 0]);
+    energy.add(energyMesh());
+    pass.render(renderer, input, output);
+    expect(pass.needsSwap).toBe(true);
+    expect([pass.drewLast, pass.drawnFrames]).toEqual([true, 1]);
+    // First the full-screen copy of the post-ink frame into the buffer the scene pass drew (it still holds the scene's
+    // depth), then the energy scene through a camera that sees the energy layer alone.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.scene).not.toBe(energy);
+    expect(calls[0]!.target).toBe(output);
+    expect(calls[1]).toEqual({ scene: energy, mask: 1 << LAYERS.energy, target: output });
+    expect(((pass.fullscreenMaterial as EnergyCopyMaterial).uniforms['inputBuffer'] as { value: unknown }).value).toBe(input.texture);
+    // The main camera keeps its layers, and the renderer its clear setting.
+    expect(camera.layers.mask).toBe(0xffffffff | 0);
+    expect(renderer.autoClear).toBe(true);
+  });
+
+  it('copies the frame texel for texel, alpha (the emissive key) included, with blending and depth off', () => {
+    const copy = new EnergyCopyMaterial();
+    expect(copy.fragmentShader).toContain('gl_FragColor = texelFetch(inputBuffer, ivec2(gl_FragCoord.xy), 0);');
+    expect([copy.blending, copy.depthTest, copy.depthWrite]).toEqual([NoBlending, false, false]);
   });
 });

@@ -337,7 +337,8 @@ interface HalfActions {
  * thumb pad walk about the patch while the camera follows, and F, a click or the attack button swing his sword through
  * the three-hit combo (combo.ts: the chain, the buffered press, the crossfades, and how each hit slows and turns him).
  * The light hits play on his upper body over the run or the idle, the finisher on his whole body; his clips are split
- * at the spine for it (comboClips.ts). `feel` is the page's one combat feel object, which the panel's sliders write and
+ * at the spine for it (comboClips.ts). His sword trail goes in `energy`, the page's energy scene (labs/shared/paintedStage.ts),
+ * which the pipeline draws over the inked frame. `feel` is the page's one combat feel object, which the panel's sliders write and
  * every frame reads, so a change takes effect on the next frame. Call it before buildAssetWorld: it keeps a copy of his
  * rig in the bind pose, before the world's mixers pose the loaded one, because the face driver reads the jaw's axis
  * from it.
@@ -346,6 +347,7 @@ export function createPipPlay(
   assets: ReadonlyMap<string, LoadedAsset>,
   ground: Ground,
   parent: Object3D,
+  energy: Object3D,
   hullMaterial: unknown,
   planetRadius: number,
   feel: CombatFeel,
@@ -543,7 +545,7 @@ export function createPipPlay(
       obstacles = obstaclesNow;
       targets = targetsNow ?? (() => noObstacles);
       hand = bladeMeasure ? bladeHand(root, bladeMeasure) : null;
-      trail = hand ? createSwordTrail(parent, brush) : null;
+      trail = hand ? createSwordTrail(energy, brush) : null;
 
       saved = { minDistance: controls.minDistance, maxDistance: controls.maxDistance, maxPolarAngle: controls.maxPolarAngle, enablePan: controls.enablePan };
       controls.minDistance = PLAY_CAMERA_MIN_DISTANCE;

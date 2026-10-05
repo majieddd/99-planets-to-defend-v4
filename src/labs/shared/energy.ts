@@ -12,8 +12,10 @@ export const PLAYER_ENERGY = '#59f2ff';
  * colour is added to the frame (one plus one), and its emissive key goes into alpha by the larger of the two, so the
  * bloom reads the key of the brightest energy at each pixel. Blended as a plain transparent surface, its opacity would
  * have been written into alpha as a key, which the pipeline's note warns of: a faint edge would bloom like energy and
- * the frame under a soft stroke would lose its own key. Drawn after the opaque pass, tested against depth but writing
- * none, so bodies in front cover it and it never hides what is behind it from the fog and the ink.
+ * the frame under a soft stroke would lose its own key. Tested against the scene's depth but writing none, so bodies in
+ * front cover it. Energy goes in the page's energy scene on LAYERS.energy, which the pipeline draws over the inked,
+ * fogged frame (src/render/post/energyPass.ts): drawn in the scene pass, its pixels kept the depth of what lay behind
+ * it, so the ink pass drew the silhouettes behind it across it and the fog pass fogged it by the ground's distance.
  */
 export function useEnergyBlending(material: ShaderMaterial): ShaderMaterial {
   material.transparent = true;

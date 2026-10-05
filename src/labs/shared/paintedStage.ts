@@ -64,6 +64,12 @@ export interface PaintedStageOptions {
 export interface PaintedStage {
   readonly renderer: WebGLRenderer;
   readonly scene: Scene;
+  /**
+   * Where player energy goes (the sword trail, the hit sparks), each piece on LAYERS.energy: the pipeline draws this
+   * scene over the inked, fogged frame, before the bloom (render/post/energyPass.ts), so no ink line or fog lands on it.
+   * It outlives a tier change, which rebuilds the pipeline around the same scene.
+   */
+  readonly energy: Scene;
   readonly camera: PerspectiveCamera;
   /** The painted and hull materials' shared context, which every loaded model is painted and inked with. */
   readonly ctx: MaterialContext;
@@ -111,6 +117,8 @@ export async function createPaintedStage(stage: HTMLElement, options: PaintedSta
   syncHulls();
 
   const scene = new Scene();
+  const energy = new Scene();
+  energy.name = 'energy';
   const camera = new PerspectiveCamera(WORLD_FOV_DEG, stage.clientWidth / stage.clientHeight, 0.1, 2500);
   camera.layers.enable(LAYERS.hull);
   camera.layers.enable(LAYERS.sky);
@@ -131,7 +139,7 @@ export async function createPaintedStage(stage: HTMLElement, options: PaintedSta
   controls.maxDistance = 400;
 
   const inkNoise = inkNoiseMap ?? flatTexture(128);
-  const makePipeline = (next: Tier): Pipeline => createPipeline({ renderer, scene, camera, tier: next, dials, theme, inkNoise, sunDirection: sun.direction, reducedMotion, planet });
+  const makePipeline = (next: Tier): Pipeline => createPipeline({ renderer, scene, camera, tier: next, dials, theme, inkNoise, sunDirection: sun.direction, reducedMotion, planet, energy });
   let pipeline = makePipeline(tier);
   const drawing = new Vector2();
 
@@ -158,6 +166,7 @@ export async function createPaintedStage(stage: HTMLElement, options: PaintedSta
   return {
     renderer,
     scene,
+    energy,
     camera,
     ctx,
     inkUniforms,

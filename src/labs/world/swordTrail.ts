@@ -414,7 +414,7 @@ export function createSwordTrail(parent: Object3D, brush: IUniform<Texture | nul
     each.frustumCulled = false;
     each.castShadow = false;
     each.receiveShadow = false;
-    each.layers.set(LAYERS.noEdge);
+    each.layers.set(LAYERS.energy);
     each.renderOrder = 9 + order;
     parent.add(each);
   });

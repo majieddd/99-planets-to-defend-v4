@@ -6,8 +6,9 @@ import { ENERGY_OUTPUT, energyDefines, PLAYER_ENERGY, useEnergyBlending } from '
  * The spark at the wound (Pillar 4): on a hit that connects, a burst of short cyan and white streaks thrown off the
  * contact, falling a little and dying within a quarter of a second, over a flash that fades in under a tenth. All of it
  * is one mesh of quads made once and rewritten each frame, the sparks taken in turn from a fixed pool, so a hit builds
- * nothing. It is player energy (useEnergyBlending), keyed for the bloom as Pip's channels are, on the noEdge layer, so
- * it carries no edge ink, and it runs on the frame's clock, so it flies through the hit-stop.
+ * nothing. It is player energy (useEnergyBlending), keyed for the bloom as Pip's channels are, on the energy layer in
+ * the page's energy scene, which the pipeline draws after the ink and the fog (render/post/energyPass.ts), so it
+ * carries no edge ink, and it runs on the frame's clock, so it flies through the hit-stop.
  */
 
 /** The sparks a light hit and the finisher throw. */
@@ -290,7 +291,7 @@ export function createSparks(parent: Object3D, brush: IUniform<Texture | null>):
   const mesh = new Mesh(geometry, material);
   mesh.name = 'hit_sparks';
   mesh.frustumCulled = false;
-  mesh.layers.set(LAYERS.noEdge);
+  mesh.layers.set(LAYERS.energy);
   mesh.renderOrder = 11;
   mesh.visible = false;
   parent.add(mesh);
