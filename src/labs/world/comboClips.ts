@@ -1,0 +1,114 @@
+import { AnimationClip, PropertyBinding, type Interpolant, type KeyframeTrack, type Object3D } from 'three';
+import { COMBO_HITS, placeholderAnchors, warpTime, type HitContract, type WarpAnchors } from './combo';
+
+/**
+ * The bone the upper-body mask starts from: Play Pip's attacks play on this bone and everything under it, while the hips
+ * and legs keep the locomotion blend. Pip's rig (Mixamo names, the loader dropping their colon) hangs mixamorigSpine,
+ * Spine1, Spine2, both shoulders, arms, forearms and hands, the neck, the head, the jaw and HeadTop_End under it, and the
+ * hips carry the two legs (UpLeg, Leg, Foot, ToeBase) beside it. The sword and the shield have no bones of their own:
+ * they are skinned to the hands, which the mask holds. The first bone whose name ends with this is taken, so Spine1 and
+ * Spine2, which end otherwise, never stand in for it.
+ */
+export const UPPER_BODY_ROOT = 'Spine';
+
+/**
+ * How many times a second a placeholder hit is sampled from the source clip: twice the source's 30, so the warp's faster
+ * stretches still show each source key, and the strike moment and the end are sampled exactly as well.
+ */
+export const PLACEHOLDER_SAMPLES_PER_SECOND = 60;
+
+/** Where a hit's clip came from: the GLB itself, or a placeholder warped at runtime from the attack clip. */
+export type HitSource = 'clip' | 'placeholder';
+
+export interface HitClip {
+  contract: HitContract;
+  clip: AnimationClip;
+  source: HitSource;
+}
+
+/** The names of the upper-body mask's nodes: the UPPER_BODY_ROOT bone and everything under it, or null without one. */
+export function upperBodyBones(root: Object3D): Set<string> | null {
+  let spine: Object3D | null = null;
+  root.traverse((node) => {
+    if (!spine && (node as Object3D & { isBone?: boolean }).isBone && node.name.endsWith(UPPER_BODY_ROOT)) spine = node;
+  });
+  if (!spine) return null;
+  const names = new Set<string>();
+  (spine as Object3D).traverse((node) => names.add(node.name));
+  return names;
+}
+
+/**
+ * A track's own interpolant, the one the mixer samples it with (a quaternion track's slerps). three sets
+ * createInterpolant on every track from its interpolation mode at construction, but its type declarations leave it out.
+ */
+function interpolantOf(track: KeyframeTrack): Interpolant {
+  return (track as KeyframeTrack & { createInterpolant(): Interpolant }).createInterpolant();
+}
+
+/** The node a track animates, as the mixer binds it. */
+function trackNode(track: KeyframeTrack): string {
+  return PropertyBinding.parseTrackName(track.name).nodeName;
+}
+
+/**
+ * Splits a clip into the tracks on the upper-body mask's nodes and the rest (the hips and legs, and any track on a node
+ * outside the rig's bones). The mixer weighs a whole action, so the halves are separate clips the page weighs apart.
+ */
+export function splitClip(clip: AnimationClip, upper: ReadonlySet<string>): { upper: AnimationClip; lower: AnimationClip } {
+  const above = clip.tracks.filter((track) => upper.has(trackNode(track)));
+  const below = clip.tracks.filter((track) => !upper.has(trackNode(track)));
+  return { upper: new AnimationClip(`${clip.name}_upper`, clip.duration, above), lower: new AnimationClip(`${clip.name}_lower`, clip.duration, below) };
+}
+
+/** The moments a warped clip is sampled at: evenly at PLACEHOLDER_SAMPLES_PER_SECOND, and each anchor's hit time exactly. */
+export function warpSampleTimes(anchors: WarpAnchors, duration: number): number[] {
+  const times = new Set<number>();
+  const count = Math.floor(duration * PLACEHOLDER_SAMPLES_PER_SECOND + 1e-9);
+  for (let i = 0; i <= count; i++) times.add(i / PLACEHOLDER_SAMPLES_PER_SECOND);
+  for (const [time] of anchors) if (time >= 0 && time <= duration) times.add(time);
+  times.add(duration);
+  const sorted = [...times].sort((a, b) => a - b);
+  // Drops a sample within a microsecond of the one before, which an anchor on a whole sample would otherwise repeat.
+  return sorted.filter((time, i) => i === 0 || time - sorted[i - 1]! > 1e-6);
+}
+
+/**
+ * A copy of `source` time-warped through the anchors into a clip of `duration` seconds named `name`: each track is
+ * sampled from the source, through its own interpolant (a quaternion track slerps), at the hit times warpSampleTimes
+ * gives, each mapped to its source time by warpTime. Sampling rather than moving the source's keys lets a warp run the
+ * source backward or start partway into it.
+ */
+export function warpClip(source: AnimationClip, name: string, anchors: WarpAnchors, duration: number): AnimationClip {
+  const times = warpSampleTimes(anchors, duration);
+  const tracks = source.tracks.map((track) => {
+    const interpolant = interpolantOf(track);
+    const size = track.getValueSize();
+    const values = new Float32Array(times.length * size);
+    times.forEach((time, i) => {
+      const result = interpolant.evaluate(warpTime(anchors, time));
+      for (let k = 0; k < size; k++) values[i * size + k] = result[k] as number;
+    });
+    const Track = track.constructor as new (name: string, times: ArrayLike<number>, values: ArrayLike<number>) => KeyframeTrack;
+    return new Track(track.name, Float32Array.from(times), values);
+  });
+  return new AnimationClip(name, duration, tracks);
+}
+
+/**
+ * Each hit's clip, in the contracts' order: the GLB's own clip named for the hit (attack_1, attack_2 or attack_3) when it
+ * exports one, so the swap to the real clips is an asset change alone, and otherwise a placeholder warped from the
+ * `attack` clip (placeholderAnchors) with the source's strike at `sourceStrike`. Null when there is neither for some
+ * hit, and the page then has no combo to play.
+ */
+export function hitClips(animations: readonly AnimationClip[], sourceStrike: number, hits: readonly HitContract[] = COMBO_HITS): HitClip[] | null {
+  const attack = animations.find((clip) => clip.name === 'attack') ?? null;
+  const out: HitClip[] = [];
+  for (const contract of hits) {
+    const own = animations.find((clip) => clip.name === contract.name);
+    if (own) out.push({ contract, clip: own, source: 'clip' });
+    else if (attack) out.push({ contract, clip: warpClip(attack, contract.name, placeholderAnchors(contract, attack.duration, sourceStrike), contract.duration), source: 'placeholder' });
+    else return null;
+  }
+  return out;
+}

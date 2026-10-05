@@ -7,29 +7,40 @@ import { place, type Ground } from '../../render/terrain/place';
 import timings from '../../shared/timings.json';
 import { createCommanderFace } from '../shared/commanderFace';
 import type { FaceDriver } from '../shared/faceDriver';
+import type { CombatFeel } from './combatFeel';
+import {
+  bodyWeights,
+  bufferOpensAt,
+  COMBO_READY,
+  comboPhase,
+  comboWeights,
+  contractOf,
+  holdsRunWeight,
+  stepCombo,
+  swingMotion,
+  type ComboPhase,
+  type ComboState,
+  type ComboStep,
+} from './combo';
+import { hitClips, splitClip, upperBodyBones, type HitClip, type HitSource } from './comboClips';
 import type { PlacedMember } from './layout';
 import {
-  attackWeight,
   blendRunWeight,
   clearance,
+  FREE_MOTION,
   groundForward,
-  layerWeights,
   moveDirection,
-  NOT_SWINGING,
-  PLAY_ATTACK_MOVE_SCALE,
   PLAY_BODY_RADIUS,
   PLAY_MIN_MEMBER_REACH,
   PLAY_SPAWN,
   runLoopDistance,
   runTimeScale,
-  startSwing,
-  stepAttack,
   stepMotion,
-  type AttackState,
   type FootSample,
   type MotionState,
   type MoveInput,
   type Obstacle,
+  type SwingMotion,
 } from './playMotion';
 import { THREE_QUARTER_TURN_DEG, toTangent, TOWARD_CAMERAS } from './registry';
 
@@ -51,10 +62,10 @@ export const PLAY_STRIDE_SAMPLES = 64;
 const UP = new Vector3(0, 1, 0);
 const ASSET = 'commander_pip';
 /**
- * His attack's strike moment, in seconds into the clip, from the shared contract (src/shared/timings.json) that
- * assets:check holds the exported clip to, so the reading's strike is the one the simulation will use.
+ * The source attack clip's strike moment, in seconds into it, from the shared contract (src/shared/timings.json) that
+ * assets:check holds the exported clip to: the placeholder hits are warped so this moment lands on each hit's own strike.
  */
-const STRIKE_AT = timings.commanders.commander_pip.attack.strike;
+const SOURCE_STRIKE = timings.commanders.commander_pip.attack.strike;
 
 /** What the test handle and the evidence read of the play mode. */
 export interface PlayReading {
@@ -63,22 +74,52 @@ export interface PlayReading {
   tangent: number[] | null;
   yaw: number;
   speed: number;
+  /** The run's weight against the idle by his speed (held while the finisher fades in over a stop). */
   runWeight: number;
   runTimeScale: number;
   /** The run clip's measured loop: the ground it covers, its length in seconds, and so the ground speed it plays at 1. */
   stride: { loopMetres: number; loopSeconds: number; clipSpeed: number } | null;
   /** How far he stands outside the nearest member's reach, in metres on the tangent plane (negative inside one). */
   clearance: number | null;
-  /** Whether he is in a swing, and the attack clip's time into it, in seconds (null out of a swing). */
+  /** Whether a hit of the combo is playing, and its clip time, in seconds (null out of a hit). */
   attacking: boolean;
   attackTime: number | null;
-  /** The attack clip's weight over the idle and run, from 0 to 1. */
+  /** The playing hit's own weight, from 0 to 1. */
   attackWeight: number;
-  /** The attack clip's length and its strike moment, in seconds (null when the model has no attack clip). */
+  /** The playing hit's contract: its length, its strike moment and its cancel point, in seconds (null out of a hit). */
   attackSeconds: number | null;
   strikeAt: number | null;
-  /** The swings that have reached their strike moment since he came out to play. */
+  cancelAt: number | null;
+  /** When a press starts to count during the playing hit (bufferOpensAt), in seconds into it (null out of a hit). */
+  bufferOpensAt: number | null;
+  /** The strikes since he came out to play, in all, by hit (attack_1 to attack_3), and the hit that struck last. */
   strikes: number;
+  strikesByStep: number[];
+  lastStrikeStep: number | null;
+  /** The combo: the playing hit (1 to 3, 0 for none), where it is, whether a press is kept, and the next hit's step. */
+  comboStep: number;
+  phase: ComboPhase;
+  queued: boolean;
+  nextStep: number;
+  /** Seconds since the last hit ended, while none plays. */
+  sinceEnd: number;
+  /** The clip time the hit before had reached when this one began (null for a chain's first hit or out of a hit). */
+  chainedAt: number | null;
+  /** The hit fading out under the playing one (0 for none), and its weight. */
+  outgoingStep: number;
+  outgoingWeight: number;
+  /** Where each hit's clip came from, attack_1 to attack_3 (null without a combo), and the playing hit's. */
+  sources: HitSource[] | null;
+  source: HitSource | null;
+  /** Presses dropped since he came out: before a buffer opened, while one was kept, or on a frozen frame. */
+  dropped: number;
+  /** The hits' total weight on the upper body and on the lower body, and the run's weight on the legs. */
+  upperAttackWeight: number;
+  lowerAttackWeight: number;
+  legsRunWeight: number;
+  /** How the playing hit holds him back this frame: the share of his pace and of his turn rate he keeps. */
+  moveScale: number;
+  turnScale: number;
 }
 
 export interface PipPlay {
@@ -88,8 +129,8 @@ export interface PipPlay {
   enter(camera: PerspectiveCamera, controls: OrbitControls, members: readonly PlacedMember[], seed: number, frozen: boolean): void;
   exit(controls: OrbitControls): void;
   /**
-   * One frame: starts a swing when `attack` asks for one and he is not in one already, moves him by the input (not at
-   * all while he swings), poses him, and carries the camera with him; dt is 0 while the lab is frozen.
+   * One frame: takes the frame's attack press into the combo (combo.ts says what a press does when), moves him by the
+   * input as the playing hit allows, poses him, and carries the camera with him; dt is 0 while the lab is frozen.
    */
   update(dt: number, input: MoveInput, attack: boolean, camera: PerspectiveCamera, controls: OrbitControls): void;
   setFrozen(on: boolean): void;
@@ -138,33 +179,59 @@ function measureRunLoop(template: Object3D, clip: AnimationClip): PlayReading['s
   return loopMetres === null ? null : { loopMetres, loopSeconds: clip.duration, clipSpeed: loopMetres / clip.duration };
 }
 
+/** A clip's two halves (comboClips.ts, splitClip), or the whole clip as the lower half when the rig has no mask. */
+interface Halves {
+  upper: AnimationClip | null;
+  lower: AnimationClip;
+}
+
+/** A clip's two actions on the play mixer. */
+interface HalfActions {
+  upper: AnimationAction | null;
+  lower: AnimationAction;
+}
+
 /**
  * The play prototype's Pip: an instance of his rig of its own, not one of the placed members, which the keys or the
- * thumb pad walk about the patch while the camera follows, and F, a click or the attack button swing his sword (the
- * swing's rules are playMotion.ts's: he stops and keeps his facing, a second trigger mid-swing is ignored, and the clip
- * fades back to the idle or the run by his speed). Call it before buildAssetWorld: it keeps a copy of his rig in the
- * bind pose, before the world's mixers pose the loaded one, because the face driver reads the jaw's axis from it.
+ * thumb pad walk about the patch while the camera follows, and F, a click or the attack button swing his sword through
+ * the three-hit combo (combo.ts: the chain, the buffered press, the crossfades, and how each hit slows and turns him).
+ * The light hits play on his upper body over the run or the idle, the finisher on his whole body; his clips are split
+ * at the spine for it (comboClips.ts). `feel` is the page's one combat feel object, which the panel's sliders write and
+ * every frame reads, so a change takes effect on the next frame. Call it before buildAssetWorld: it keeps a copy of his
+ * rig in the bind pose, before the world's mixers pose the loaded one, because the face driver reads the jaw's axis
+ * from it.
  */
-export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: Ground, parent: Object3D, hullMaterial: unknown, planetRadius: number): PipPlay {
+export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: Ground, parent: Object3D, hullMaterial: unknown, planetRadius: number, feel: CombatFeel): PipPlay {
   const asset = assets.get(ASSET);
   const template = asset ? cloneRig(asset.root) : null;
   const idleClip = asset?.animations.find((clip) => clip.name === 'idle') ?? null;
   const runClip = asset?.animations.find((clip) => clip.name === 'run') ?? null;
-  const attackClip = asset?.animations.find((clip) => clip.name === 'attack') ?? null;
+  const hits: HitClip[] | null = asset ? hitClips(asset.animations, SOURCE_STRIKE) : null;
+  const upperNames = template ? upperBodyBones(template) : null;
+  if (template && !upperNames) console.warn('Play Pip: the rig has no spine bone to split the attacks at, so every hit plays on his whole body');
+  const halvesOf = (clip: AnimationClip): Halves => (upperNames ? splitClip(clip, upperNames) : { upper: null, lower: clip });
+  const idleHalves = idleClip ? halvesOf(idleClip) : null;
+  const runHalves = runClip ? halvesOf(runClip) : null;
+  const hitHalves = hits ? hits.map((hit) => halvesOf(hit.clip)) : null;
   let stride: PlayReading['stride'] | undefined;
 
   let root: Object3D | null = null;
   let mixer: AnimationMixer | null = null;
-  let idle: AnimationAction | null = null;
-  let run: AnimationAction | null = null;
-  let swing: AnimationAction | null = null;
+  let idle: HalfActions | null = null;
+  let run: HalfActions | null = null;
+  let hitActions: HalfActions[] = [];
   let face: FaceDriver | null = null;
   let obstacles: Obstacle[] = [];
   let motion: MotionState = { x: 0, z: 0, yaw: 0, speed: 0, drive: 0 };
-  let attack: AttackState = NOT_SWINGING;
+  let combo: ComboState = COMBO_READY;
   let strikes = 0;
-  let weight = 0;
-  let swingWeight = 0;
+  let strikesByStep = [0, 0, 0];
+  let lastStrikeStep: ComboStep | null = null;
+  let dropped = 0;
+  let runShare = 0;
+  let weights = { current: 0, outgoing: 0 };
+  let body = bodyWeights(0, 0, false, 0, false);
+  let swing: SwingMotion = FREE_MOTION;
   let timeScale = 0;
   const follow = new Vector3();
   let saved: { minDistance: number; maxDistance: number; maxPolarAngle: number; enablePan: boolean } | null = null;
@@ -199,13 +266,33 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
     return into.copy(surface.position).addScaledVector(surface.up, PLAY_TARGET_HEIGHT);
   }
 
+  /** Both halves of a clip as actions on the mixer, playing, at no weight. */
+  function actionsOf(on: AnimationMixer, halves: Halves, loop: boolean): HalfActions {
+    const make = (clip: AnimationClip): AnimationAction => {
+      const action = on.clipAction(clip);
+      if (loop) action.setLoop(LoopRepeat, Infinity);
+      action.play();
+      action.setEffectiveWeight(0);
+      return action;
+    };
+    return { upper: halves.upper ? make(halves.upper) : null, lower: make(halves.lower) };
+  }
+
+  function weigh(actions: HalfActions, upper: number, lower: number): void {
+    actions.upper?.setEffectiveWeight(upper);
+    actions.lower.setEffectiveWeight(lower);
+  }
+
+  /** Whether a hit plays on his whole body: a planted hit always, and every hit on a rig the mask could not split. */
+  const planted = (step: ComboStep): boolean => !upperNames || contractOf(step).planted;
+
   return {
     available: template !== null && idleClip !== null && runClip !== null,
     get active() {
       return root !== null;
     },
     enter(camera, controls, members, seed, frozen) {
-      if (!template || !idleClip || !runClip || root) return;
+      if (!template || !idleHalves || !runHalves || !runClip || root) return;
       stride ??= measureRunLoop(template, runClip);
       if (!stride) console.warn('Play Pip: the run clip gave no stride to read, so it plays at its authored rate');
       root = cloneRig(template);
@@ -218,31 +305,37 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       // Made in the bind pose, before the mixer below moves the rig, as the world's faces are.
       face = createCommanderFace(root, seed);
       face?.setFrozen(frozen);
-      mixer = new AnimationMixer(root);
-      idle = mixer.clipAction(idleClip).setLoop(LoopRepeat, Infinity).play();
-      run = mixer.clipAction(runClip).setLoop(LoopRepeat, Infinity).play();
-      run.setEffectiveWeight(0);
-      run.timeScale = 0;
-      // The swing's clip time is set from the attack state every frame rather than advanced by the mixer, so the pose,
-      // the reading and the strike moment all come from the one clock in playMotion.ts. With its time scale at 0 the
-      // mixer never moves its time, so its loop mode and clampWhenFinished, which act only on a time the mixer moves,
-      // would do nothing; the LoopOnce and clamp it was given are left off for that reason.
-      if (attackClip) {
-        swing = mixer.clipAction(attackClip).play();
-        swing.timeScale = 0;
-        swing.setEffectiveWeight(0);
-      }
-      weight = 0;
-      swingWeight = 0;
+      const on = new AnimationMixer(root);
+      mixer = on;
+      idle = actionsOf(on, idleHalves, true);
+      weigh(idle, 1, 1);
+      run = actionsOf(on, runHalves, true);
+      for (const action of [run.upper, run.lower]) if (action) action.timeScale = 0;
+      // Each hit's clip time is set from the combo every frame rather than advanced by the mixer, so the pose, the
+      // reading and the strike moment all come from the one clock in combo.ts. With its time scale at 0 the mixer never
+      // moves a hit's time, so its loop mode and clampWhenFinished, which act only on a time the mixer moves, would do
+      // nothing, and they are left off.
+      hitActions = (hitHalves ?? []).map((halves) => {
+        const actions = actionsOf(on, halves, false);
+        for (const action of [actions.upper, actions.lower]) if (action) action.timeScale = 0;
+        return actions;
+      });
+      runShare = 0;
+      weights = { current: 0, outgoing: 0 };
+      body = bodyWeights(0, 0, false, 0, false);
+      swing = FREE_MOTION;
       timeScale = 0;
-      attack = NOT_SWINGING;
+      combo = COMBO_READY;
       strikes = 0;
+      strikesByStep = [0, 0, 0];
+      lastStrikeStep = null;
+      dropped = 0;
       obstacles = obstaclesOf(members);
       const { x, z } = toTangent(PLAY_SPAWN.s, PLAY_SPAWN.d);
       // He faces the cameras' bearing, turned toward the key as the placed characters are (THREE_QUARTER_TURN_DEG).
       motion = { x, z, yaw: Math.atan2(TOWARD_CAMERAS.x, TOWARD_CAMERAS.z) - (THREE_QUARTER_TURN_DEG * Math.PI) / 180, speed: 0, drive: 0 };
       pose();
-      mixer.update(0);
+      on.update(0);
       parent.add(root);
 
       saved = { minDistance: controls.minDistance, maxDistance: controls.maxDistance, maxPolarAngle: controls.maxPolarAngle, enablePan: controls.enablePan };
@@ -268,18 +361,26 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       // The copy shares the loaded geometry and materials, which the world still draws; only its skeletons are its own.
       root.traverse((child) => (child as SkinnedMesh).isSkinnedMesh && (child as SkinnedMesh).skeleton.dispose());
       root = null;
-      mixer = idle = run = swing = null;
+      mixer = idle = run = null;
+      hitActions = [];
       face = null;
-      attack = NOT_SWINGING;
+      combo = COMBO_READY;
       if (saved) Object.assign(controls, saved);
       saved = null;
     },
     update(dt, input, attackAsked, camera, controls) {
       if (!root || !mixer || !idle || !run) return;
-      // A trigger starts the swing on this frame and stops him dead on it (startSwing); mid-swing, or on a frozen frame,
-      // it is dropped.
-      ({ attack, motion } = startSwing(attack, motion, attackAsked && swing !== null && attackClip !== null, dt));
-      const swinging = attack.time !== null;
+      // The press and the frame's step go into the combo first, so this frame's movement already follows the hit it
+      // leaves playing; a press on a frozen frame is dropped there.
+      const frame = stepCombo(combo, attackAsked && hits !== null, dt, feel);
+      combo = frame.state;
+      if (frame.press === 'dropped') dropped += 1;
+      if (frame.struck !== null) {
+        strikes += 1;
+        strikesByStep[frame.struck - 1]! += 1;
+        lastStrikeStep = frame.struck;
+      }
+      swing = swingMotion(combo, feel);
       // The camera's facing, laid on the ground at his feet from the camera's level right (groundForward, which says why
       // the view ray is not used) and read in the frame place() turns him in, so W runs up the screen wherever he stands
       // on the curve and however high the camera is.
@@ -290,29 +391,32 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
       else forward.set(0, 0, 0);
       turn.setFromUnitVectors(UP, surfaceUp).invert();
       forward.applyQuaternion(turn);
-      motion = stepMotion(motion, moveDirection(input, forward.x, forward.z), input.sprint, dt, obstacles, planetRadius, swinging ? PLAY_ATTACK_MOVE_SCALE : 1);
+      motion = stepMotion(motion, moveDirection(input, forward.x, forward.z), input.sprint, dt, obstacles, planetRadius, swing);
       pose();
 
-      if (swing && attackClip) {
-        const stepped = stepAttack(attack, dt, attackClip.duration, STRIKE_AT);
-        attack = stepped.state;
-        if (stepped.struck) strikes += 1;
-        // The fade reads the frame's step (attackWeight), so a frozen frame, whose step is 0, keeps the weight it had
-        // rather than jumping up by a frame's worth of fade.
-        if (dt > 0) swingWeight = attackWeight(attack.time, attackClip.duration, dt);
-        swing.time = attack.time ?? 0;
-        swing.setEffectiveWeight(swingWeight);
-      }
-      // The run keeps its weight while the swing fades in over it (blendRunWeight says why the trigger frame needs it).
-      weight = blendRunWeight(weight, motion.speed, attack.time);
+      // The fades read the frame's step (ownWeight), so a frozen frame, whose step is 0, keeps the weights it had rather
+      // than jumping by a frame's worth of fade.
+      if (dt > 0) weights = comboWeights(combo, feel, dt);
+      // The run keeps its weight while the finisher fades in over his stop (holdsRunWeight says why).
+      runShare = blendRunWeight(runShare, motion.speed, holdsRunWeight(combo, feel));
       timeScale = stride ? runTimeScale(motion.speed, stride.clipSpeed) : 1;
-      const layers = layerWeights(weight, swingWeight);
-      idle.setEffectiveWeight(layers.idle);
-      run.setEffectiveWeight(layers.run);
-      run.timeScale = timeScale;
+      const current = combo.hit;
+      const outgoing = current ? combo.outgoing : null;
+      body = bodyWeights(runShare, weights.current, current ? planted(current.step) : false, outgoing ? weights.outgoing : 0, outgoing ? planted(outgoing.step) : false);
+      weigh(idle, body.upper.idle, body.lower.idle);
+      weigh(run, body.upper.run, body.lower.run);
+      for (const action of [run.upper, run.lower]) if (action) action.timeScale = timeScale;
+      hitActions.forEach((actions, index) => {
+        const step = (index + 1) as ComboStep;
+        const isCurrent = current !== null && current.step === step;
+        const isOutgoing = outgoing !== null && outgoing.step === step;
+        const time = isCurrent ? current.time : isOutgoing ? outgoing.time : 0;
+        for (const action of [actions.upper, actions.lower]) if (action) action.time = time;
+        weigh(actions, (isCurrent ? body.upper.current : 0) + (isOutgoing ? body.upper.outgoing : 0), (isCurrent ? body.lower.current : 0) + (isOutgoing ? body.lower.outgoing : 0));
+      });
       mixer.update(dt);
       // After the mixer, which would otherwise write any morph or jaw track a clip carries over the face; the blinks run
-      // through the swing.
+      // through the swings.
       face?.update(dt);
 
       // The orbit's centre closes on his chest, and the camera moves with it, so a drag still orbits and the wheel
@@ -331,22 +435,44 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
     },
     reading() {
       const at = root ? root.getWorldPosition(new Vector3()).toArray() : null;
+      const hit = combo.hit;
+      const contract = hit ? contractOf(hit.step) : null;
       return {
         on: root !== null,
         position: at,
         tangent: root ? [motion.x, motion.z] : null,
         yaw: motion.yaw,
         speed: motion.speed,
-        runWeight: weight,
+        runWeight: runShare,
         runTimeScale: timeScale,
         stride: stride ?? null,
         clearance: root ? clearance(motion.x, motion.z, obstacles) : null,
-        attacking: attack.time !== null,
-        attackTime: attack.time,
-        attackWeight: swingWeight,
-        attackSeconds: attackClip ? attackClip.duration : null,
-        strikeAt: attackClip ? STRIKE_AT : null,
+        attacking: hit !== null,
+        attackTime: hit ? hit.time : null,
+        attackWeight: weights.current,
+        attackSeconds: contract ? contract.duration : null,
+        strikeAt: contract ? contract.strike : null,
+        cancelAt: contract ? contract.cancel : null,
+        bufferOpensAt: contract ? bufferOpensAt(contract, feel.buffer) : null,
         strikes,
+        strikesByStep: [...strikesByStep],
+        lastStrikeStep,
+        comboStep: hit ? hit.step : 0,
+        phase: comboPhase(combo),
+        queued: combo.queued,
+        nextStep: combo.next,
+        sinceEnd: combo.sinceEnd,
+        chainedAt: hit ? hit.chainedAt : null,
+        outgoingStep: hit && combo.outgoing ? combo.outgoing.step : 0,
+        outgoingWeight: hit && combo.outgoing ? weights.outgoing : 0,
+        sources: hits ? hits.map((entry) => entry.source) : null,
+        source: hit && hits ? hits[hit.step - 1]!.source : null,
+        dropped,
+        upperAttackWeight: body.upper.current + body.upper.outgoing,
+        lowerAttackWeight: body.lower.current + body.lower.outgoing,
+        legsRunWeight: body.lower.run,
+        moveScale: swing.moveScale,
+        turnScale: swing.turnScale,
       };
     },
   };

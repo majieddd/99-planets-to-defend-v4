@@ -17,6 +17,7 @@ import { VERDANT } from '../../render/themes';
 import { FACE_SEED, type FacePose } from '../shared/commanderFace';
 import { flatTexture, loadManifestTexture, loadNamedAsset } from '../shared/labAssets';
 import { NARROW_SCREEN } from '../style/referenceBoard';
+import { combatFeelJson, defaultCombatFeel, parseCombatFeel } from './combatFeel';
 import { WorldLabels, type LabelSpec } from './labels';
 import { buildAssetWorld, type AssetWorld } from './layout';
 import { createWorldPanel, type WorldPanelState } from './panel';
@@ -47,10 +48,14 @@ const TURNTABLE_SECONDS = 40;
 const TRANSITION_SECONDS = 0.8;
 /** The one value `?play=` takes: Pip under the keys (the play prototype). */
 const PLAY_PIP = 'pip';
-/** The play hint's words, mechanics first: the keys and a click on a keyboard, the pad and the button on a touch screen. */
-const PLAY_HINT_KEYS = 'Play Pip (prototype): WASD or the arrow keys move him, Shift sprints, F or a click swings his sword, drag to orbit, wheel to zoom.';
+/**
+ * The play hint's words, mechanics first: the keys and a click on a keyboard, the pad and the button on a touch screen,
+ * and how presses chain the combo (combo.ts).
+ */
+const PLAY_HINT_KEYS =
+  'Play Pip (prototype): WASD or the arrow keys move him, Shift sprints; F or a click swings his sword, and pressing again during a swing chains up to three hits, the third a planted finisher; drag to orbit, wheel to zoom.';
 const PLAY_HINT_TOUCH =
-  'Play Pip (prototype): the pad moves him, pushed to its rim he sprints; Attack swings his sword; drag elsewhere to orbit, pinch to zoom.';
+  'Play Pip (prototype): the pad moves him, pushed to its rim he sprints; Attack swings his sword, and tapping it again during a swing chains up to three hits; drag elsewhere to orbit, pinch to zoom.';
 
 // start() fills these in, so a failure at any point can stop the loop and word the banner for when it happened.
 let activeRenderer: WebGLRenderer | null = null;
@@ -187,7 +192,21 @@ async function start(): Promise<void> {
   // Before the world is built: the play prototype keeps a copy of Pip's rig in the bind pose, which the world's mixers
   // would otherwise have posed by the time it is copied. He goes in the scene, not the world's root, so the world's
   // members, bounds and labels stay exactly what they are with play off.
-  const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS);
+  // Play Pip's combat feel: the defaults, with any settings a `?feel=` address carries (the panel's readout JSON) over
+  // them; a key that is not a setting, or a value outside its slider's range, is named and skipped. The one object is
+  // shared by the panel, which writes it, and Play Pip, which reads it every frame.
+  const feel = defaultCombatFeel();
+  const feelParam = params.get('feel');
+  if (feelParam) {
+    const pasted = parseCombatFeel(feelParam);
+    Object.assign(feel, pasted.feel);
+    if (pasted.rejected.length) {
+      const said = `Combat feel: skipped ${pasted.rejected.join(', ')} in the address; using ${combatFeelJson(feel)}`;
+      console.warn(`${PAGE}: ${said}`);
+      showBanner(`${said}.`);
+    }
+  }
+  const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS, feel);
   // A member whose model or clip this build lacks is left out rather than built, where a member put in ahead of its clip
   // would stop the page with "has no clip". The coverage gaps above, read from the manifest, name most such members;
   // one the loaded GLBs drop that the manifest does not (a GLB rebuilt without a clip the manifest lists) is named here.
@@ -407,20 +426,25 @@ async function start(): Promise<void> {
     }
   }
 
-  const panel = createWorldPanel(state, {
-    onFocus: () => {
-      applyFocus(true);
-      syncAddress();
+  const panel = createWorldPanel(
+    state,
+    {
+      onFocus: () => {
+        applyFocus(true);
+        syncAddress();
+      },
+      onPlay: (on) => setPlay(on),
+      onHeartLevel: (level) => setHeartLevel(level),
+      onTier: setTier,
+      openStyleLab: () => {
+        const url = new URL('style.html', location.href);
+        url.search = styleLabQuery(encodeDials(dials), state.member);
+        location.assign(url.toString());
+      },
+      notice: showBanner,
     },
-    onPlay: (on) => setPlay(on),
-    onHeartLevel: (level) => setHeartLevel(level),
-    onTier: setTier,
-    openStyleLab: () => {
-      const url = new URL('style.html', location.href);
-      url.search = styleLabQuery(encodeDials(dials), state.member);
-      location.assign(url.toString());
-    },
-  });
+    feel,
+  );
 
   // The address opens a member or a family (the inspection-view law), each parameter read as its own kind; a name that
   // is neither is named in the console and the banner, and the view falls back to the other parameter or the overview,

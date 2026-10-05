@@ -1,0 +1,360 @@
+import { describe, expect, it } from 'vitest';
+import { COMBAT_FEEL_RANGES, DEFAULT_COMBAT_FEEL, type CombatFeel } from '../../../src/labs/world/combatFeel';
+import {
+  BACKHAND_STRIKE_BEFORE_STRIKE,
+  bodyWeights,
+  bufferOpensAt,
+  COMBO_HITS,
+  COMBO_READY,
+  comboPhase,
+  comboWeights,
+  contractOf,
+  FINISHER_FROM_BEFORE_STRIKE,
+  holdsRunWeight,
+  ownWeight,
+  placeholderAnchors,
+  stepCombo,
+  swingMotion,
+  warpTime,
+  type ComboFrame,
+  type ComboState,
+  type ComboStep,
+} from '../../../src/labs/world/combo';
+import { FREE_MOTION } from '../../../src/labs/world/playMotion';
+
+const FEEL: CombatFeel = { ...DEFAULT_COMBAT_FEEL };
+const [HIT1, HIT2, HIT3] = COMBO_HITS as [(typeof COMBO_HITS)[number], (typeof COMBO_HITS)[number], (typeof COMBO_HITS)[number]];
+// The source attack clip the placeholders are warped from: 25 frames at 30 fps, striking at 0.34 s (timings.json).
+const SOURCE_SECONDS = 25 / 30;
+const SOURCE_STRIKE = 0.34;
+
+/** One frame of the page's loop as the test drives it, recording what it did. */
+interface Frame extends ComboFrame {
+  before: ComboState;
+  pressed: boolean;
+  dt: number;
+}
+
+/**
+ * Runs frames of the combo from a state: `dts` gives each frame's step (repeating its last), and `press` says whether a
+ * frame presses, from the state the frame starts from. Stops after `count` frames.
+ */
+function play(from: ComboState, count: number, dts: readonly number[], press: (state: ComboState, index: number) => boolean, feel = FEEL): Frame[] {
+  const frames: Frame[] = [];
+  let state = from;
+  for (let i = 0; i < count; i++) {
+    const dt = dts[Math.min(i, dts.length - 1)]!;
+    const pressed = press(state, i);
+    const frame = stepCombo(state, pressed, dt, feel);
+    frames.push({ ...frame, before: state, pressed, dt });
+    state = frame.state;
+  }
+  return frames;
+}
+
+/** Presses on the first frame, and then once in each hit as soon as its buffer is open, until three hits have begun. */
+function chainPresser(feel = FEEL) {
+  let pressedIn = new Set<ComboStep>();
+  return (state: ComboState, index: number): boolean => {
+    if (index === 0) return true;
+    const hit = state.hit;
+    if (!hit || pressedIn.has(hit.step) || hit.step === 3) return false;
+    if (hit.time >= bufferOpensAt(contractOf(hit.step), feel.buffer)) {
+      pressedIn = new Set([...pressedIn, hit.step]);
+      return true;
+    }
+    return false;
+  };
+}
+
+const startedSteps = (frames: readonly Frame[]): ComboStep[] => frames.filter((frame) => frame.started !== null).map((frame) => frame.started!);
+const struckSteps = (frames: readonly Frame[]): ComboStep[] => frames.filter((frame) => frame.struck !== null).map((frame) => frame.struck!);
+
+describe('the combo contracts', () => {
+  it('strike inside their active frames, cancel only after them, and leave the finisher without a cancel and planted', () => {
+    for (const hit of COMBO_HITS) {
+      expect(hit.strike, hit.name).toBeGreaterThan(hit.activeFrom);
+      expect(hit.strike, hit.name).toBeLessThan(hit.activeTo);
+      expect(hit.activeTo, hit.name).toBeLessThan(hit.cancel ?? hit.duration);
+    }
+    expect([HIT1, HIT2].map((hit) => [hit.duration, hit.strike, hit.cancel, hit.planted])).toEqual([
+      [0.55, 0.2, 0.3, false],
+      [0.55, 0.2, 0.3, false],
+    ]);
+    expect([HIT3.duration, HIT3.strike, HIT3.cancel, HIT3.planted]).toEqual([0.85, 0.38, null, true]);
+    // The crossfade's ceiling is under the light hits' cancel point, so only two hits ever show at once.
+    expect(COMBAT_FEEL_RANGES.crossfade.max).toBeLessThan(HIT1.cancel!);
+  });
+});
+
+describe('the combo chain', () => {
+  it('begins attack_1 on a press, and keeps a press made inside the buffer for the next hit', () => {
+    const begin = stepCombo(COMBO_READY, true, 1 / 60, FEEL);
+    expect(begin.press).toBe('started');
+    expect(begin.started).toBe(1);
+    expect(begin.state.hit).toMatchObject({ step: 1, time: 1 / 60, struck: false, crossfaded: false, chainedAt: null });
+    // The buffer opens 0.2 s before the cancel point, 0.10 s into a light hit.
+    expect(bufferOpensAt(HIT1, FEEL.buffer)).toBeCloseTo(0.1, 12);
+    const inWindow: ComboState = { ...begin.state, hit: { ...begin.state.hit!, time: 0.12 } };
+    const kept = stepCombo(inWindow, true, 1 / 60, FEEL);
+    expect(kept.press).toBe('queued');
+    expect(kept.state.queued).toBe(true);
+    expect(kept.started).toBeNull();
+    expect(kept.state.hit!.step).toBe(1);
+  });
+
+  it('drops a press before the buffer opens, and a second press while one is kept', () => {
+    const early: ComboState = { ...COMBO_READY, hit: { step: 1, time: 0.05, struck: false, crossfaded: false, chainedAt: null } };
+    const dropped = stepCombo(early, true, 1 / 60, FEEL);
+    expect(dropped.press).toBe('dropped');
+    expect(dropped.state.queued).toBe(false);
+    // Nothing was held: the hit plays out and ends with no follow-up.
+    const out = play(dropped.state, 60, [1 / 60], () => false);
+    expect(startedSteps(out)).toEqual([]);
+    expect(out.at(-1)!.state.hit).toBeNull();
+    const queued: ComboState = { ...early, hit: { ...early.hit!, time: 0.2 }, queued: true };
+    const second = stepCombo(queued, true, 1 / 60, FEEL);
+    expect(second.press).toBe('dropped');
+    expect(second.state.queued).toBe(true);
+    // A buffer of 0.3 s keeps a press from the light hit's start.
+    expect(bufferOpensAt(HIT1, 0.3)).toBe(0);
+    expect(stepCombo(early, true, 1 / 60, { ...FEEL, buffer: 0.3 }).press).toBe('queued');
+  });
+
+  it('starts a kept hit exactly at the cancel point, the time past it carried in, at any frame step', () => {
+    for (const dts of [[1 / 60], [1 / 30], [1 / 20], [0.013, 0.047, 0.021, 0.05, 0.008, 0.033]]) {
+      const frames = play(COMBO_READY, 200, dts, chainPresser());
+      const label = dts.map((dt) => dt.toFixed(3)).join(',');
+      expect(startedSteps(frames), label).toEqual([1, 2, 3]);
+      for (const frame of frames.filter((entry) => entry.started === 2 || entry.started === 3)) {
+        const previous = frame.before.hit!;
+        const contract = contractOf(previous.step);
+        // The hit before stood short of its cancel point when the frame began, and the new hit starts as far past it as
+        // the frame's step reached.
+        expect(previous.time, label).toBeLessThan(contract.cancel!);
+        expect(frame.state.hit!.chainedAt, label).toBe(contract.cancel);
+        expect(frame.state.hit!.time, label).toBeCloseTo(previous.time + frame.dt - contract.cancel!, 12);
+        expect(frame.state.hit!.time, label).toBeGreaterThanOrEqual(0);
+        expect(frame.state.queued, label).toBe(false);
+      }
+    }
+  });
+
+  it('starts the next hit at once on a press past the cancel point', () => {
+    const late: ComboState = { ...COMBO_READY, hit: { step: 1, time: 0.4, struck: true, crossfaded: false, chainedAt: null } };
+    const frame = stepCombo(late, true, 1 / 60, FEEL);
+    expect(frame.press).toBe('started');
+    expect(frame.started).toBe(2);
+    expect(frame.state.hit).toMatchObject({ step: 2, time: 1 / 60, crossfaded: true, chainedAt: 0.4 });
+    // attack_1 was already fading out, so it fades from the weight it had rather than from 1.
+    const had = ownWeight(HIT1, 0.4, false, FEEL, 1 / 60);
+    expect(had).toBeLessThan(1);
+    expect(frame.state.outgoing).toMatchObject({ step: 1, weight: had });
+    expect(frame.state.outgoing!.time).toBeCloseTo(0.4 + 1 / 60, 12);
+  });
+
+  it('strikes each hit exactly once, on the frame that reaches its strike, however the presses and frames fall', () => {
+    for (const dts of [[1 / 60], [1 / 20], [0.05, 0.001, 0.049, 0.0005, 0.03]]) {
+      // Pressing on every frame is a mash: each light hit keeps one press, the finisher one for a new chain.
+      const frames = play(COMBO_READY, 240, dts, () => true);
+      const strikes = struckSteps(frames);
+      const label = dts.join(',');
+      expect(strikes.slice(0, 3), label).toEqual([1, 2, 3]);
+      for (const frame of frames.filter((entry) => entry.struck !== null)) {
+        const contract = contractOf(frame.struck!);
+        const hit = frame.state.hit?.step === frame.struck ? frame.state.hit : frame.state.outgoing;
+        // The strike lands on the frame that crosses its moment, once.
+        expect(hit!.time, label).toBeGreaterThanOrEqual(contract.strike);
+        expect(hit!.time - frame.dt, label).toBeLessThan(contract.strike + 1e-12);
+      }
+      // One strike per hit begun.
+      expect(strikes.length, label).toBeLessThanOrEqual(startedSteps(frames).length);
+      expect(strikes.length, label).toBeGreaterThanOrEqual(startedSteps(frames).length - 1);
+    }
+  });
+
+  it('plays three hits at most, then the whole finisher, which has no cancel, before a new chain', () => {
+    // A press on every frame from the first: the chain is attack_1, attack_2, attack_3, and the finisher plays to its end.
+    const frames = play(COMBO_READY, 160, [1 / 60], () => true);
+    const steps = startedSteps(frames);
+    expect(steps.slice(0, 4)).toEqual([1, 2, 3, 1]);
+    const finisherStart = frames.findIndex((frame) => frame.started === 3);
+    const nextChain = frames.findIndex((frame, index) => index > finisherStart && frame.started === 1);
+    // Every press in the finisher before its buffer opens is dropped; the first inside it is kept; it never cancels.
+    const during = frames.slice(finisherStart + 1, nextChain);
+    const open = bufferOpensAt(HIT3, FEEL.buffer);
+    expect(open).toBeCloseTo(0.65, 12);
+    for (const frame of during) {
+      const time = frame.before.hit!.time;
+      if (time < open) expect(frame.press, `${time}`).toBe('dropped');
+      expect(frame.state.hit!.step).toBe(3);
+    }
+    expect(during.some((frame) => frame.press === 'queued')).toBe(true);
+    // The new chain begins at the finisher's end, its time the overshoot past 0.85 s, fading in from the idle and run.
+    const begin = frames[nextChain]!;
+    expect(begin.before.hit!.step).toBe(3);
+    expect(begin.before.hit!.time + begin.dt).toBeGreaterThanOrEqual(HIT3.duration);
+    expect(begin.state.hit).toMatchObject({ step: 1, crossfaded: false, chainedAt: HIT3.duration });
+    expect(begin.state.outgoing).toBeNull();
+    // Without a press in its buffer, the finisher plays out and the next press starts attack_1 at once.
+    const ended = play({ ...begin.before, queued: false }, 30, [1 / 60], () => false);
+    expect(ended.at(-1)!.state.hit).toBeNull();
+    expect(ended.at(-1)!.state.next).toBe(1);
+  });
+
+  it('waits the reset after a hit ends for the next hit, then starts again from attack_1', () => {
+    const one = play(COMBO_READY, 60, [1 / 60], (_state, index) => index === 0);
+    const end = one.findIndex((frame) => frame.state.hit === null);
+    expect(end).toBeGreaterThan(0);
+    const ended = one[end]!.state;
+    expect(ended.next).toBe(2);
+    // A press 0.2 s after the end, inside the 0.3 s reset, plays attack_2, fading in from the idle and run.
+    const soon = play(ended, 12, [1 / 60], () => false).at(-1)!.state;
+    expect(soon.sinceEnd).toBeLessThan(FEEL.reset);
+    const second = stepCombo(soon, true, 1 / 60, FEEL);
+    expect(second.started).toBe(2);
+    expect(second.state.hit).toMatchObject({ crossfaded: false, chainedAt: null });
+    // Past the reset the chain starts again from attack_1.
+    const later = play(ended, 30, [1 / 60], () => false).at(-1)!.state;
+    expect(later.sinceEnd).toBeGreaterThanOrEqual(FEEL.reset);
+    expect(later.next).toBe(1);
+    expect(stepCombo(later, true, 1 / 60, FEEL).started).toBe(1);
+  });
+
+  it('keeps a press made during a crossfade, and starts the next hit at the cancel point all the same', () => {
+    // A 0.3 s buffer opens at a light hit's start, inside its 0.1 s crossfade.
+    const feel = { ...FEEL, buffer: 0.3 };
+    const late: ComboState = { ...COMBO_READY, hit: { step: 1, time: 0.32, struck: true, crossfaded: false, chainedAt: null } };
+    const second = stepCombo(late, true, 1 / 60, feel);
+    expect(second.started).toBe(2);
+    const kept = stepCombo(second.state, true, 1 / 60, feel);
+    expect(kept.press).toBe('queued');
+    expect(kept.state.outgoing).not.toBeNull();
+    const frames = play(kept.state, 40, [1 / 60], () => false, feel);
+    const third = frames.find((frame) => frame.started === 3)!;
+    expect(third.state.hit!.chainedAt).toBe(HIT2.cancel);
+  });
+
+  it('changes nothing on a frozen frame, and drops its press', () => {
+    const states: ComboState[] = [
+      COMBO_READY,
+      { ...COMBO_READY, hit: { step: 1, time: 0.12, struck: false, crossfaded: false, chainedAt: null } },
+      { ...COMBO_READY, hit: { step: 2, time: 0.05, struck: false, crossfaded: true, chainedAt: 0.3 }, outgoing: { step: 1, time: 0.35, weight: 1 }, queued: true },
+      { ...COMBO_READY, next: 2, sinceEnd: 0.1 },
+    ];
+    for (const state of states) {
+      for (const pressed of [false, true]) {
+        const frame = stepCombo(state, pressed, 0, FEEL);
+        expect(frame.state).toBe(state);
+        expect(frame).toMatchObject({ struck: null, started: null, press: pressed ? 'dropped' : 'none' });
+      }
+    }
+    // The first live frame after a frozen press has no press of its own, so nothing begins.
+    expect(stepCombo(COMBO_READY, false, 1 / 60, FEEL).state.hit).toBeNull();
+  });
+});
+
+describe('the combo weights', () => {
+  it('fade a chain in, crossfade hit to hit summing to 1, and fade it out a frame before its end, with no jump', () => {
+    for (const dt of [1 / 60, 1 / 30, 1 / 20]) {
+      const frames = play(COMBO_READY, Math.ceil(3 / dt), [dt], chainPresser());
+      let last = 0;
+      for (const frame of frames) {
+        const { current, outgoing } = comboWeights(frame.state, FEEL, dt);
+        const total = current + outgoing;
+        expect(total, `${dt}`).toBeLessThanOrEqual(1 + 1e-12);
+        // During a crossfade from a hit at full weight the two sum to exactly 1, so no idle shows between hits.
+        if (frame.state.outgoing && frame.state.outgoing.weight === 1) expect(total, `${dt} crossfade`).toBeCloseTo(1, 12);
+        // No frame moves the total by more than a frame's share of the quickest fade.
+        expect(Math.abs(total - last), `${dt} step`).toBeLessThanOrEqual(dt / Math.min(FEEL.fadeIn, FEEL.fadeOut, FEEL.crossfade) + 1e-9);
+        last = total;
+      }
+      // Once a hit has crossfaded in, the one under it is gone.
+      for (const frame of frames) if (frame.state.hit && frame.state.hit.time >= FEEL.crossfade) expect(frame.state.outgoing).toBeNull();
+      // The finisher's last frame stands at 0, so the frame that ends it does not pop.
+      const lastFinisher = frames.filter((frame) => frame.state.hit?.step === 3).at(-1)!;
+      expect(comboWeights(lastFinisher.state, FEEL, dt).current, `${dt} end`).toBeCloseTo(0, 9);
+    }
+  });
+
+  it("holds a light hit at full weight until its cancel point however long the fade out, and splits each half's weights to 1", () => {
+    const long = { ...FEEL, fadeOut: COMBAT_FEEL_RANGES.fadeOut.max };
+    expect(ownWeight(HIT1, HIT1.cancel!, false, long, 1 / 20)).toBe(1);
+    expect(ownWeight(HIT1, HIT1.cancel! - 0.01, false, long, 1 / 60)).toBe(1);
+    // The finisher, with no cancel, takes the whole fade out.
+    expect(ownWeight(HIT3, HIT3.duration - 1 / 60 - long.fadeOut / 2, false, long, 1 / 60)).toBeCloseTo(0.5, 9);
+    for (const run of [0, 0.3, 1]) {
+      for (const [current, outgoing] of [
+        [0, 0],
+        [0.4, 0.6],
+        [1, 0],
+        [0.25, 0.3],
+      ] as const) {
+        for (const plants of [
+          [false, false],
+          [true, false],
+          [false, true],
+        ] as const) {
+          const { upper, lower } = bodyWeights(run, current, plants[0], outgoing, plants[1]);
+          const label = `${run} ${current} ${outgoing} ${plants}`;
+          expect(upper.idle + upper.run + upper.current + upper.outgoing, label).toBeCloseTo(1, 12);
+          expect(lower.idle + lower.run + lower.current + lower.outgoing, label).toBeCloseTo(1, 12);
+        }
+      }
+    }
+    // Running, a light hit leaves the legs to the run; standing, it swings the whole body; the finisher always does.
+    expect(bodyWeights(1, 1, false, 0, false).lower).toEqual({ idle: 0, run: 1, current: 0, outgoing: 0 });
+    expect(bodyWeights(0, 1, false, 0, false).lower.current).toBe(1);
+    expect(bodyWeights(1, 1, true, 0, false).lower.current).toBe(1);
+  });
+});
+
+describe('how a hit holds him back', () => {
+  it('slows a light hit through its wind-up and active frames, locks his facing to the cancel point, and plants the finisher', () => {
+    const at = (step: ComboStep, time: number): ComboState => ({ ...COMBO_READY, hit: { step, time, struck: false, crossfaded: false, chainedAt: null } });
+    expect(swingMotion(COMBO_READY, FEEL)).toBe(FREE_MOTION);
+    expect(swingMotion(at(1, 0.05), FEEL)).toEqual({ moveScale: FEEL.moveScale, turnScale: FEEL.windupTurn, cap: false });
+    expect(swingMotion(at(1, 0.2), FEEL)).toEqual({ moveScale: FEEL.moveScale, turnScale: 0, cap: true });
+    expect(swingMotion(at(2, 0.29), FEEL)).toEqual({ moveScale: 1, turnScale: 0, cap: false });
+    expect(swingMotion(at(2, 0.31), FEEL)).toBe(FREE_MOTION);
+    for (const time of [0.01, 0.38, 0.84]) expect(swingMotion(at(3, time), FEEL)).toEqual({ moveScale: 0, turnScale: 0, cap: true });
+    expect([comboPhase(at(1, 0.1)), comboPhase(at(1, 0.2)), comboPhase(at(1, 0.4)), comboPhase(COMBO_READY)]).toEqual(['windup', 'active', 'recovery', 'ready']);
+    // The run's weight holds only while the planted finisher fades in over his stop.
+    expect(holdsRunWeight(at(3, 0.05), FEEL)).toBe(true);
+    expect(holdsRunWeight({ ...at(3, 0.08), hit: { ...at(3, 0.08).hit!, crossfaded: true } }, FEEL)).toBe(true);
+    expect(holdsRunWeight(at(3, 0.2), FEEL)).toBe(false);
+    expect(holdsRunWeight(at(1, 0.01), FEEL)).toBe(false);
+  });
+});
+
+describe('the placeholder warps', () => {
+  it("land the source's strike on each hit's contract strike, anchored at the hit's start, strike and end", () => {
+    for (const hit of COMBO_HITS) {
+      const anchors = placeholderAnchors(hit, SOURCE_SECONDS, SOURCE_STRIKE);
+      expect(anchors.map(([time]) => time), hit.name).toEqual([0, hit.strike, hit.duration]);
+      const struck = hit.name === 'attack_2' ? SOURCE_STRIKE - BACKHAND_STRIKE_BEFORE_STRIKE : SOURCE_STRIKE;
+      expect(warpTime(anchors, hit.strike), hit.name).toBeCloseTo(struck, 12);
+      for (const [, source] of anchors) {
+        expect(source).toBeGreaterThanOrEqual(0);
+        expect(source).toBeLessThanOrEqual(SOURCE_SECONDS);
+      }
+    }
+    // attack_1 plays the whole cleave forward; attack_2 runs it backward; the finisher starts in the coil.
+    expect(placeholderAnchors(HIT1, SOURCE_SECONDS, SOURCE_STRIKE)).toEqual([
+      [0, 0],
+      [0.2, 0.34],
+      [0.55, SOURCE_SECONDS],
+    ]);
+    const backhand = placeholderAnchors(HIT2, SOURCE_SECONDS, SOURCE_STRIKE);
+    expect(backhand[0]![1]).toBeGreaterThan(backhand[1]![1]);
+    expect(backhand[1]![1]).toBeGreaterThan(backhand[2]![1]);
+    expect(placeholderAnchors(HIT3, SOURCE_SECONDS, SOURCE_STRIKE)[0]![1]).toBeCloseTo(SOURCE_STRIKE - FINISHER_FROM_BEFORE_STRIKE, 12);
+    // A uniform scale would have missed: the cleave's strike lands at 0.22 s in 0.55 s, and 0.35 s in 0.85 s.
+    expect(SOURCE_STRIKE * (HIT1.duration / SOURCE_SECONDS)).toBeCloseTo(0.224, 3);
+    expect(SOURCE_STRIKE * (HIT3.duration / SOURCE_SECONDS)).toBeCloseTo(0.347, 3);
+    // Linear between anchors and held outside them.
+    expect(warpTime(placeholderAnchors(HIT1, SOURCE_SECONDS, SOURCE_STRIKE), 0.1)).toBeCloseTo(0.17, 12);
+    expect(warpTime(placeholderAnchors(HIT1, SOURCE_SECONDS, SOURCE_STRIKE), -1)).toBe(0);
+    expect(warpTime(placeholderAnchors(HIT1, SOURCE_SECONDS, SOURCE_STRIKE), 9)).toBe(SOURCE_SECONDS);
+  });
+});

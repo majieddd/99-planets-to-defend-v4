@@ -1,21 +1,16 @@
 import { Group, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import {
-  attackWeight,
   blendRunWeight,
   clampToArea,
   clearance,
+  FREE_MOTION,
   groundDistance,
   groundForward,
   groundToTangent,
   isAttackClick,
-  layerWeights,
   moveDirection,
-  NOT_SWINGING,
   PLAY_AREA_RADIUS,
-  PLAY_ATTACK_FADE_IN,
-  PLAY_ATTACK_FADE_OUT,
-  PLAY_ATTACK_MOVE_SCALE,
   PLAY_BODY_RADIUS,
   PLAY_CLICK_MAX_SECONDS,
   PLAY_CLICK_SLOP_PX,
@@ -28,15 +23,11 @@ import {
   resolveObstacles,
   runLoopDistance,
   runWeight,
-  startSwing,
-  stepAttack,
   stepMotion,
   stickInput,
-  triggerAttack,
   turnToward,
   wrapAngle,
   yawOf,
-  type AttackState,
   type FootSample,
   type MotionState,
   type Obstacle,
@@ -312,184 +303,7 @@ describe('camera-relative steering on the curve', () => {
   });
 });
 
-describe('the play prototype attack', () => {
-  // Pip's exported clip: 0.85 s by contract (timings.json), 25 frames at 30 fps as the export writes it.
-  const DURATION = 25 / 30;
-  const STRIKE = 0.34;
-
-  /**
-   * Frames of the page's loop with the swing in it, in play.ts's order: the trigger (startSwing), the move, the swing's
-   * step and its weight. A trigger on the first frame, the move input held throughout.
-   */
-  function swing(state: MotionState, input: typeof forward, camera: [number, number], seconds: number, triggerAt = 0) {
-    let motion = state;
-    let attack: AttackState = NOT_SWINGING;
-    let strikes = 0;
-    const frames: { motion: MotionState; attack: AttackState; weight: number }[] = [];
-    for (let frame = 0; frame * DT < seconds; frame++) {
-      ({ attack, motion } = startSwing(attack, motion, frame === triggerAt, DT));
-      const moveScale = attack.time !== null ? PLAY_ATTACK_MOVE_SCALE : 1;
-      motion = stepMotion(motion, moveDirection(input, camera[0], camera[1]), input.sprint, DT, [], R, moveScale);
-      const stepped = stepAttack(attack, DT, DURATION, STRIKE);
-      attack = stepped.state;
-      if (stepped.struck) strikes += 1;
-      frames.push({ motion, attack, weight: attackWeight(attack.time, DURATION, DT) });
-    }
-    return { frames, strikes, motion, attack };
-  }
-
-  it('plays the clip once per trigger, crossing the strike moment once, and ignores a trigger mid-swing', () => {
-    expect(triggerAttack(NOT_SWINGING)).toEqual({ time: 0 });
-    // Mid-swing a trigger is ignored, not buffered: the swing carries on from where it was.
-    expect(triggerAttack({ time: 0.2 })).toEqual({ time: 0.2 });
-    const struck: number[] = [];
-    let attack = triggerAttack(NOT_SWINGING);
-    let frames = 0;
-    while (attack.time !== null) {
-      const before = attack.time;
-      const stepped = stepAttack(attack, DT, DURATION, STRIKE);
-      if (stepped.struck) struck.push(before);
-      attack = frames === 10 ? triggerAttack(stepped.state) : stepped.state;
-      frames += 1;
-    }
-    // The swing lasts the clip, to the frame, and the strike lands on the frame that reaches 0.34 s.
-    expect(frames).toBe(Math.ceil(DURATION / DT - 1e-9));
-    expect(struck).toHaveLength(1);
-    expect(struck[0]!).toBeLessThan(STRIKE);
-    expect(struck[0]! + DT).toBeGreaterThanOrEqual(STRIKE);
-    // A frozen frame (dt 0) holds the swing where it is.
-    expect(stepAttack({ time: 0.3 }, 0, DURATION, STRIKE)).toEqual({ state: { time: 0.3 }, struck: false });
-  });
-
-  it('fades the clip in over the idle or run, holds it through the strike, and hands back to them by its end', () => {
-    expect(attackWeight(null, DURATION)).toBe(0);
-    expect(attackWeight(0, DURATION)).toBe(0);
-    expect(attackWeight(PLAY_ATTACK_FADE_IN / 2, DURATION)).toBeCloseTo(0.5, 9);
-    for (const t of [PLAY_ATTACK_FADE_IN, STRIKE, DURATION - PLAY_ATTACK_FADE_OUT]) expect(attackWeight(t, DURATION), `${t} s`).toBeCloseTo(1, 9);
-    expect(attackWeight(DURATION - PLAY_ATTACK_FADE_OUT / 2, DURATION)).toBeCloseTo(0.5, 9);
-    expect(attackWeight(DURATION, DURATION)).toBe(0);
-    // The fade in is over well before the strike, so the wind-up reads at full weight.
-    expect(PLAY_ATTACK_FADE_IN).toBeLessThan(STRIKE / 3);
-    // Given the frame's step, the fade out ends that step before the clip does.
-    expect(attackWeight(DURATION - 0.05, DURATION, 0.05)).toBe(0);
-    expect(attackWeight(DURATION - 0.05 - PLAY_ATTACK_FADE_OUT / 2, DURATION, 0.05)).toBeCloseTo(0.5, 9);
-  });
-
-  it('hands the weight back to 0 one frame before the clip ends, so the frame that ends the swing does not pop', () => {
-    const last = (step: number, frameStep: number) => {
-      let attack = triggerAttack(NOT_SWINGING);
-      const weights: number[] = [];
-      while (attack.time !== null) {
-        attack = stepAttack(attack, step, DURATION, STRIKE).state;
-        weights.push(attackWeight(attack.time, DURATION, frameStep));
-      }
-      // The last entry is the frame that ended the swing, at 0; the one before it is the swing's last frame.
-      return { weights, lastSwing: weights.at(-2)! };
-    };
-    for (const step of [1 / 60, 1 / 30, 1 / 20]) {
-      const { weights, lastSwing } = last(step, step);
-      expect(lastSwing, `${step} s frames`).toBeCloseTo(0, 9);
-      // No frame drops the weight by more than one frame's share of the fade, the swing's end included.
-      const drops = weights.slice(1).map((weight, i) => weights[i]! - weight);
-      expect(Math.max(...drops), `${step} s frames`).toBeLessThanOrEqual(step / PLAY_ATTACK_FADE_OUT + 1e-9);
-    }
-    // A fade that reached 0 only at the clip's end left the last swing frame a sixth of the weight at 0.05 s frames,
-    // which vanished on the next.
-    expect(last(1 / 20, 0).lastSwing).toBeGreaterThan(0.15);
-  });
-
-  it('drops a trigger on a frozen frame rather than swinging when the lab unfreezes, and stops him dead on a live one', () => {
-    const still: MotionState = { x: 1, z: 2, yaw: 0.3, speed: 0, drive: 0 };
-    const frozen = startSwing(NOT_SWINGING, still, true, 0);
-    expect(frozen).toEqual({ attack: NOT_SWINGING, motion: still });
-    // The first unfrozen frame has no trigger of its own, so no swing starts: the frozen press was not kept.
-    expect(startSwing(frozen.attack, frozen.motion, false, DT).attack).toEqual(NOT_SWINGING);
-    // A live frame's trigger starts the swing and zeroes his drive and speed on that frame.
-    const running: MotionState = { ...still, speed: PLAY_WALK_SPEED, drive: PLAY_WALK_SPEED };
-    expect(startSwing(NOT_SWINGING, running, true, DT)).toEqual({ attack: { time: 0 }, motion: { ...running, speed: 0, drive: 0 } });
-    // Mid-swing a trigger changes nothing, and no trigger changes nothing.
-    expect(startSwing({ time: 0.2 }, running, true, DT)).toEqual({ attack: { time: 0.2 }, motion: running });
-    expect(startSwing(NOT_SWINGING, running, false, DT)).toEqual({ attack: NOT_SWINGING, motion: running });
-  });
-
-  it('stops him through the swing without turning him, then lets him run again the way the key asks', () => {
-    // Sprinting along +z, he is asked to keep going toward +x as the swing starts.
-    const sprint = { right: 0, forward: 1, sprint: true };
-    const running = run({ x: 0, z: 0, yaw: 0, speed: 0, drive: 0 }, sprint, [0, 1], 1.5);
-    expect(running.speed).toBeCloseTo(PLAY_SPRINT_SPEED, 9);
-    const { frames, strikes, attack } = swing(running, sprint, [1, 0], DURATION + 1);
-    const during = frames.filter((frame) => frame.attack.time !== null);
-    expect(during.length).toBeGreaterThan(0);
-    // His facing holds through the whole swing, though the key asks for a quarter turn.
-    for (const frame of during) expect(frame.motion.yaw).toBe(running.yaw);
-    // He stops dead on the frame the swing starts, where he stood, and stays there until it ends. He used to shed the
-    // sprint at the stop rate, which slid him 0.59 m (0.19 m from a walk) under the clip's planted boots.
-    for (const frame of during) {
-      expect(frame.motion.speed).toBe(0);
-      expect(frame.motion.drive).toBe(0);
-      expect([frame.motion.x, frame.motion.z]).toEqual([running.x, running.z]);
-    }
-    const stopRate = PLAY_WALK_SPEED / PLAY_SECONDS_TO_STOP;
-    expect(PLAY_SPRINT_SPEED ** 2 / (2 * stopRate)).toBeCloseTo(0.59, 2);
-    expect(PLAY_WALK_SPEED ** 2 / (2 * stopRate)).toBeCloseTo(0.19, 2);
-    expect(strikes).toBe(1);
-    // Out of the swing he turns toward the key and runs again, and the clip has handed back completely.
-    expect(attack).toEqual(NOT_SWINGING);
-    const after = frames.at(-1)!;
-    expect(after.weight).toBe(0);
-    expect(wrapAngle(after.motion.yaw - yawOf(1, 0))).toBeCloseTo(0, 6);
-    expect(after.motion.speed).toBeCloseTo(PLAY_SPRINT_SPEED, 6);
-    // Standing still with no key held, the swing ends where it began, and he stays put.
-    const standing = swing({ x: 1, z: 2, yaw: 0.3, speed: 0, drive: 0 }, { right: 0, forward: 0, sprint: false }, [0, 1], DURATION + 0.5);
-    expect(standing.motion).toEqual({ x: 1, z: 2, yaw: 0.3, speed: 0, drive: 0 });
-    expect(PLAY_ATTACK_MOVE_SCALE).toBe(0);
-  });
-
-  it("holds the run's weight while the swing fades in, so no idle shows before the swing is full, and hands back after", () => {
-    /** play.ts's frames at a step of dt from a run at his walk pace, a trigger on the first, the move input held throughout. */
-    const blend = (dt: number, input: typeof forward) => {
-      let motion: MotionState = { x: 0, z: 0, yaw: 0, speed: PLAY_WALK_SPEED, drive: PLAY_WALK_SPEED };
-      let attack: AttackState = NOT_SWINGING;
-      // The weight the frame before the trigger left: the run alone at his walk pace.
-      let held = runWeight(motion.speed);
-      const frames: { idle: number; run: number; swing: number; share: number; time: number | null }[] = [];
-      for (let frame = 0; frame * dt < DURATION + 0.5; frame++) {
-        ({ attack, motion } = startSwing(attack, motion, frame === 0, dt));
-        motion = stepMotion(motion, moveDirection(input, 0, 1), input.sprint, dt, [], R, attack.time !== null ? PLAY_ATTACK_MOVE_SCALE : 1);
-        attack = stepAttack(attack, dt, DURATION, STRIKE).state;
-        held = blendRunWeight(held, motion.speed, attack.time);
-        frames.push({ ...layerWeights(held, attackWeight(attack.time, DURATION, dt)), share: held, time: attack.time });
-      }
-      return frames;
-    };
-    const still = { right: 0, forward: 0, sprint: false };
-    for (const dt of [1 / 60, 1 / 20]) {
-      for (const input of [forward, still]) {
-        const frames = blend(dt, input);
-        const label = `${dt.toFixed(4)} s frames, ${input === forward ? 'key held' : 'no key'}`;
-        // The trigger frame keeps the frame before's run weight, under a swing at a frame's share of its fade in.
-        expect(frames[0]!.share, label).toBe(1);
-        expect(frames[0]!.swing, label).toBeCloseTo(dt / PLAY_ATTACK_FADE_IN, 9);
-        for (const frame of frames) expect(frame.idle + frame.run + frame.swing, label).toBeCloseTo(1, 12);
-        // No idle shows until the swing has full weight.
-        const full = frames.findIndex((frame) => frame.swing === 1);
-        expect(full, label).toBeGreaterThan(0);
-        for (const frame of frames.slice(0, full)) expect(frame.idle, label).toBe(0);
-        // He stands through the swing, so its fade out hands back to the idle alone, the run's weight at 0.
-        const fadingOut = frames.filter((frame) => frame.time !== null && frame.time > DURATION / 2 && frame.swing < 1);
-        expect(fadingOut.length, label).toBeGreaterThan(0);
-        for (const frame of fadingOut) expect(frame.run, label).toBe(0);
-        // Half a second after the swing, the idle has him standing, or the run has him running again under the key.
-        const last = frames.at(-1)!;
-        expect(last.swing, label).toBe(0);
-        expect(last.run, label).toBe(input === forward ? 1 : 0);
-      }
-    }
-    // Following his speed on the trigger frame, as the run did before the hold, showed this much idle at once.
-    expect(layerWeights(runWeight(0), 1 / 60 / PLAY_ATTACK_FADE_IN).idle).toBeCloseTo(0.76, 2);
-    expect(layerWeights(runWeight(0), 1 / 20 / PLAY_ATTACK_FADE_IN).idle).toBeCloseTo(0.29, 2);
-  });
-
+describe('the play prototype attack triggers', () => {
   it('tells a click from an orbit drag by how far the press moved and how soon it lifted', () => {
     expect(isAttackClick(0, 0.1)).toBe(true);
     expect(isAttackClick(PLAY_CLICK_SLOP_PX - 0.5, PLAY_CLICK_MAX_SECONDS - 0.01)).toBe(true);
@@ -498,5 +312,44 @@ describe('the play prototype attack', () => {
     expect(isAttackClick(40, 0.1)).toBe(false);
     expect(isAttackClick(0, PLAY_CLICK_MAX_SECONDS)).toBe(false);
     expect(isAttackClick(0, -0.01)).toBe(false);
+  });
+});
+
+describe('a swing holding him back (stepMotion)', () => {
+  const sprintKey = { right: 0, forward: 1, sprint: true };
+  const walkKey = { right: 0, forward: 1, sprint: false };
+
+  it('stops him dead and unturned on the first frame of a planted swing, where easing down slid him', () => {
+    const sprinting: MotionState = { x: 0, z: 0, yaw: 0, speed: PLAY_SPRINT_SPEED, drive: PLAY_SPRINT_SPEED };
+    // Asked to keep sprinting a quarter turn away, he neither moves nor turns: the cap holds his drive at the plant's 0.
+    const planted = stepMotion(sprinting, moveDirection(sprintKey, 1, 0), true, DT, [], R, { moveScale: 0, turnScale: 0, cap: true });
+    expect(planted).toEqual({ x: 0, z: 0, yaw: 0, speed: 0, drive: 0 });
+    // Eased at the stop rate instead, he slid 0.59 m from a sprint and 0.19 m from a walk under boots the clip plants.
+    const stopRate = PLAY_WALK_SPEED / PLAY_SECONDS_TO_STOP;
+    expect(PLAY_SPRINT_SPEED ** 2 / (2 * stopRate)).toBeCloseTo(0.59, 2);
+    expect(PLAY_WALK_SPEED ** 2 / (2 * stopRate)).toBeCloseTo(0.19, 2);
+    // Out of a swing nothing holds him back, as before.
+    const free = stepMotion(sprinting, moveDirection(sprintKey, 0, 1), true, DT, [], R, FREE_MOTION);
+    expect(free.speed).toBeCloseTo(PLAY_SPRINT_SPEED, 9);
+  });
+
+  it("holds a light swing's active frames at its share of the pace at once, facing locked, and eases and turns slower in its wind-up", () => {
+    const walking: MotionState = { x: 0, z: 0, yaw: 0, speed: PLAY_WALK_SPEED, drive: PLAY_WALK_SPEED };
+    // Active frames: the drive drops to 40 percent of the walk on this frame, and a key asking a quarter turn turns nothing.
+    const active = stepMotion(walking, moveDirection(walkKey, 0, 1), false, DT, [], R, { moveScale: 0.4, turnScale: 0, cap: true });
+    expect(active.speed).toBeCloseTo(0.4 * PLAY_WALK_SPEED, 12);
+    const locked = stepMotion(walking, moveDirection(walkKey, 1, 0), false, DT, [], R, { moveScale: 0.4, turnScale: 0, cap: true });
+    expect(locked.yaw).toBe(0);
+    // Wind-up: half the turn rate, and the drive eased down at the stop rate rather than dropped.
+    const windup = stepMotion(walking, moveDirection(walkKey, 1, 0), false, DT, [], R, { moveScale: 0.4, turnScale: 0.5, cap: false });
+    expect(windup.yaw).toBeCloseTo(((PLAY_TURN_RATE_DEG * Math.PI) / 180) * 0.5 * DT, 12);
+    expect(windup.drive).toBeCloseTo(PLAY_WALK_SPEED - (PLAY_WALK_SPEED / PLAY_SECONDS_TO_STOP) * DT, 12);
+  });
+
+  it("holds the run's weight only while it is told to, and otherwise follows his speed", () => {
+    expect(blendRunWeight(0.8, 0, true)).toBe(0.8);
+    expect(blendRunWeight(0.8, 0, false)).toBe(0);
+    expect(blendRunWeight(0.8, 0.6, false)).toBe(runWeight(0.6));
+    expect(runWeight(0.6)).toBeCloseTo(0.5, 12);
   });
 });

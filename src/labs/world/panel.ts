@@ -1,6 +1,7 @@
 import GUI, { type Controller } from 'lil-gui';
 import type { TierName } from '../../render/quality';
 import { NARROW_SCREEN } from '../style/referenceBoard';
+import { COMBAT_FEEL_KEYS, COMBAT_FEEL_RANGES, combatFeelJson, defaultCombatFeel, type CombatFeel } from './combatFeel';
 import { HEART_STAGES } from './layout';
 import { MEMBERS, ZONES, type WorldMember } from './registry';
 import { CHARACTER_FAMILIES, CHARACTERS, OVERVIEW } from './views';
@@ -8,6 +9,12 @@ import { CHARACTER_FAMILIES, CHARACTERS, OVERVIEW } from './views';
 const TITLE = 'Asset World';
 /** The phone title: short enough that the closed panel leaves the canvas clear, as the Style Lab's "Dials" does. */
 const NARROW_TITLE = 'World';
+
+/** The copy button's name, and its name for a moment after a copy, so the owner sees that the clipboard took it. */
+const COPY_FEEL = 'Copy combat feel settings';
+const COPIED_FEEL = 'Copied to the clipboard';
+/** How long the copy button says it copied, in milliseconds. */
+const COPIED_SHOWN_MS = 1500;
 
 /** The fastest the animation speed dial runs the clips and tower sweeps, as a multiple of their authored speed. */
 export const MAX_ANIMATION_SPEED = 2;
@@ -33,6 +40,8 @@ export interface WorldPanelHandlers {
   onHeartLevel(level: number): void;
   onTier(tier: TierName): void;
   openStyleLab(): void;
+  /** Puts a line in the page's banner: the copy button's fallback when the clipboard refuses the settings. */
+  notice(text: string): void;
 }
 
 /** The view dropdown: the overview and the characters, then the families in the order the zones stand. */
@@ -65,7 +74,11 @@ export interface WorldPanel {
   refresh(): void;
 }
 
-export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHandlers): WorldPanel {
+/**
+ * The panel. `feel` is the page's one combat feel object (combatFeel.ts), which Play Pip reads every frame: its folder's
+ * sliders write it directly, so a change takes effect on the next frame.
+ */
+export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHandlers, feel: CombatFeel): WorldPanel {
   // On a phone the panel starts closed behind a short title, as the Style Lab's dials do, so the canvas starts clear.
   const narrow = matchMedia(NARROW_SCREEN);
   const title = (): string => (narrow.matches ? NARROW_TITLE : TITLE);
@@ -112,12 +125,66 @@ export function createWorldPanel(state: WorldPanelState, handlers: WorldPanelHan
   gui.add(state, 'tier', ['high', 'medium', 'low']).name('quality tier').onChange((tier: TierName) => handlers.onTier(tier));
   gui.add({ open: () => handlers.openStyleLab() }, 'open').name('Open this look in the Style Lab');
 
+  // Play Pip's combat feel: one slider per setting, in COMBAT_FEEL_RANGES's order, so a setting added there (phase B's
+  // hit-stop, lunge, shake and trail) arrives here with no change to this code. The readout shows the settings as the
+  // JSON the copy button copies, so the owner can also select it by hand. On a phone the folder starts closed, as the
+  // panel does, so it does not fill the small screen when the panel opens.
+  const feelFolder = gui.addFolder('combat feel');
+  if (narrow.matches) feelFolder.close();
+  const readout = { settings: combatFeelJson(feel) };
+  const syncReadout = (): void => {
+    readout.settings = combatFeelJson(feel);
+    readoutControl.updateDisplay();
+  };
+  for (const key of COMBAT_FEEL_KEYS) {
+    const range = COMBAT_FEEL_RANGES[key];
+    feelFolder.add(feel, key, range.min, range.max, range.step).name(range.label).onChange(syncReadout);
+  }
+  const readoutControl: Controller = feelFolder.add(readout, 'settings').name('settings');
+  // The readout reports the settings; typing into it would change nothing, so it takes a selection but no edits.
+  const readoutInput = readoutControl.domElement.querySelector('input');
+  if (readoutInput) readoutInput.readOnly = true;
+  const copyControl: Controller = feelFolder
+    .add(
+      {
+        copy: () => {
+          const json = combatFeelJson(feel);
+          // The clipboard may be missing (an insecure address) or refuse (no permission, the page not focused), and it
+          // may throw at once or reject later; either way the settings go to the banner, where the owner can copy them.
+          const refused = (error: unknown): void => handlers.notice(`The clipboard refused the combat feel settings (${String(error)}); they are: ${json}`);
+          try {
+            navigator.clipboard.writeText(json).then(() => {
+              copyControl.name(COPIED_FEEL);
+              setTimeout(() => copyControl.name(COPY_FEEL), COPIED_SHOWN_MS);
+            }, refused);
+          } catch (error) {
+            refused(error);
+          }
+        },
+      },
+      'copy',
+    )
+    .name(COPY_FEEL);
+  feelFolder
+    .add(
+      {
+        reset: () => {
+          Object.assign(feel, defaultCombatFeel());
+          for (const controller of feelFolder.controllers) controller.updateDisplay();
+          syncReadout();
+        },
+      },
+      'reset',
+    )
+    .name('Reset combat feel to the defaults');
+
   return {
     refresh() {
       rebuildMembers();
       // While he plays, the camera follows him, so the controls that would glide it to a view or turn it wait.
       for (const controller of [viewControl, memberControl, turntableControl]) controller.enable(!state.play);
       for (const controller of gui.controllersRecursive()) controller.updateDisplay();
+      syncReadout();
     },
   };
 }
