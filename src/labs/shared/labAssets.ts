@@ -42,6 +42,28 @@ export async function loadManifestTexture(base: string, manifest: Manifest | nul
 }
 
 /**
+ * A model's sidecar notes: the `notes` of the .meta.json the build writes beside its GLB (public/assets/<family>/<name>
+ * .meta.json), which carries what the GLB cannot, such as a clip's recorded root motion (notes.root_motion, which Play
+ * Pip's lunge reads). Null when the manifest does not list the model or the file does not load, with a warning naming
+ * the page and the file in the second case, since the manifest promised it. The labs never read a sidecar before; it is
+ * one small file fetched beside the model, so the arena stays a two-model page.
+ */
+export async function fetchModelNotes(base: string, manifest: Manifest | null, name: string, page: string): Promise<unknown> {
+  const entry = manifest?.assets.find((asset) => asset.name === name && asset.kind === 'model');
+  if (!entry) return null;
+  const url = `${base}assets/${entry.file.replace(/[.]glb$/, '.meta.json')}`;
+  try {
+    const response = await fetch(url, { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const sidecar = (await response.json()) as { notes?: unknown };
+    return sidecar.notes ?? null;
+  } catch (error) {
+    console.warn(`${page}: the sidecar of ${name} failed to load from ${url}; its clips take no recorded root motion`, error);
+    return null;
+  }
+}
+
+/**
  * GLTFLoader's errors need not name the model (a parse error names neither asset nor file), so a failed load reached
  * the banner and the console without saying which model it was. The manifest name and URL now travel with it.
  */

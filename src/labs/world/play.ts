@@ -42,10 +42,11 @@ import {
   type ComboState,
   type ComboStep,
   type HitContract,
+  type HitName,
 } from './combo';
 import { hitClips, splitClip, upperBodyBones, type HitClip, type HitSource } from './comboClips';
 import type { PlacedMember } from './layout';
-import { freshLunge, stepLunge } from './lunge';
+import { freshLunge, lungeBodies, resetLunge, rootMotionCurves, ScriptedLunge, stepLunge, type LungeCurve } from './lunge';
 import {
   blendRunWeight,
   clearance,
@@ -156,7 +157,9 @@ export interface PlayReading {
    * The playing hit's lunge: the metres it has carried him so far, the metres it was planned to, the target the assist
    * chose (an index into the targets, or -1), the turn it adds in degrees, and whether a body or the edge stopped it.
    */
-  lunge: { moved: number; planned: number; target: number; turnDeg: number; blocked: boolean };
+  lunge: { moved: number; planned: number; target: number; turnDeg: number; blocked: boolean; source: LungeCurve['source'] | null; total: number };
+  /** Where each hit's lunge curve comes from, attack_1 to attack_3: its clip's root motion, or the scripted profile. */
+  lungeSources: LungeCurve['source'][];
   /** The sword trail: its samples, its brightest sample's shade and whether it is taking samples. */
   trail: TrailReading;
   /** The blade's base and tip in world space as last drawn, or null without a measured blade. */
@@ -368,12 +371,32 @@ export interface PipPlayOptions {
   brush?: IUniform<Texture | null>;
   /** The combo's contracts, COMBO_HITS by default: a new set of clips with new numbers drops in here. */
   contracts?: readonly HitContract[];
+  /**
+   * The notes of his model's sidecar (its .meta.json's `notes`), whose `root_motion` gives a hit's lunge curve from its
+   * clip's root motion (lunge.ts, rootMotionCurves); null or absent, each hit takes it from its clip's glTF extras, or
+   * the scripted profile.
+   */
+  sidecarNotes?: unknown;
 }
 
 export function createPipPlay(options: PipPlayOptions): PipPlay {
   const { assets, ground, parent, energy, hullMaterial, planetRadius, feel } = options;
   const brush: IUniform<Texture | null> = options.brush ?? { value: flatTexture(128) };
   const contracts = options.contracts ?? COMBO_HITS;
+  // Each hit's lunge curve from its clip's root motion, where the build records one; the rest take the scripted profile
+  // when they begin. A record with a fault is named and skipped, so its hit lunges by the profile.
+  const extras: Partial<Record<HitName, unknown>> = {};
+  for (const contract of contracts) {
+    const clip = assets.get(ASSET)?.animations.find((each) => each.name === contract.name);
+    const motion = (clip?.userData as { root_motion?: unknown } | undefined)?.root_motion;
+    if (motion !== undefined) extras[contract.name] = motion;
+  }
+  const rootCurves = rootMotionCurves(
+    contracts.map((contract) => contract.name),
+    options.sidecarNotes ?? null,
+    extras,
+    (said) => console.warn(`Play Pip: ${said}`),
+  );
   const asset = assets.get(ASSET);
   const template = asset ? cloneRig(asset.root) : null;
   const idleClip = asset?.animations.find((clip) => clip.name === 'idle') ?? null;
@@ -408,10 +431,13 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
   const noObstacles: readonly Obstacle[] = [];
   let obstacles: ObstacleSource = () => noObstacles;
   let targets: ObstacleSource = () => noObstacles;
-  // The playing hit's lunge (lunge.ts): planned on the frame it begins, carried by the share of its window the hit's
-  // time has reached, swept against the bodies a frame's share at a time.
+  // The playing hit's lunge (lunge.ts): its curve taken when the hit begins, planned when the curve first moves, carried
+  // by the curve's metres the hit's time has reached, swept against the bodies' cores a frame's share at a time
+  // (lungeBodies writes them into `coreBodies`, reused).
   const lunge = freshLunge();
   const lungeAt = { x: 0, z: 0, yaw: 0 };
+  const coreBodies: Obstacle[] = [];
+  let lungeCurve: LungeCurve | null = null;
   const lastClocks: PlayClocks = { combo: 0, motion: 0, frame: 0 };
   let motion: MotionState = { x: 0, z: 0, yaw: 0, speed: 0, drive: 0 };
   let combo: ComboState = COMBO_READY;
@@ -476,10 +502,16 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
    */
   /** Forgets the lunge: a new hit plans its own. */
   function clearLunge(): void {
-    lunge.plan = null;
-    lunge.done = 0;
-    lunge.moved = 0;
-    lunge.blocked = false;
+    resetLunge(lunge);
+    lungeCurve = null;
+  }
+
+  /**
+   * The lunge curve a hit begins with: its clip's root motion where the build recorded one, or the scripted profile at
+   * the feel's metres for a light hit or the finisher, fixed for the hit so a slider moved mid-hit lunges the next.
+   */
+  function curveFor(contract: HitContract): LungeCurve {
+    return rootCurves[contract.name] ?? new ScriptedLunge(contract, contract.planted ? feel.lungeFinisher : feel.lungeLight);
   }
 
   /**
@@ -489,13 +521,14 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
   function carryLunge(): void {
     const hit = combo.hit;
     if (!hit) return;
-    const contract = contractOf(hit.step, contracts);
+    lungeCurve ??= curveFor(contractOf(hit.step, contracts));
     lungeAt.x = motion.x;
     lungeAt.z = motion.z;
     lungeAt.yaw = motion.yaw;
     const before = lunge.done;
-    stepLunge(lunge, contract, hit.time, contract.planted ? feel.lungeFinisher : feel.lungeLight, lungeAt, targets(), obstacles(), (feel.assistTurn * Math.PI) / 180, planetRadius);
-    if (lunge.done !== before) motion = { ...motion, x: lungeAt.x, z: lungeAt.z, yaw: lungeAt.yaw };
+    const beforeSide = lunge.sideDone;
+    stepLunge(lunge, lungeCurve, hit.time, lungeAt, targets(), lungeBodies(obstacles(), coreBodies), (feel.assistTurn * Math.PI) / 180, planetRadius);
+    if (lunge.done !== before || lunge.sideDone !== beforeSide) motion = { ...motion, x: lungeAt.x, z: lungeAt.z, yaw: lungeAt.yaw };
   }
 
   function toStart(camera: PerspectiveCamera, controls: OrbitControls): void {
@@ -757,7 +790,10 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
           target: lunge.plan ? lunge.plan.target : -1,
           turnDeg: lunge.plan ? (lunge.plan.turn * 180) / Math.PI : 0,
           blocked: lunge.blocked,
+          source: lungeCurve ? lungeCurve.source : null,
+          total: lungeCurve ? lungeCurve.total : 0,
         },
+        lungeSources: contracts.map((contract) => (rootCurves[contract.name] ? 'root' : 'scripted')),
         trail: trail ? trail.stroke.reading(feel.trailLength) : { points: 0, alpha: 0, emitting: false },
         blade: bladeDrawn ? { base: bladeBase.toArray(), tip: bladeTip.toArray() } : null,
       };

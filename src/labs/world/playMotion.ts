@@ -80,11 +80,30 @@ export interface MotionState {
   speed: number;
 }
 
-/** A member's root on the tangent plane, and the reach he cannot enter around it (his body's reach included). */
+/**
+ * A member's root on the tangent plane, and the reach he cannot walk into around it (his body's reach included).
+ * `core`, when given, is the tighter body inside it that nothing may enter at all (his body's reach included too): a
+ * training dummy's hump and thorax, where its reach is its splayed legs' tips at the ground. A lunge may carry him past
+ * the reach toward the core (lunge.ts), and once inside the reach he is neither pushed back out nor let deeper
+ * (resolveObstacles). Without a core the reach is the whole body.
+ */
 export interface Obstacle {
   x: number;
   z: number;
   radius: number;
+  core?: number;
+}
+
+/**
+ * The reach an obstacle holds a move to, for a move that starts at (fromX, fromZ): its reach, unless the move starts
+ * inside it, where a lunge left him, and then where he stands, never less than its core. Pushed straight back out to the
+ * reach on his next frame, as every reach pushed before there were cores, he would pop up to 0.6 m in one frame after
+ * every lunge into a dummy.
+ */
+export function holdingRadius(obstacle: Obstacle, fromX: number, fromZ: number): number {
+  const at = Math.hypot(fromX - obstacle.x, fromZ - obstacle.z);
+  if (at >= obstacle.radius) return obstacle.radius;
+  return Math.max(obstacle.core ?? obstacle.radius, at);
 }
 
 export function wrapAngle(angle: number): number {
@@ -175,7 +194,9 @@ export function groundDistance(ax: number, az: number, bx: number, bz: number, p
 /**
  * Pushes a point out of every obstacle's reach, straight out from its root, so a step into a member keeps its part
  * along the reach's edge and he slides round it instead of stopping dead. A few passes settle a point pushed from one
- * reach into a neighbour's. A point exactly on a root is pushed back the way he came.
+ * reach into a neighbour's. A point exactly on a root is pushed back the way he came. A move that starts inside a reach
+ * (a lunge carried him there, toward a dummy's core) is held at the distance it started from, never under the core,
+ * rather than pushed back out to the reach (holdingRadius), so he can step away or round it but not further in.
  */
 export function resolveObstacles(x: number, z: number, fromX: number, fromZ: number, obstacles: readonly Obstacle[]): { x: number; z: number; blocked: boolean } {
   let blocked = false;
@@ -185,15 +206,16 @@ export function resolveObstacles(x: number, z: number, fromX: number, fromZ: num
       let dx = x - obstacle.x;
       let dz = z - obstacle.z;
       let distance = Math.hypot(dx, dz);
-      if (distance >= obstacle.radius) continue;
+      const radius = holdingRadius(obstacle, fromX, fromZ);
+      if (distance >= radius) continue;
       if (distance < 1e-9) {
         dx = fromX - obstacle.x;
         dz = fromZ - obstacle.z;
         distance = Math.hypot(dx, dz);
         if (distance < 1e-9) [dx, dz, distance] = [1, 0, 1];
       }
-      x = obstacle.x + (dx / distance) * obstacle.radius;
-      z = obstacle.z + (dz / distance) * obstacle.radius;
+      x = obstacle.x + (dx / distance) * radius;
+      z = obstacle.z + (dz / distance) * radius;
       moved = true;
       blocked = true;
     }
@@ -233,9 +255,12 @@ export interface SweptMove {
   blocked: boolean;
 }
 
-/** Whether a point stands outside every obstacle's reach (a point on a reach's edge counts as outside). */
-function outsideAll(x: number, z: number, obstacles: readonly Obstacle[]): boolean {
-  for (const obstacle of obstacles) if (Math.hypot(x - obstacle.x, z - obstacle.z) < obstacle.radius - 1e-9) return false;
+/**
+ * Whether a point stands outside every obstacle's reach as a move from (fromX, fromZ) is held to it (holdingRadius; a
+ * point on the edge counts as outside).
+ */
+function outsideAll(x: number, z: number, obstacles: readonly Obstacle[], fromX: number, fromZ: number): boolean {
+  for (const obstacle of obstacles) if (Math.hypot(x - obstacle.x, z - obstacle.z) < holdingRadius(obstacle, fromX, fromZ) - 1e-9) return false;
   return true;
 }
 
@@ -263,7 +288,7 @@ export function sweepMove(x: number, z: number, dx: number, dz: number, obstacle
       cz = kept.z;
       continue;
     }
-    if (outsideAll(kept.x, kept.z, obstacles)) {
+    if (outsideAll(kept.x, kept.z, obstacles, cx, cz)) {
       cx = kept.x;
       cz = kept.z;
     }

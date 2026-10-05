@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { ARENA_DUMMY_NAMES, RESET_NAME } from '../../src/labs/combat/arena';
+import { PLAY_BODY_RADIUS } from '../../src/labs/world/playMotion';
 
 /** What `__P99__.play()` reads of Play Pip (labs/world/play.ts), as far as these tests read it. */
 interface PlayReading {
@@ -22,7 +23,8 @@ interface PlayReading {
   clipLengthOff: number[] | null;
   feet: number[][] | null;
   clocks: { combo: number; motion: number; frame: number };
-  lunge: { moved: number; planned: number; target: number; turnDeg: number; blocked: boolean };
+  lunge: { moved: number; planned: number; target: number; turnDeg: number; blocked: boolean; source: string | null; total: number };
+  lungeSources: string[];
   trail: { points: number; alpha: number; emitting: boolean };
 }
 
@@ -34,6 +36,8 @@ interface DummyReading {
   yaw: number;
   home: { tangent: number[]; yaw: number };
   reach: number;
+  /** Its core's radius (labs/combat/dummies.ts DUMMY_CORE_SHARE of its reach): the hump and thorax a lunge comes up to. */
+  core: number;
   hits: number;
   fromPip: { distance: number; angleDeg: number } | null;
   flinch: number;
@@ -191,7 +195,7 @@ test.describe('the combat arena', () => {
       await page.evaluate(() => {
         type Strike = { step: number; dummies: DummyReading[] };
         type Frame = { step: number; time: number | null; weight: number; tangent: number[]; position: number[]; feet: number[][]; lunge: number };
-        const store = window as unknown as { strikes: Strike[]; frames: Frame[]; presses: number; done: boolean };
+        const store = window as unknown as { strikes: Strike[]; frames: Frame[]; presses: number; done: boolean; lunges: number[]; closest: { distance: number; core: number; step: number } };
         const p99 = window.__P99__!;
         const play = () => (p99['play'] as () => PlayReading)();
         const press = (): void => {
@@ -203,11 +207,16 @@ test.describe('the combat arena', () => {
         store.frames = [];
         store.presses = 0;
         store.done = false;
+        store.lunges = [0, 0, 0];
+        store.closest = { distance: Infinity, core: 0, step: 0 };
         const pressedIn = new Set<number>();
         let last = play().strikes;
         let after = -1;
         const tick = (): void => {
           const sample = play();
+          if (sample.comboStep > 0) store.lunges[sample.comboStep - 1] = Math.max(store.lunges[sample.comboStep - 1]!, sample.lunge.moved);
+          const middleNow = (p99['dummies'] as () => DummyReading[])()[1]!;
+          if (middleNow.fromPip && middleNow.fromPip.distance < store.closest.distance) store.closest = { distance: middleNow.fromPip.distance, core: middleNow.core, step: sample.comboStep };
           if (sample.strikes > last) store.strikes.push({ step: sample.lastStrikeStep ?? 0, dummies: (p99['dummies'] as () => DummyReading[])() });
           last = sample.strikes;
           if (sample.comboStep === 3 || store.frames.length) {
@@ -242,8 +251,10 @@ test.describe('the combat arena', () => {
           strikes: { step: number; dummies: DummyReading[] }[];
           frames: { step: number; time: number | null; weight: number; tangent: number[]; position: number[]; feet: number[][]; lunge: number }[];
           presses: number;
+          lunges: number[];
+          closest: { distance: number; core: number; step: number };
         };
-        return { strikes: store.strikes, frames: store.frames, presses: store.presses, play: (window.__P99__!['play'] as () => PlayReading)() };
+        return { strikes: store.strikes, frames: store.frames, presses: store.presses, lunges: store.lunges, closest: store.closest, play: (window.__P99__!['play'] as () => PlayReading)() };
       });
       const atStrike = result.strikes.map((strike) => {
         const middle = strike.dummies[1]!;
@@ -271,6 +282,8 @@ test.describe('the combat arena', () => {
       const atEnd = footMove(end);
       const lateMoves = frames.slice(1, end).map((_, i) => i + 1).filter((index) => (frames[index]!.time ?? 0) >= 0.55).map(footMove);
       const afterMoves = frames.slice(end + 1).map((_, i) => footMove(end + 1 + i));
+      // The closest his body (PLAY_BODY_RADIUS about his root) came to the middle dummy's core (its hump and thorax).
+      const bodyToCore = result.closest.distance - PLAY_BODY_RADIUS - result.closest.core;
       const line =
         `combat arena chain [${test.info().project.name}]: ${result.presses} presses; strikes at steps ${atStrike.map((s) => s.step).join(', ')}; ` +
         atStrike
@@ -280,6 +293,8 @@ test.describe('the combat arena', () => {
               `at ${s.middle.fromPip!.angleDeg.toFixed(2)} degrees, the nearest ${s.nearest.name} at ${s.nearest.fromPip!.distance.toFixed(3)} m and ${s.nearest.fromPip!.angleDeg.toFixed(2)} degrees`,
           )
           .join('; ') +
+        `; lunges from W-contact ${result.lunges.map((m, i) => `attack_${i + 1} ${(m * 1000).toFixed(1)} mm`).join(', ')} (${JSON.stringify(result.play.lungeSources)}), ` +
+        `his body ${(bodyToCore * 1000).toFixed(1)} mm from the middle dummy's core at the closest (roots ${result.closest.distance.toFixed(3)} m apart in attack_${result.closest.step}, core ${result.closest.core.toFixed(3)} m)` +
         `; strikes by hit ${JSON.stringify(result.play.strikesByStep)}; finisher over ${finisher.length} frames: root moved ${(rootDrift * 1000).toFixed(2)} mm against its lunge's ${(lunged * 1000).toFixed(2)} mm, ` +
         `left boot out ${(stepOut * 100).toFixed(1)} cm from his root at most, and ten frames after the end ${(home * 1000).toFixed(1)} mm from where it stood from his root at the start (the idle's stance against the hits'); ` +
         `largest foot move in a frame ${(Math.max(...lateMoves) * 1000).toFixed(1)} mm from 0.55 s to the end, ${(atEnd * 1000).toFixed(1)} mm on the frame it ended, ` +
@@ -292,6 +307,13 @@ test.describe('the combat arena', () => {
         expect(s.middle.fromPip!.distance - s.middle.reach, line).toBeLessThanOrEqual(BLADE_REACH[s.step - 1]!);
         expect(Math.abs(s.middle.fromPip!.angleDeg), line).toBeLessThan(FACING_DEG);
       }
+      // Every hit lunges from W-contact against the middle dummy: each light hit at least 0.3 m and the finisher further,
+      // swept against the dummy's core, so his body never enters its hump and thorax. The lunge was measured against the
+      // dummy's whole reach, where W parks him, and moved 0, 0.17 and 0.26 m.
+      expect(result.lunges[0]!, line).toBeGreaterThanOrEqual(0.3);
+      expect(result.lunges[1]!, line).toBeGreaterThanOrEqual(0.3);
+      expect(result.lunges[2]!, line).toBeGreaterThan(Math.max(result.lunges[0]!, result.lunges[1]!));
+      expect(bodyToCore, line).toBeGreaterThanOrEqual(-0.001);
       // Only the lunge moved him: his root went the lunge's metres and no more (a straight lunge, read on the plane).
       expect(Math.abs(rootDrift - lunged), line).toBeLessThan(0.001);
       expect(stepOut, line).toBeGreaterThan(0.15);

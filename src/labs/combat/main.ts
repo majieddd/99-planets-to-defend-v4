@@ -7,7 +7,7 @@ import type { TierName } from '../../render/quality';
 import { STYLE_PLANET_RADIUS } from '../../render/terrain/stylePatch';
 import { VERDANT } from '../../render/themes';
 import { FACE_SEED } from '../shared/commanderFace';
-import { loadNamedAsset } from '../shared/labAssets';
+import { fetchModelNotes, loadNamedAsset } from '../shared/labAssets';
 import { createPaintedStage, frameStep, pickTier, WORLD_FOV_DEG } from '../shared/paintedStage';
 import { feelAddressValue, feelFromAddress } from '../world/combatFeel';
 import type { ComboFrame } from '../world/combo';
@@ -74,8 +74,10 @@ async function start(): Promise<void> {
   activeRenderer = painted.renderer;
   const { scene, camera, ctx, patch, controls } = painted;
 
-  // Pip and the Husk alone, side by side.
-  const [pip, husk] = manifest ? await Promise.all([loadModel(manifest, PIP, ctx), loadModel(manifest, HUSK, ctx)]) : [null, null];
+  // Pip and the Husk alone, side by side, and Pip's sidecar notes beside his model (his clips' recorded root motion).
+  const [pip, husk, pipNotes] = manifest
+    ? await Promise.all([loadModel(manifest, PIP, ctx), loadModel(manifest, HUSK, ctx), fetchModelNotes(BASE, manifest, PIP, PAGE)])
+    : [null, null, null];
   if (!manifest) showBanner('The combat arena needs the built assets (npm run assets); none were found.');
   else if (!pip || !husk) showBanner(`The combat arena needs ${[pip ? '' : PIP, husk ? '' : HUSK].filter(Boolean).join(' and ')} in the manifest.`);
   const assets = new Map<string, LoadedAsset>(pip ? [[PIP, pip]] : []);
@@ -97,6 +99,7 @@ async function start(): Promise<void> {
     planetRadius: STYLE_PLANET_RADIUS,
     feel,
     brush: ctx.paint.uBrush,
+    sidecarNotes: pipNotes,
   });
   const homes = dummyHomes();
   // A knocked-back dummy stops at Pip's body, read where he stands on each push through his cheap accessor: the full
@@ -222,6 +225,7 @@ async function start(): Promise<void> {
         yaw: pose.yaw,
         home: { tangent: [dummy.home.x, dummy.home.z], yaw: dummy.home.yaw },
         reach: dummy.reach,
+        core: dummy.core,
         hits: dummy.hits,
         fromPip: play.tangent ? fromBody(play.tangent[0]!, play.tangent[1]!, play.yaw, pose.x, pose.z) : null,
       };

@@ -27,6 +27,15 @@ export const DUMMY_IDLE = 'idle';
 export const DUMMY_HIT_SHARE = 0.5;
 export const DUMMY_HIT_LOW = 0.15;
 export const DUMMY_HIT_TOP = 2;
+/**
+ * A dummy's core as an obstacle: this share of its reach across, the hump and thorax the hit body takes, widened by Pip's
+ * body. His walk stops at the dummy's whole reach, where W parks him 1.53 m from its root; that reach is the Husk's head
+ * and mandibles, 1.09 m and 1.18 m in front of its root at his hip height (its legs reach 0.55 m at the ground), read
+ * from its idle in the shipped GLB. A lunge may carry him in past the reach, as far as the core (lunge.ts,
+ * lungeBodies), and he then stands inside the reach, neither pushed back out nor let deeper (playMotion.ts,
+ * holdingRadius). Measured against the whole reach, the lunge had no room: the forehand moved 0 m from contact.
+ */
+export const DUMMY_CORE_SHARE = 0.5;
 
 /**
  * A hit landing on a dummy, as the arena's hit detection reports it (labs/combat/impact.ts): the combo's hit that
@@ -57,6 +66,8 @@ export interface TrainingDummy {
   readonly home: Readonly<GroundPose>;
   /** Its body's reach across the ground from its root, from its drawn bounds at home (play.ts, groundReach). */
   readonly reach: number;
+  /** Its core's radius across the ground, DUMMY_CORE_SHARE of its reach: what a lunge may come up to (lunge.ts). */
+  readonly core: number;
   /** The top of its drawn bounds above its root at home, in metres: the hit body's top (DUMMY_HIT_SHARE). */
   readonly height: number;
   /** Where it stands now. */
@@ -178,7 +189,8 @@ export function createTrainingDummies(
     const rootAt = root.getWorldPosition(new Vector3());
     const reach = groundReach(rootAt, bounds);
     const height = bounds.max.y - rootAt.y;
-    const obstacle: Obstacle = { x: home.x, z: home.z, radius: reach + PLAY_BODY_RADIUS };
+    const core = reach * DUMMY_CORE_SHARE;
+    const obstacle: Obstacle = { x: home.x, z: home.z, radius: reach + PLAY_BODY_RADIUS, core: core + PLAY_BODY_RADIUS };
     obstacleList.push(obstacle);
     const dummy: TrainingDummy = {
       index,
@@ -187,6 +199,7 @@ export function createTrainingDummies(
       mixer,
       home: Object.freeze({ ...home }),
       reach,
+      core,
       height,
       pose: () => ({ ...pose }),
       moveTo(next) {
@@ -238,12 +251,17 @@ export function createTrainingDummies(
           body.x = obstacleList[i]!.x;
           body.z = obstacleList[i]!.z;
           body.radius = dummy.reach + other.reach;
+          // The slot was Pip's when this dummy's own push last ran, so its core goes: dummies meet leg to leg.
+          body.core = undefined;
           return;
         }
+        // Pip's slot holds the same two radii his own obstacle for this dummy does, so a dummy he lunged in close to is
+        // held where it stands from him rather than thrown out to its whole reach on its first push (holdingRadius).
         const at = pip();
         body.x = at ? at.x : 0;
         body.z = at ? at.z : 0;
         body.radius = at ? dummy.reach + PLAY_BODY_RADIUS : 0;
+        body.core = at ? dummy.core + PLAY_BODY_RADIUS : 0;
       });
       const kept = sweepMove(from.x, from.z, dx, dz, bodies);
       dummy.moveTo({ x: kept.x, z: kept.z, yaw: dummy.pose().yaw });

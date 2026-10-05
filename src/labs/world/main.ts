@@ -10,7 +10,7 @@ import type { TierName } from '../../render/quality';
 import { STYLE_PLANET_RADIUS } from '../../render/terrain/stylePatch';
 import { VERDANT } from '../../render/themes';
 import { FACE_SEED, type FacePose } from '../shared/commanderFace';
-import { loadNamedAsset } from '../shared/labAssets';
+import { fetchModelNotes, loadNamedAsset } from '../shared/labAssets';
 import { createPaintedStage, frameStep, pickTier } from '../shared/paintedStage';
 import { NARROW_SCREEN } from '../style/referenceBoard';
 import { feelAddressValue, feelFromAddress } from './combatFeel';
@@ -156,7 +156,9 @@ async function start(): Promise<void> {
   const gaps = manifest ? coverageGaps(manifest) : [];
   for (const gap of gaps) console.warn(`${PAGE}: ${gap}`);
   if (gaps.length) showBanner(`Not in the Asset World yet: ${gaps.join('; ')}`);
-  const assets = manifest ? await loadEntries(manifest, ctx) : new Map<string, LoadedAsset>();
+  const [assets, pipNotes] = manifest
+    ? await Promise.all([loadEntries(manifest, ctx), fetchModelNotes(BASE, manifest, 'commander_pip', PAGE)])
+    : [new Map<string, LoadedAsset>(), null];
   if (!manifest) showBanner('The Asset World needs the built assets (npm run assets); none were found.');
   // Before the world is built: the play prototype keeps a copy of Pip's rig in the bind pose, which the world's mixers
   // would otherwise have posed by the time it is copied. He goes in the scene, not the world's root, so the world's
@@ -178,6 +180,7 @@ async function start(): Promise<void> {
     planetRadius: STYLE_PLANET_RADIUS,
     feel,
     brush: ctx.paint.uBrush,
+    sidecarNotes: pipNotes,
   });
   // A member whose model or clip this build lacks is left out rather than built, where a member put in ahead of its clip
   // would stop the page with "has no clip". The coverage gaps above, read from the manifest, name most such members;
