@@ -22,9 +22,10 @@ export interface PlayInput {
 /**
  * The play prototype's controls: WASD or the arrow keys, Shift to sprint, F or a left click on the canvas to attack, and
  * on a touch screen a thumb pad in the bottom left and an attack button in the bottom right (world.css), whose elements
- * the page shows only while playing; the button also answers Enter, Space and a screen reader's activation. A one-finger drag anywhere else still reaches the canvas and orbits, because a
- * touch that starts on the pad or the button never reaches OrbitControls, and a left drag on the canvas still orbits,
- * because only a press that stays put and lifts quickly counts as a click (isAttackClick).
+ * the page shows only while playing; the button also answers Enter, Space and a screen reader's activation. A
+ * one-finger drag anywhere else still reaches the canvas and orbits, because a touch that starts on the pad or the
+ * button never reaches OrbitControls, and a left drag on the canvas still orbits, because only a press that stays put
+ * and lifts quickly counts as a click (isAttackClick).
  */
 export function createPlayInput(pad: HTMLElement, knob: HTMLElement, attackButton: HTMLElement, canvas: HTMLElement): PlayInput {
   const held = new Set<string>();
@@ -32,6 +33,8 @@ export function createPlayInput(pad: HTMLElement, knob: HTMLElement, attackButto
   let stick: MoveInput = { right: 0, forward: 0, sprint: false };
   let finger: number | null = null;
   let attackAsked = false;
+  /** Whether the attack button's last pointer press has not yet had its click, which then asks nothing more. */
+  let buttonPressed = false;
   let press: { id: number; x: number; y: number; at: number } | null = null;
 
   // A key typed into one of the panel's fields is the field's, not a step.
@@ -71,16 +74,21 @@ export function createPlayInput(pad: HTMLElement, knob: HTMLElement, attackButto
   canvas.addEventListener('pointercancel', () => (press = null));
   attackButton.addEventListener('pointerdown', (event) => {
     if (active) attackAsked = true;
+    buttonPressed = true;
     // No focus ring and no text selection from a press. No orbit starts under it either, but for another reason: the
     // canvas never receives a press that lands on a separate element, so nothing needs stopping here.
     event.preventDefault();
   });
+  // A cancelled press clicks nothing, so it must not leave the flag up for the next click to be swallowed by.
+  attackButton.addEventListener('pointercancel', () => (buttonPressed = false));
   // Enter or Space on the focused button, and a screen reader's activation (TalkBack's double tap), arrive as a click
-  // with no pointer press before it, which the pointerdown above never saw, so the button did nothing for them. Such a
-  // click has a detail of 0; a pointer's tap clicks with a detail of 1 after its pointerdown has already asked, so it
-  // is left alone and one tap stays one swing.
-  attackButton.addEventListener('click', (event) => {
-    if (active && event.detail === 0) attackAsked = true;
+  // with no pointer press before it, which the pointerdown above never saw, so the button did nothing for them. A
+  // pointer's tap clicks too, after its pointerdown has already asked, so a click asks only when no press came before
+  // it, and one tap stays one swing. The click's detail used to tell them apart (0 for a keyboard's click, 1 for a
+  // tap's), but an assistive technology may click with a detail of 1 and no press, and that did nothing.
+  attackButton.addEventListener('click', () => {
+    if (active && !buttonPressed) attackAsked = true;
+    buttonPressed = false;
   });
   window.addEventListener('keyup', (event) => held.delete(event.code));
   // A key released while the window was in the background never sends its keyup, and he would run on by himself.
@@ -138,6 +146,7 @@ export function createPlayInput(pad: HTMLElement, knob: HTMLElement, attackButto
         held.clear();
         release();
         attackAsked = false;
+        buttonPressed = false;
         press = null;
       }
     },

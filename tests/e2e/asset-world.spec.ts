@@ -177,6 +177,38 @@ async function waitForSwing(page: Page, running: boolean): Promise<void> {
   );
 }
 
+/**
+ * The frames the recorder runs on past a click's or a drag's release to see whether it started a swing. The page's next
+ * frame takes an attack the release asked for, so a swing shows within a frame or two of it; five leave room to spare
+ * and cost a quarter of a second at SwiftShader's 20 frames a second.
+ */
+const SWING_SHOWS_WITHIN_FRAMES = 5;
+
+/** How long the click test holds its press, a fifth of PLAY_CLICK_MAX_SECONDS and about half an ordinary click, in ms. */
+const CLICK_HOLD_MS = 50;
+
+/** The page's event times of the click test's press and release, in ms (null until each arrives). */
+type ClickTimes = { down: number | null; up: number | null };
+
+/**
+ * Marks how many frames the recorder has read and waits until it has read `frames` more, or, with `untilSwing`, until it
+ * has seen a swing, if that comes first.
+ */
+async function waitFramesPast(page: Page, frames: number, untilSwing: boolean): Promise<void> {
+  await page.evaluate(() => {
+    const recorder = window as unknown as Recorder;
+    recorder.playMark = recorder.playSamples.length;
+  });
+  await page.waitForFunction(
+    ([count, swing]) => {
+      const recorder = window as unknown as Recorder;
+      return (swing && recorder.playSamples.some((sample) => sample.attacking)) || recorder.playSamples.length >= recorder.playMark + count;
+    },
+    [frames, untilSwing] as const,
+    { timeout: 60_000 },
+  );
+}
+
 /** How many swings a recording saw begin. */
 const swingsIn = (samples: readonly PlayReading[]): number => samples.filter((sample, index) => sample.attacking && !(samples[index - 1]?.attacking ?? false)).length;
 
@@ -517,6 +549,7 @@ test.describe('the Asset World', () => {
       const last = samples.length - 1 - [...samples].reverse().findIndex((sample) => sample.attacking);
       const swing = samples.slice(first, last + 1);
       const swingStart = swing[0]!;
+      const beforeSwing = samples[first - 1]!;
       const atStrike = swing.find((sample) => (sample.attackTime ?? 0) >= (sample.strikeAt ?? Infinity));
       const struck = swing.filter((sample) => (sample.attackTime ?? 0) >= (sample.strikeAt ?? Infinity));
       const after = samples.slice(last + 1).find((sample) => sample.runWeight > 0.5)!;
@@ -525,6 +558,7 @@ test.describe('the Asset World', () => {
       const attackLine =
         `asset world play attack [${test.info().project.name}]: ${samples.length} frames read; running at ${before.speed.toFixed(2)} m/s (run weight ${before.runWeight.toFixed(2)}, clearance ${before.clearance?.toFixed(2)} m), ` +
         `F started ${swings} swing over ${swing.length} frames, from clip time ${swingStart.attackTime?.toFixed(3)} s of ${swingStart.attackSeconds?.toFixed(3)} s; ` +
+        `run weight ${beforeSwing.runWeight.toFixed(3)} on the frame before the swing and ${swingStart.runWeight.toFixed(3)} on its first, under a swing weight of ${swingStart.attackWeight.toFixed(3)}; ` +
         `first frame at or past the strike ${atStrike ? `clip time ${atStrike.attackTime?.toFixed(3)} s (strike ${atStrike.strikeAt} s), weight ${atStrike.attackWeight.toFixed(2)}, speed ${atStrike.speed.toFixed(2)} m/s, strikes ${atStrike.strikes}` : 'none'}; ` +
         `largest speed through the swing ${Math.max(...swing.map((sample) => sample.speed)).toFixed(2)} m/s from its first frame, turned at most ${turnedDeg.toFixed(2)} degrees; ` +
         `last swing frame at clip time ${swing.at(-1)!.attackTime?.toFixed(3)} s, weight ${swing.at(-1)!.attackWeight.toFixed(3)}; ` +
@@ -537,6 +571,10 @@ test.describe('the Asset World', () => {
       // samples whole frames, so the clip is 25 frames, 0.833 s. toBeCloseTo(0.85, 1) let it be 0.05 s off.
       expect(Math.abs(swingStart.attackSeconds! - 0.85), attackLine).toBeLessThanOrEqual(1 / 30);
       expect(swingStart.strikeAt, attackLine).toBe(0.34);
+      // The trigger frame keeps the run's weight while the swing fades in over it: following his speed, zeroed on that
+      // frame, it dropped from 1 to 0 at once and showed the idle under the swing's first frame (blendRunWeight). The
+      // page caps a frame's step at 1/20 s, so the trigger frame always lands inside the 0.07 s fade in.
+      expect(swingStart.runWeight, attackLine).toBe(beforeSwing.runWeight);
       // The clip reaches its strike at full weight; from the swing's first frame to its end he stands still, stopped dead
       // on the frame that took F, facing as he did when the swing began.
       expect(atStrike, attackLine).toBeDefined();
@@ -552,23 +590,54 @@ test.describe('the Asset World', () => {
       expect(after.runWeight, attackLine).toBeGreaterThan(0.5);
       expect(after.speed, attackLine).toBeGreaterThan(0);
 
-      // A left click on the canvas's centre swings once, as F does; he stands, W being up.
+      // A left click on the canvas's centre swings once, as F does; he stands, W being up. The press and the release go
+      // through the DevTools protocol with timestamps CLICK_HOLD_MS apart. page.mouse.click sends the release only once
+      // Chromium has acknowledged the press, which SwiftShader's busy main thread can hold past PLAY_CLICK_MAX_SECONDS
+      // (0.25 s): the page then read a held press, started no swing, and the wait for one ran out its minute. The page's
+      // event.timeStamp carries the protocol's timestamps (measured: a release sent 402 ms after its press read a hold
+      // of 50.000 ms), so the hold the page measures is the one asked, however late the release arrives.
       const canvas = (await page.locator('#stage canvas').boundingBox())!;
       const centre = { x: canvas.x + canvas.width / 2, y: canvas.y + canvas.height / 2 };
+      await page.mouse.move(centre.x, centre.y);
+      await page.evaluate(() => {
+        const times: ClickTimes = { down: null, up: null };
+        (window as unknown as { clickTimes: ClickTimes }).clickTimes = times;
+        const stage = document.querySelector('#stage canvas')!;
+        stage.addEventListener('pointerdown', (event) => (times.down = event.timeStamp), { once: true });
+        stage.addEventListener('pointerup', (event) => (times.up = event.timeStamp), { once: true });
+      });
       await startRecording(page);
-      await page.mouse.click(centre.x, centre.y);
+      const cdp = await page.context().newCDPSession(page);
+      const at = { x: centre.x, y: centre.y, button: 'left', clickCount: 1 } as const;
+      const pressedAt = Date.now() / 1000;
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...at, buttons: 1, timestamp: pressedAt });
+      // The release is sent no earlier than its timestamp, so the page never receives an event stamped in its future.
+      const early = pressedAt + CLICK_HOLD_MS / 1000 - Date.now() / 1000;
+      if (early > 0) await page.waitForTimeout(early * 1000);
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...at, buttons: 0, timestamp: pressedAt + CLICK_HOLD_MS / 1000 });
+      await cdp.detach();
+      // A click that starts no swing fails here with the hold the page measured, rather than in the minute's wait below.
+      await waitFramesPast(page, SWING_SHOWS_WITHIN_FRAMES, true);
+      const clickTimes = await page.evaluate(() => (window as unknown as { clickTimes: ClickTimes }).clickTimes);
+      const hold = clickTimes.down !== null && clickTimes.up !== null ? clickTimes.up - clickTimes.down : null;
+      const holdText = hold === null ? `unread (pointerdown at ${clickTimes.down}, pointerup at ${clickTimes.up})` : `${hold.toFixed(3)} ms`;
+      const started = await page.evaluate(() => (window as unknown as Recorder).playSamples.some((sample) => sample.attacking));
+      expect(started, `asset world play click [${test.info().project.name}]: no swing within ${SWING_SHOWS_WITHIN_FRAMES} frames of the release; the page measured a hold of ${holdText}`).toBe(true);
       await waitForSwing(page, false);
       const clicked = await stopRecording(page);
       const clickLine =
-        `asset world play click [${test.info().project.name}]: ${clicked.length} frames read; a left click at the canvas centre (${centre.x}, ${centre.y}) ` +
+        `asset world play click [${test.info().project.name}]: ${clicked.length} frames read; a left click at the canvas centre (${centre.x}, ${centre.y}), ` +
+        `pressed for ${CLICK_HOLD_MS} ms by the protocol's timestamps and held ${holdText} by the page's event times, ` +
         `started ${swingsIn(clicked)} swing; strikes ${clicked[0]!.strikes} before, ${clicked.at(-1)!.strikes} after`;
       console.log(clickLine);
+      expect(hold, clickLine).not.toBeNull();
+      expect(Math.abs(hold! - CLICK_HOLD_MS), clickLine).toBeLessThan(1);
       expect(clicked[0]!.attacking, clickLine).toBe(false);
       expect(swingsIn(clicked), clickLine).toBe(1);
       expect(clicked.at(-1)!.strikes - clicked[0]!.strikes, clickLine).toBe(1);
 
-      // A press, a 40 px move and a release are OrbitControls' orbit: the camera turns and no swing starts. A swing the
-      // release started would show on the next frame, so the recorder runs on for five frames past it.
+      // A press, a 40 px move and a release are OrbitControls' orbit: the camera turns and no swing starts. The recorder
+      // runs on for SWING_SHOWS_WITHIN_FRAMES frames past the release, where a swing it started would show.
       const cameraAt = () => page.evaluate(() => (window.__P99__!['camera'] as () => CameraReading)().position);
       const cameraBefore = await cameraAt();
       await startRecording(page);
@@ -576,18 +645,7 @@ test.describe('the Asset World', () => {
       await page.mouse.down();
       await page.mouse.move(centre.x + 40, centre.y, { steps: 4 });
       await page.mouse.up();
-      await page.evaluate(() => {
-        const recorder = window as unknown as Recorder;
-        recorder.playMark = recorder.playSamples.length;
-      });
-      await page.waitForFunction(
-        () => {
-          const recorder = window as unknown as Recorder;
-          return recorder.playSamples.length >= recorder.playMark + 5;
-        },
-        undefined,
-        { timeout: 60_000 },
-      );
+      await waitFramesPast(page, SWING_SHOWS_WITHIN_FRAMES, false);
       const dragged = await stopRecording(page);
       const cameraAfter = await cameraAt();
       const orbited = Math.hypot(...cameraAfter.map((value, i) => value - cameraBefore[i]!));
@@ -598,6 +656,10 @@ test.describe('the Asset World', () => {
       console.log(dragLine);
       expect(dragged.some((sample) => sample.attacking), dragLine).toBe(false);
       expect(dragged.at(-1)!.strikes, dragLine).toBe(dragged[0]!.strikes);
+      // The 40 px drag asks OrbitControls for a 53 degree turn on this 270 px tall canvas (a drag the canvas's height is
+      // a whole turn), which the damping plays out over the frames after, so the camera moves metres by the time the
+      // recorder stops (about 4 m in recent runs). He stands, so the follow carries the camera nowhere: 5 cm is far
+      // above anything but the orbit and far below what the orbit gives.
       expect(orbited, dragLine).toBeGreaterThan(0.05);
       expect(log.errors, line).toEqual([]);
     });

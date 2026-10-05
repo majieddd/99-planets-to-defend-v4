@@ -2,12 +2,14 @@ import { Group, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import {
   attackWeight,
+  blendRunWeight,
   clampToArea,
   clearance,
   groundDistance,
   groundForward,
   groundToTangent,
   isAttackClick,
+  layerWeights,
   moveDirection,
   NOT_SWINGING,
   PLAY_AREA_RADIUS,
@@ -25,6 +27,7 @@ import {
   PLAY_WALK_SPEED,
   resolveObstacles,
   runLoopDistance,
+  runWeight,
   startSwing,
   stepAttack,
   stepMotion,
@@ -440,6 +443,51 @@ describe('the play prototype attack', () => {
     const standing = swing({ x: 1, z: 2, yaw: 0.3, speed: 0, drive: 0 }, { right: 0, forward: 0, sprint: false }, [0, 1], DURATION + 0.5);
     expect(standing.motion).toEqual({ x: 1, z: 2, yaw: 0.3, speed: 0, drive: 0 });
     expect(PLAY_ATTACK_MOVE_SCALE).toBe(0);
+  });
+
+  it("holds the run's weight while the swing fades in, so no idle shows before the swing is full, and hands back after", () => {
+    /** play.ts's frames at a step of dt from a run at his walk pace, a trigger on the first, the move input held throughout. */
+    const blend = (dt: number, input: typeof forward) => {
+      let motion: MotionState = { x: 0, z: 0, yaw: 0, speed: PLAY_WALK_SPEED, drive: PLAY_WALK_SPEED };
+      let attack: AttackState = NOT_SWINGING;
+      // The weight the frame before the trigger left: the run alone at his walk pace.
+      let held = runWeight(motion.speed);
+      const frames: { idle: number; run: number; swing: number; share: number; time: number | null }[] = [];
+      for (let frame = 0; frame * dt < DURATION + 0.5; frame++) {
+        ({ attack, motion } = startSwing(attack, motion, frame === 0, dt));
+        motion = stepMotion(motion, moveDirection(input, 0, 1), input.sprint, dt, [], R, attack.time !== null ? PLAY_ATTACK_MOVE_SCALE : 1);
+        attack = stepAttack(attack, dt, DURATION, STRIKE).state;
+        held = blendRunWeight(held, motion.speed, attack.time);
+        frames.push({ ...layerWeights(held, attackWeight(attack.time, DURATION, dt)), share: held, time: attack.time });
+      }
+      return frames;
+    };
+    const still = { right: 0, forward: 0, sprint: false };
+    for (const dt of [1 / 60, 1 / 20]) {
+      for (const input of [forward, still]) {
+        const frames = blend(dt, input);
+        const label = `${dt.toFixed(4)} s frames, ${input === forward ? 'key held' : 'no key'}`;
+        // The trigger frame keeps the frame before's run weight, under a swing at a frame's share of its fade in.
+        expect(frames[0]!.share, label).toBe(1);
+        expect(frames[0]!.swing, label).toBeCloseTo(dt / PLAY_ATTACK_FADE_IN, 9);
+        for (const frame of frames) expect(frame.idle + frame.run + frame.swing, label).toBeCloseTo(1, 12);
+        // No idle shows until the swing has full weight.
+        const full = frames.findIndex((frame) => frame.swing === 1);
+        expect(full, label).toBeGreaterThan(0);
+        for (const frame of frames.slice(0, full)) expect(frame.idle, label).toBe(0);
+        // He stands through the swing, so its fade out hands back to the idle alone, the run's weight at 0.
+        const fadingOut = frames.filter((frame) => frame.time !== null && frame.time > DURATION / 2 && frame.swing < 1);
+        expect(fadingOut.length, label).toBeGreaterThan(0);
+        for (const frame of fadingOut) expect(frame.run, label).toBe(0);
+        // Half a second after the swing, the idle has him standing, or the run has him running again under the key.
+        const last = frames.at(-1)!;
+        expect(last.swing, label).toBe(0);
+        expect(last.run, label).toBe(input === forward ? 1 : 0);
+      }
+    }
+    // Following his speed on the trigger frame, as the run did before the hold, showed this much idle at once.
+    expect(layerWeights(runWeight(0), 1 / 60 / PLAY_ATTACK_FADE_IN).idle).toBeCloseTo(0.76, 2);
+    expect(layerWeights(runWeight(0), 1 / 20 / PLAY_ATTACK_FADE_IN).idle).toBeCloseTo(0.29, 2);
   });
 
   it('tells a click from an orbit drag by how far the press moved and how soon it lifted', () => {

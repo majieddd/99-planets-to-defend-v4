@@ -10,8 +10,10 @@ import type { FaceDriver } from '../shared/faceDriver';
 import type { PlacedMember } from './layout';
 import {
   attackWeight,
+  blendRunWeight,
   clearance,
   groundForward,
+  layerWeights,
   moveDirection,
   NOT_SWINGING,
   PLAY_ATTACK_MOVE_SCALE,
@@ -20,7 +22,6 @@ import {
   PLAY_SPAWN,
   runLoopDistance,
   runTimeScale,
-  runWeight,
   startSwing,
   stepAttack,
   stepMotion,
@@ -302,12 +303,12 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
         swing.time = attack.time ?? 0;
         swing.setEffectiveWeight(swingWeight);
       }
-      weight = runWeight(motion.speed);
+      // The run keeps its weight while the swing fades in over it (blendRunWeight says why the trigger frame needs it).
+      weight = blendRunWeight(weight, motion.speed, attack.time);
       timeScale = stride ? runTimeScale(motion.speed, stride.clipSpeed) : 1;
-      // The swing takes its weight from the idle and the run alike, so the three always sum to 1 and, as it fades out,
-      // he settles into whichever of them his speed asks for.
-      idle.setEffectiveWeight((1 - weight) * (1 - swingWeight));
-      run.setEffectiveWeight(weight * (1 - swingWeight));
+      const layers = layerWeights(weight, swingWeight);
+      idle.setEffectiveWeight(layers.idle);
+      run.setEffectiveWeight(layers.run);
       run.timeScale = timeScale;
       mixer.update(dt);
       // After the mixer, which would otherwise write any morph or jaw track a clip carries over the face; the blinks run

@@ -330,6 +330,28 @@ export function runWeight(speed: number): number {
   return Math.min(1, Math.max(0, speed / PLAY_RUN_FULL_WEIGHT_SPEED));
 }
 
+/**
+ * The run clip's weight against the idle on one frame, from the weight it had on the frame before (`held`), his ground
+ * speed and the swing's time after this frame's step. While the swing fades in, over its first PLAY_ATTACK_FADE_IN
+ * seconds, the run keeps the weight it had; otherwise it follows his speed (runWeight). startSwing zeroes his speed on
+ * the frame a swing starts, and following it there dropped the run from 1 to 0 at once while the swing stood at only
+ * dt / PLAY_ATTACK_FADE_IN, so the pose jumped from all run to 76 percent idle at 60 fps (29 percent at 20 fps) before
+ * the swing covered it. His speed stays 0 through the swing, so the run's time scale does too, and the held run stands
+ * still under the fade rather than sliding. Past the fade in the swing has full weight, so the run's weight follows his
+ * speed again unseen, and the fade out hands back to whichever of the idle and the run his speed asks for.
+ */
+export function blendRunWeight(held: number, speed: number, attackTime: number | null): number {
+  return attackTime !== null && attackTime < PLAY_ATTACK_FADE_IN ? held : runWeight(speed);
+}
+
+/**
+ * The idle's, the run's and the swing's weights from the run's weight against the idle and the swing's weight. The swing
+ * takes its share from the idle and the run alike, so the three always sum to 1.
+ */
+export function layerWeights(run: number, swing: number): { idle: number; run: number; swing: number } {
+  return { idle: (1 - run) * (1 - swing), run: run * (1 - swing), swing };
+}
+
 /** The run clip's playback rate at a ground speed, so its planted foot moves back as fast as the ground passes. */
 export function runTimeScale(speed: number, clipSpeed: number): number {
   return clipSpeed > 0 ? speed / clipSpeed : 1;
