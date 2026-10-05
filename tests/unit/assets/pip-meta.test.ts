@@ -94,9 +94,9 @@ describe("Pip's combo hits", () => {
   });
 
   it('was keyed hand by hand to the cancel points the page plays (combo.ts), since each chained hit starts from the last at its cancel', () => {
-    // timings.json carries a hit's length and strike, which assets:check holds; the cancel lives in the recipe and in
-    // combo.ts alike, and a chained hit is keyed from the pose the hit before holds at its cancel point, so the two must
-    // agree or the page cuts a hit where its successor does not start.
+    // The recipe and combo.ts both read each cancel from timings.json, and a chained hit is keyed from the pose the hit
+    // before holds at its cancel point, so the build's recorded cancel must be the page's or the page cuts a hit where
+    // its successor does not start (assets:check holds the record to the file too).
     for (const hit of COMBO_HITS) {
       const record = meta.notes.combo[hit.name]!;
       expect(record.cancel, hit.name).toBe(hit.cancel);

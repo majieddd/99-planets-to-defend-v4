@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { evaluateAsset, fileFailures, timedClips } from '../../../tools/assets/check.mjs';
+import { comboWindowFailures, comboWindowsNote, evaluateAsset, fileFailures, timedClips } from '../../../tools/assets/check.mjs';
 
 const budgets = {
   xeno: { tris: 9000, bones: 24, texture: 1024, ink: true, animations: ['idle', 'walk', 'attack'] },
@@ -272,5 +273,64 @@ describe('the committed file against the manifest', () => {
 
   it('exempts textures from the length rule: the manifest records their bytes as 0', () => {
     expect(fileFailures(texture, 43226)).toEqual([]);
+  });
+});
+
+describe("the combo's windows against timings.json and the sidecar", () => {
+  const model = { name: 'commander_pip', family: 'commanders', kind: 'model' };
+  const windows = (overrides: Record<string, Record<string, unknown>> = {}) => ({
+    commanders: {
+      commander_pip: {
+        attack: { duration: 0.85, strike: 0.34 },
+        attack_1: { duration: 0.55, strike: 0.2, activeFrom: 0.15, activeTo: 0.28, cancel: 0.3, ...overrides['attack_1'] },
+        attack_2: { duration: 0.55, strike: 0.2, activeFrom: 0.15, activeTo: 0.28, cancel: 0.3, ...overrides['attack_2'] },
+        attack_3: { duration: 0.85, strike: 0.38, activeFrom: 0.33, activeTo: 0.46, cancel: null, ...overrides['attack_3'] },
+      },
+    },
+  });
+  const sidecar = (cancels: (number | null)[] = [0.3, 0.3, null]) => ({
+    notes: { combo: Object.fromEntries(cancels.map((cancel, i) => [`attack_${i + 1}`, { source: 'hand', cancel }])) },
+  });
+
+  it('passes the shipped windows and names them on the pass line', () => {
+    expect(comboWindowFailures(model, windows(), sidecar())).toEqual([]);
+    expect(comboWindowsNote(model, windows(), sidecar())).toBe(
+      'combo windows attack_1 0 < 0.15 < 0.2 < 0.28 <= 0.3 < 0.55, attack_2 0 < 0.15 < 0.2 < 0.28 <= 0.3 < 0.55, ' +
+        'attack_3 0 < 0.33 < 0.38 < 0.46 <= 0.85 (finisher, cancel null); sidecar cancels 0.3, 0.3, null match',
+    );
+    // The committed file itself, against the committed sidecar.
+    const shipped = JSON.parse(readFileSync('src/shared/timings.json', 'utf8')) as object;
+    const meta = JSON.parse(readFileSync('public/assets/commanders/commander_pip.meta.json', 'utf8')) as object;
+    expect(comboWindowFailures(model, shipped, meta)).toEqual([]);
+  });
+
+  it('fails a light hit whose windows are out of order: active frames past the cancel, a strike outside them, a cancel at the end', () => {
+    expect(comboWindowFailures(model, windows({ attack_1: { activeTo: 0.32 } }), sidecar())).toEqual([
+      'attack_1 windows out of order: want 0 < activeFrom 0.15 < strike 0.2 < activeTo 0.32 <= cancel 0.3 < duration 0.55',
+    ]);
+    expect(comboWindowFailures(model, windows({ attack_2: { activeFrom: 0.21 } }), sidecar())).toHaveLength(1);
+    expect(comboWindowFailures(model, windows({ attack_2: { activeFrom: 0 } }), sidecar())).toHaveLength(1);
+    expect(comboWindowFailures(model, windows({ attack_1: { cancel: 0.55 } }), sidecar([0.55, 0.3, null]))).toEqual([
+      'attack_1 windows out of order: want 0 < activeFrom 0.15 < strike 0.2 < activeTo 0.28 <= cancel 0.55 < duration 0.55',
+    ]);
+  });
+
+  it('fails a finisher with a cancel, a light hit without one, and a hit missing its window keys', () => {
+    expect(comboWindowFailures(model, windows({ attack_3: { cancel: 0.7 } }), sidecar([0.3, 0.3, 0.7]))).toEqual(['attack_3, the finisher, must have cancel null, not 0.7']);
+    expect(comboWindowFailures(model, windows({ attack_2: { cancel: null } }), sidecar([0.3, null, null]))).toEqual(['attack_2, a light hit, needs a cancel in seconds, not null']);
+    const bare = windows();
+    bare.commanders.commander_pip.attack_1 = { duration: 0.55, strike: 0.2 } as never;
+    expect(comboWindowFailures(model, bare, sidecar())).toEqual(['attack_1 timings lack activeFrom, activeTo, cancel']);
+  });
+
+  it("holds the sidecar's recorded cancel to the file's, and a windowed entry to a combo the sidecar records", () => {
+    // The recipe records each cancel rounded to the millisecond; one the file moved since the build fails by name.
+    expect(comboWindowFailures(model, windows(), sidecar([0.3, 0.3004, null]))).toEqual([]);
+    expect(comboWindowFailures(model, windows({ attack_2: { cancel: 0.32 } }), sidecar())).toEqual(['attack_2 sidecar cancel 0.3 != timings 0.32']);
+    expect(comboWindowFailures(model, windows(), { notes: {} })).toEqual(['timings.json gives combo windows for attack_1, attack_2, attack_3, but the sidecar records no combo']);
+    expect(comboWindowFailures(model, windows(), null)).toHaveLength(1);
+    // A model with no windows and no combo (Bulwark, the Husk) has nothing to hold.
+    expect(comboWindowFailures({ ...model, name: 'bulwark' }, { commanders: { bulwark: { attack: { duration: 0.85, strike: 0.34 } } } }, { notes: {} })).toEqual([]);
+    expect(comboWindowsNote({ ...model, name: 'bulwark' }, windows(), { notes: {} })).toBeNull();
   });
 });

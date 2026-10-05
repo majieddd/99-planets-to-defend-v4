@@ -153,11 +153,11 @@ def attack_keys(arm, blade, strike_frame, end_frame):
 # commanders.commander_pip in src/shared/timings.json, which assets:check holds the export to and the page reads its
 # contracts from (labs/world/combo.ts), so the clip and the game cannot time a hit apart.
 COMBO = ('attack_1', 'attack_2', 'attack_3')
-# Each hit's cancel point in seconds, the moment the next hit may take over (None for the finisher, which plays its
-# recovery out). timings.json carries a clip's length and strike and no more, so the cancel lives here and in combo.ts
-# alike; the sidecar records it (notes.combo) and tests/unit/assets/pip-meta.test.ts holds the two equal. The build
-# needs it because a chained hit starts from the pose the hit before it holds at its cancel frame (CHAIN).
-COMBO_CANCEL = {'attack_1': 0.30, 'attack_2': 0.30, 'attack_3': None}
+# Each hit's cancel point, the moment the next hit may take over (null for the finisher, which plays its recovery out),
+# is its entry's `cancel` in timings.json, beside its length, strike and active frames (combo_timing). The build needs
+# it because a chained hit starts from the pose the hit before it holds at its cancel frame (CHAIN). It lived here as
+# COMBO_CANCEL and in labs/world/combo.ts alike, so a clip with other numbers had to be edited in both places in step;
+# both now read the shared file, the sidecar records the cancel used (notes.combo), and assets:check holds the two equal.
 # The combo's guard: every attack ends here, so each blends into idle; the first one also starts here.
 # Weight settled a little, shield across the front, sword low and forward.
 GUARD_SPEC = motion.spec(hips_off=(0.0, 0.0, -0.02), head=(0.0, 0.05),
@@ -264,12 +264,16 @@ def _key_time(at, strike_frame, end_frame):
 
 
 def combo_timing(timings, attack):
-    """A hit's timing in frames from 1: (strike frame, end frame, cancel frame or None). The length and strike are its
-    entry under commanders.commander_pip in timings.json, and a missing entry stops the build, as the attack's does."""
+    """A hit's timing in frames from 1: (strike frame, end frame, cancel frame or None). The length, strike and cancel are
+    its entry under commanders.commander_pip in timings.json, and a missing entry or a missing `cancel` key stops the
+    build, as the attack's does: a cancel of null is the finisher's, which has none."""
     entry = timings['commanders'][NAME].get(attack)
     if entry is None:
         raise ValueError(f'src/shared/timings.json has no commanders.{NAME}.{attack} entry, which times that hit of the combo')
-    cancel = COMBO_CANCEL[attack]
+    if 'cancel' not in entry:
+        raise ValueError(f'src/shared/timings.json commanders.{NAME}.{attack} has no cancel (a number, or null for the finisher), '
+                         'which the chained hit after it is keyed from')
+    cancel = entry['cancel']
     return 1 + entry['strike'] * anim.FPS, 1 + entry['duration'] * anim.FPS, None if cancel is None else 1 + cancel * anim.FPS
 
 

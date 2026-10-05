@@ -41,32 +41,51 @@ export interface HitContract {
   planted: boolean;
 }
 
-/** How long before a hit's strike its active frames begin, and how long after it they end, in seconds. */
-export const ACTIVE_BEFORE_STRIKE = 0.05;
-export const ACTIVE_AFTER_STRIKE = 0.08;
-
 /**
- * One hit's contract: its length and strike from its entry under commanders.commander_pip in src/shared/timings.json,
- * the file assets:check holds the exported clip to and the recipe keys the clip from, and what that file has no place
- * for from here: the cancel point, the active frames around the strike and the plant.
+ * One hit's timing as src/shared/timings.json gives it under commanders.commander_pip: its length and strike, which the
+ * recipe keys the clip to and assets:check holds the export to; its active frames, the blade's fast stretch around the
+ * strike that the arena's hit test reads; and its cancel point, null for the chain's closing hit. All in seconds into
+ * the clip.
  */
-function contract(name: HitName, cancel: number | null, planted: boolean): HitContract {
-  const { duration, strike } = timings.commanders.commander_pip[name];
-  return { name, duration, strike, cancel, activeFrom: strike - ACTIVE_BEFORE_STRIKE, activeTo: strike + ACTIVE_AFTER_STRIKE, planted };
+export interface HitTiming {
+  duration: number;
+  strike: number;
+  activeFrom: number;
+  activeTo: number;
+  cancel: number | null;
 }
 
 /**
- * The timing contracts for attack_1, attack_2 and the finisher attack_3. The lengths and strikes are the shared ones in
- * src/shared/timings.json, since the real clips shipped in commander_pip.glb: they lived here while placeholders stood
- * in, and a clip and the page could have timed a hit apart. The light hits are quick (0.55 s, striking at 0.20 s) and
- * cancel at 0.30 s, after the strike and its active frames; the finisher keeps the cleave's weight (0.85 s, striking at
- * 0.38 s) and has no cancel. Each hit's active frames run from 50 ms before its strike to 80 ms after it, about four
- * frames at 30 fps, where the cut moves fastest; a light hit's active frames end 20 ms before its cancel point, so the
- * cancel never lands inside them. The cancel points stay here, as timings.json carries a clip's length and strike only;
- * the recipe keys each chained hit from the pose the hit before holds at its cancel point, records the cancel it used in
- * the sidecar, and a unit test holds the two equal (tests/unit/assets/pip-meta.test.ts).
+ * A hit's contract from its timing. The hit with no cancel closes the chain and plants him (no pace, no turn, played on
+ * his whole body), as the finisher does; the cancelable hits are the light ones.
  */
-export const COMBO_HITS: readonly HitContract[] = [contract('attack_1', 0.3, false), contract('attack_2', 0.3, false), contract('attack_3', null, true)];
+export function hitContract(name: HitName, timing: HitTiming): HitContract {
+  const { duration, strike, activeFrom, activeTo, cancel } = timing;
+  return { name, duration, strike, cancel, activeFrom, activeTo, planted: cancel === null };
+}
+
+/**
+ * The combo's contracts, attack_1 to attack_3, from a set of timings shaped as timings.json's commander entry. A new set
+ * of clips with new numbers (Quaternius's sword combo, retargeted onto Pip) drops in by its entries there, with no change
+ * to this code: every caller of the combo takes the contracts it is handed.
+ */
+export function comboContracts(timing: Readonly<Record<HitName, HitTiming>>): HitContract[] {
+  return (['attack_1', 'attack_2', 'attack_3'] as const).map((name) => hitContract(name, timing[name]));
+}
+
+/**
+ * The timing contracts for attack_1, attack_2 and the finisher attack_3, every number from src/shared/timings.json. The
+ * light hits are quick (0.55 s, striking at 0.20 s, active frames 0.15 to 0.28 s) and cancel at 0.30 s, after the strike
+ * and its active frames; the finisher keeps the cleave's weight (0.85 s, striking at 0.38 s, active frames 0.33 to
+ * 0.46 s) and has no cancel. The active frames run from 50 ms before the strike to 80 ms after it, about four frames at
+ * 30 fps, where the cut moves fastest, and a light hit's end 20 ms before its cancel point, so the cancel never lands
+ * inside them. The cancel points and the active frames lived here (as `contract(name, 0.3, ...)` and
+ * `ACTIVE_BEFORE_STRIKE` and `ACTIVE_AFTER_STRIKE`) and the cancels again in the recipe (`COMBO_CANCEL`), so a clip with
+ * other numbers needed both edited in step; now the recipe and this page read the one file, assets:check holds the
+ * window order there (0 < activeFrom < strike < activeTo <= cancel < duration) and the sidecar's recorded cancels to it,
+ * and tests/unit/assets/pip-meta.test.ts holds the sidecar to these contracts.
+ */
+export const COMBO_HITS: readonly HitContract[] = comboContracts(timings.commanders.commander_pip as Readonly<Record<HitName, HitTiming>>);
 
 /**
  * The fades a hit plays with, copied from the combat feel settings on the frame it begins: the seconds it rises over

@@ -110,13 +110,103 @@ export function evaluateAsset(entry, budgets, timings) {
 
 /**
  * The clips of a model that src/shared/timings.json times, as the check held them ("attack 0.85 s, strike 0.34 s"), for
- * its pass line: a timed clip that passed shows there, so a reader sees which contracts the check enforced.
+ * its pass line: a timed clip that passed shows there, so a reader sees which contracts the check enforced. A combo hit
+ * also names its active frames and its cancel point ("active 0.15 to 0.28 s, cancel 0.3 s", or "no cancel").
  */
 export function timedClips(entry, timings) {
   if (entry.kind !== 'model') return [];
   return Object.entries(timings[entry.family]?.[entry.name] ?? {})
     .filter(([name]) => entry.animations.some((a) => a.name === name))
-    .map(([name, timing]) => `${name} ${timing.duration} s, strike ${timing.strike} s`);
+    .map(([name, timing]) => {
+      const windows = hasWindows(timing) ? `, active ${timing.activeFrom} to ${timing.activeTo} s, ${timing.cancel === null ? 'no cancel' : `cancel ${timing.cancel} s`}` : '';
+      return `${name} ${timing.duration} s, strike ${timing.strike} s${windows}`;
+    });
+}
+
+/** The combo window keys a hit's timings.json entry carries beside its length and strike. */
+export const WINDOW_KEYS = ['activeFrom', 'activeTo', 'cancel'];
+/** The sidecar records each cancel rounded to the millisecond (blender/recipes/commander_pip.py, notes.combo). */
+const RECORDED_CANCEL_TOLERANCE = 0.0005 + 1e-9;
+
+function hasWindows(timing) {
+  return WINDOW_KEYS.some((key) => key in (timing ?? {}));
+}
+
+const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+
+/**
+ * A model's combo windows against its sidecar: the combo's hits are the sidecar's `notes.combo` entries, in order, the
+ * last its finisher. Each needs its timings.json entry to carry `activeFrom`, `activeTo` and `cancel`: a light hit's
+ * must read 0 < activeFrom < strike < activeTo <= cancel < duration (the active frames around the strike, the cancel
+ * after them and before the end), the finisher's cancel must be null and its windows 0 < activeFrom < strike <
+ * activeTo <= duration, and the cancel the build recorded in the sidecar must be the file's. A timings entry with
+ * window keys that the sidecar does not record as a combo hit fails too. The cancels lived in the recipe and in
+ * labs/world/combo.ts, and the active frames in combo.ts alone, so nothing here could hold them; the recipe and the page
+ * now read them from timings.json, and this holds the file and the build to each other. `sidecar` is the model's
+ * parsed .meta.json, or null when it has none.
+ */
+export function comboWindowFailures(entry, timings, sidecar) {
+  if (entry.kind !== 'model') return [];
+  const entries = timings[entry.family]?.[entry.name] ?? {};
+  const combo = sidecar?.notes?.combo ?? null;
+  const failures = [];
+  const windowed = Object.entries(entries).filter(([, timing]) => hasWindows(timing)).map(([name]) => name);
+  if (!combo) {
+    if (windowed.length) failures.push(`timings.json gives combo windows for ${windowed.join(', ')}, but the sidecar records no combo`);
+    return failures;
+  }
+  const hits = Object.keys(combo);
+  hits.forEach((name, index) => {
+    const timing = entries[name];
+    if (!timing) {
+      failures.push(`combo hit ${name} has no timings.json entry`);
+      return;
+    }
+    const missing = WINDOW_KEYS.filter((key) => !(key in timing));
+    if (missing.length) {
+      failures.push(`${name} timings lack ${missing.join(', ')}`);
+      return;
+    }
+    const { duration, strike, activeFrom, activeTo, cancel } = timing;
+    if (!finite(activeFrom) || !finite(activeTo)) {
+      failures.push(`${name} active frames ${activeFrom} to ${activeTo} are not numbers`);
+      return;
+    }
+    if (index === hits.length - 1) {
+      if (cancel !== null) failures.push(`${name}, the finisher, must have cancel null, not ${cancel}`);
+      else if (!(activeFrom > 0 && activeFrom < strike && strike < activeTo && activeTo <= duration)) {
+        failures.push(`${name} windows out of order: want 0 < activeFrom ${activeFrom} < strike ${strike} < activeTo ${activeTo} <= duration ${duration}`);
+      }
+    } else if (!finite(cancel)) {
+      failures.push(`${name}, a light hit, needs a cancel in seconds, not ${cancel}`);
+    } else if (!(activeFrom > 0 && activeFrom < strike && strike < activeTo && activeTo <= cancel && cancel < duration)) {
+      failures.push(`${name} windows out of order: want 0 < activeFrom ${activeFrom} < strike ${strike} < activeTo ${activeTo} <= cancel ${cancel} < duration ${duration}`);
+    }
+    const recorded = combo[name]?.cancel;
+    const same = recorded === null || cancel === null ? recorded === cancel : finite(recorded) && finite(cancel) && Math.abs(recorded - cancel) <= RECORDED_CANCEL_TOLERANCE;
+    if (!same) failures.push(`${name} sidecar cancel ${recorded} != timings ${cancel}`);
+  });
+  for (const name of windowed) if (!hits.includes(name)) failures.push(`${name} has combo windows in timings.json, but the sidecar records no combo hit of that name`);
+  return failures;
+}
+
+/**
+ * The combo windows the check held, for the pass line: each hit's order as it read it and the sidecar's cancels, or
+ * null for a model with no combo.
+ */
+export function comboWindowsNote(entry, timings, sidecar) {
+  const combo = entry.kind === 'model' ? sidecar?.notes?.combo : null;
+  if (!combo) return null;
+  const entries = timings[entry.family]?.[entry.name] ?? {};
+  const hits = Object.keys(combo);
+  const orders = hits.map((name, index) => {
+    const t = entries[name];
+    return index === hits.length - 1
+      ? `${name} 0 < ${t.activeFrom} < ${t.strike} < ${t.activeTo} <= ${t.duration} (finisher, cancel null)`
+      : `${name} 0 < ${t.activeFrom} < ${t.strike} < ${t.activeTo} <= ${t.cancel} < ${t.duration}`;
+  });
+  const cancels = hits.map((name) => (combo[name].cancel === null ? 'null' : combo[name].cancel)).join(', ');
+  return `combo windows ${orders.join(', ')}; sidecar cancels ${cancels} match`;
 }
 
 /**
@@ -132,6 +222,13 @@ export function fileFailures(entry, size) {
     return [`${entry.file} is ${size} bytes, the manifest records ${entry.bytes} (changed without npm run assets)`];
   }
   return [];
+}
+
+/** A model's sidecar (its .meta.json beside the GLB), parsed, or null when there is none. */
+function readSidecar(root, entry) {
+  if (entry.kind !== 'model') return null;
+  const path = join(root, 'public', 'assets', entry.file.replace(/[.]glb$/, '.meta.json'));
+  return fileSize(path) === null ? null : JSON.parse(readFileSync(path, 'utf8'));
 }
 
 // Anything at the path but a file, a directory say, is as missing as no entry at all.
@@ -157,6 +254,8 @@ function main() {
   for (const entry of manifest.assets) {
     const failures = evaluateAsset(entry, budgets, timings);
     failures.push(...fileFailures(entry, fileSize(join(root, 'public', 'assets', entry.file))));
+    const sidecar = readSidecar(root, entry);
+    failures.push(...comboWindowFailures(entry, timings, sidecar));
     if (failures.length) {
       fail += 1;
       console.log(`ASSET ${entry.name} FAIL: ${failures.join('; ')}`);
@@ -165,6 +264,8 @@ function main() {
       const timed = timedClips(entry, timings);
       const note = timed.length ? `; ${timed.join(', ')} as timings.json sets` : '';
       console.log(`ASSET ${entry.name} ok (${entry.tris} tris, ${Math.round(entry.bytes / 1024)} KB${note})`);
+      const windows = comboWindowsNote(entry, timings, sidecar);
+      if (windows) console.log(`ASSET ${entry.name} ${windows}`);
     }
   }
   console.log(`assets:check pass=${pass} fail=${fail}`);

@@ -29,6 +29,7 @@ import {
   bufferOpensAt,
   COMBO_READY,
   comboPhase,
+  COMBO_HITS,
   comboWeights,
   contractOf,
   fadeStep,
@@ -40,6 +41,7 @@ import {
   type ComboPhase,
   type ComboState,
   type ComboStep,
+  type HitContract,
 } from './combo';
 import { hitClips, splitClip, upperBodyBones, type HitClip, type HitSource } from './comboClips';
 import type { PlacedMember } from './layout';
@@ -243,6 +245,11 @@ export function memberObstacles(members: readonly PlacedMember[]): Obstacle[] {
 export interface PipPlay {
   /** False when the page has no Pip to play (a build without the assets). */
   readonly available: boolean;
+  /**
+   * The combo's contracts he plays (COMBO_HITS from src/shared/timings.json unless the page hands others), which the
+   * arena's impact reads too, so a hit's active frames, strike and cancel come from one place.
+   */
+  readonly contracts: readonly HitContract[];
   readonly active: boolean;
   /**
    * Puts him out at `start` (the Asset World's, worldPlayStart, by default) among the reaches `obstacles` gives on each
@@ -343,21 +350,35 @@ interface HalfActions {
  * rig in the bind pose, before the world's mixers pose the loaded one, because the face driver reads the jaw's axis
  * from it.
  */
-export function createPipPlay(
-  assets: ReadonlyMap<string, LoadedAsset>,
-  ground: Ground,
-  parent: Object3D,
-  energy: Object3D,
-  hullMaterial: unknown,
-  planetRadius: number,
-  feel: CombatFeel,
-  brush: IUniform<Texture | null> = { value: flatTexture(128) },
-): PipPlay {
+/** What Play Pip is made from (createPipPlay). */
+export interface PipPlayOptions {
+  /** The page's loaded assets, of which he takes commander_pip. */
+  assets: ReadonlyMap<string, LoadedAsset>;
+  ground: Ground;
+  /** Where his rig goes: the page's scene. */
+  parent: Object3D;
+  /** Where his sword trail goes: the page's energy scene (labs/shared/paintedStage.ts), drawn over the inked frame. */
+  energy: Object3D;
+  /** The shared hull material, whose meshes on his copy have their morphs synced. */
+  hullMaterial: unknown;
+  planetRadius: number;
+  /** The page's one combat feel object, which the panel's sliders write and every frame reads. */
+  feel: CombatFeel;
+  /** The painted materials' shared brush atlas uniform, which the trail paints with (a flat grey without it). */
+  brush?: IUniform<Texture | null>;
+  /** The combo's contracts, COMBO_HITS by default: a new set of clips with new numbers drops in here. */
+  contracts?: readonly HitContract[];
+}
+
+export function createPipPlay(options: PipPlayOptions): PipPlay {
+  const { assets, ground, parent, energy, hullMaterial, planetRadius, feel } = options;
+  const brush: IUniform<Texture | null> = options.brush ?? { value: flatTexture(128) };
+  const contracts = options.contracts ?? COMBO_HITS;
   const asset = assets.get(ASSET);
   const template = asset ? cloneRig(asset.root) : null;
   const idleClip = asset?.animations.find((clip) => clip.name === 'idle') ?? null;
   const runClip = asset?.animations.find((clip) => clip.name === 'run') ?? null;
-  const hits: HitClip[] | null = asset ? hitClips(asset.animations, SOURCE_STRIKE) : null;
+  const hits: HitClip[] | null = asset ? hitClips(asset.animations, SOURCE_STRIKE, contracts) : null;
   const upperNames = template ? upperBodyBones(template) : null;
   if (template && !upperNames) console.warn('Play Pip: the rig has no spine bone to split the attacks at, so every hit plays on his whole body');
   const halvesOf = (clip: AnimationClip): Halves => (upperNames ? splitClip(clip, upperNames) : { upper: null, lower: clip });
@@ -447,7 +468,7 @@ export function createPipPlay(
   }
 
   /** Whether a hit plays on his whole body: a planted hit always, and every hit on a rig the mask could not split. */
-  const planted = (step: ComboStep): boolean => !upperNames || contractOf(step).planted;
+  const planted = (step: ComboStep): boolean => !upperNames || contractOf(step, contracts).planted;
 
   /**
    * Stands him at the start, still and out of any hit, and frames him there: the orbit's centre on his chest and the
@@ -468,7 +489,7 @@ export function createPipPlay(
   function carryLunge(): void {
     const hit = combo.hit;
     if (!hit) return;
-    const contract = contractOf(hit.step);
+    const contract = contractOf(hit.step, contracts);
     lungeAt.x = motion.x;
     lungeAt.z = motion.z;
     lungeAt.yaw = motion.yaw;
@@ -503,6 +524,7 @@ export function createPipPlay(
 
   return {
     available: template !== null && idleClip !== null && runClip !== null,
+    contracts,
     get active() {
       return root !== null;
     },
@@ -594,7 +616,7 @@ export function createPipPlay(
       // a hit begun in a hit-stop takes over from the weight drawn on the frame before it.
       if (asked && frozen) dropped += 1;
       fadeStepNow = fadeStep(fadeStepNow, clocks.combo);
-      const frame = stepCombo(combo, asked && !frozen, clocks.combo, feel, fadeStepNow);
+      const frame = stepCombo(combo, asked && !frozen, clocks.combo, feel, fadeStepNow, contracts);
       combo = frame.state;
       lastClocks.combo = clocks.combo;
       lastClocks.motion = clocks.motion;
@@ -606,7 +628,7 @@ export function createPipPlay(
         strikesByStep[frame.struck - 1]! += 1;
         lastStrikeStep = frame.struck;
       }
-      swing = swingMotion(combo, feel);
+      swing = swingMotion(combo, feel, contracts);
       // The camera's facing, laid on the ground at his feet from the camera's level right (groundForward, which says why
       // the view ray is not used) and read in the frame place() turns him in, so W runs up the screen wherever he stands
       // on the curve and however high the camera is.
@@ -626,9 +648,9 @@ export function createPipPlay(
       // stop, and a hit begun in the stop starts its crossfade from them. They used to be read at the movement's step,
       // and only while it ran, so a stop that held his movement too, as it must, both froze them and read any hit begun
       // in it at a step of 0.
-      if (!frozen) weights = comboWeights(combo, fadeStepNow);
+      if (!frozen) weights = comboWeights(combo, fadeStepNow, contracts);
       // The run keeps its weight while the finisher fades in over his stop (holdsRunWeight says why).
-      runShare = blendRunWeight(runShare, motion.speed, holdsRunWeight(combo));
+      runShare = blendRunWeight(runShare, motion.speed, holdsRunWeight(combo, contracts));
       timeScale = stride ? runTimeScale(motion.speed, stride.clipSpeed) : 1;
       const current = combo.hit;
       const outgoing = current ? combo.outgoing : null;
@@ -657,7 +679,7 @@ export function createPipPlay(
         rootUp.setFromMatrixColumn(root.matrixWorld, 1).normalize();
         bladePivot.setFromMatrixPosition(root.matrixWorld).addScaledVector(rootUp, BLADE_SWING_PIVOT_M);
         bladeDrawn = true;
-        trail?.update(clocks.combo, bladeBase, bladeTip, comboPhase(combo) === 'active', feel.trailLength, feel.trailFade);
+        trail?.update(clocks.combo, bladeBase, bladeTip, comboPhase(combo, contracts) === 'active', feel.trailLength, feel.trailFade);
       }
 
       // The orbit's centre closes on his chest, and the camera moves with it, so a drag still orbits and the wheel
@@ -689,7 +711,7 @@ export function createPipPlay(
     reading() {
       const at = root ? root.getWorldPosition(new Vector3()).toArray() : null;
       const hit = combo.hit;
-      const contract = hit ? contractOf(hit.step) : null;
+      const contract = hit ? contractOf(hit.step, contracts) : null;
       return {
         on: root !== null,
         position: at,
@@ -711,7 +733,7 @@ export function createPipPlay(
         strikesByStep: [...strikesByStep],
         lastStrikeStep,
         comboStep: hit ? hit.step : 0,
-        phase: comboPhase(combo),
+        phase: comboPhase(combo, contracts),
         queued: combo.queued,
         nextStep: combo.next,
         sinceEnd: combo.sinceEnd,

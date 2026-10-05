@@ -5,9 +5,9 @@
     },
     "commander_pip": {
       "attack": { "duration": 0.85, "strike": 0.34 },
-      "attack_1": { "duration": 0.55, "strike": 0.2 },
-      "attack_2": { "duration": 0.55, "strike": 0.2 },
-      "attack_3": { "duration": 0.85, "strike": 0.38 }
+      "attack_1": { "duration": 0.55, "strike": 0.2, "activeFrom": 0.15, "activeTo": 0.28, "cancel": 0.3 },
+      "attack_2": { "duration": 0.55, "strike": 0.2, "activeFrom": 0.15, "activeTo": 0.28, "cancel": 0.3 },
+      "attack_3": { "duration": 0.85, "strike": 0.38, "activeFrom": 0.33, "activeTo": 0.46, "cancel": null }
     }
   },
   "xeno": {

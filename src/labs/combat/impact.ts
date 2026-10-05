@@ -141,7 +141,7 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
   // lives as long as the page, so neither listener is ever taken down.
   dummies.onHit((dummy: TrainingDummy, hit: DummyHit) => {
     const pose = dummy.pose();
-    const finisher = contractOf(hit.step).planted;
+    const finisher = contractOf(hit.step, pip.contracts).planted;
     startReaction(reactions[dummy.index]!, hit.from.x, hit.from.z, pose.x, pose.z, finisher ? feel.knockbackFinisher : feel.knockbackLight, finisher ? FLINCH_FINISHER_DEG : FLINCH_LIGHT_DEG);
     fresh[dummy.index] = true;
   });
@@ -152,7 +152,7 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
     const dummy = list[index]!;
     const at = pip.at();
     dummy.hit({ step, time, from: { x: at?.x ?? 0, z: at?.z ?? 0 } });
-    const finisher = contractOf(step).planted;
+    const finisher = contractOf(step, pip.contracts).planted;
     stop.start(finisher ? feel.hitStopFinisher : feel.hitStopLight);
     held[index] = stop.active;
     // The sparks fly off the body's surface toward the blade and along its sweep.
@@ -203,7 +203,7 @@ export function createCombatImpact(o: CombatImpactOptions): CombatImpact {
     }
     const t1 = hit.time;
     if (havePrevious && previousStep === hit.step && t1 > previousTime) {
-      const contract = contractOf(hit.step);
+      const contract = contractOf(hit.step, pip.contracts);
       const t0 = previousTime;
       const lo = Math.max(t0, contract.activeFrom);
       const hi = Math.min(t1, contract.activeTo);

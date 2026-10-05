@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { COMBAT_FEEL_RANGES, DEFAULT_COMBAT_FEEL, type CombatFeel } from '../../../src/labs/world/combatFeel';
 import {
-  ACTIVE_AFTER_STRIKE,
-  ACTIVE_BEFORE_STRIKE,
   BACKHAND_STRIKE_BEFORE_STRIKE,
   bodyWeights,
   bufferOpensAt,
   COMBO_HITS,
   COMBO_READY,
   COMBO_STEP_FLOOR,
+  comboContracts,
   comboPhase,
   comboWeights,
   contractOf,
@@ -26,7 +25,9 @@ import {
   type ComboFrame,
   type ComboState,
   type ComboStep,
+  type HitContract,
   type HitPlay,
+  type HitTiming,
 } from '../../../src/labs/world/combo';
 import { FREE_MOTION } from '../../../src/labs/world/playMotion';
 import timings from '../../../src/shared/timings.json';
@@ -48,13 +49,13 @@ interface Frame extends ComboFrame {
  * Runs frames of the combo from a state: `dts` gives each frame's step (repeating its last), and `press` says whether a
  * frame presses, from the state the frame starts from. Stops after `count` frames.
  */
-function play(from: ComboState, count: number, dts: readonly number[], press: (state: ComboState, index: number) => boolean, feel = FEEL): Frame[] {
+function play(from: ComboState, count: number, dts: readonly number[], press: (state: ComboState, index: number) => boolean, feel = FEEL, hits: readonly HitContract[] = COMBO_HITS): Frame[] {
   const frames: Frame[] = [];
   let state = from;
   for (let i = 0; i < count; i++) {
     const dt = dts[Math.min(i, dts.length - 1)]!;
     const pressed = press(state, i);
-    const frame = stepCombo(state, pressed, dt, feel);
+    const frame = stepCombo(state, pressed, dt, feel, dt, hits);
     frames.push({ ...frame, before: state, pressed, dt });
     state = frame.state;
   }
@@ -62,13 +63,13 @@ function play(from: ComboState, count: number, dts: readonly number[], press: (s
 }
 
 /** Presses on the first frame, and then once in each hit as soon as its buffer is open, until three hits have begun. */
-function chainPresser(feel = FEEL) {
+function chainPresser(feel = FEEL, hits: readonly HitContract[] = COMBO_HITS) {
   let pressedIn = new Set<ComboStep>();
   return (state: ComboState, index: number): boolean => {
     if (index === 0) return true;
     const hit = state.hit;
     if (!hit || pressedIn.has(hit.step) || hit.step === 3) return false;
-    if (hit.time >= bufferOpensAt(contractOf(hit.step), feel.buffer)) {
+    if (hit.time >= bufferOpensAt(contractOf(hit.step, hits), feel.buffer)) {
       pressedIn = new Set([...pressedIn, hit.step]);
       return true;
     }
@@ -101,14 +102,72 @@ describe('the combo contracts', () => {
     expect(COMBAT_FEEL_RANGES.crossfade.max).toBeLessThan(HIT1.cancel!);
   });
 
-  it("take each hit's length and strike from its entry in src/shared/timings.json, the file assets:check holds the clips to", () => {
+  it("take every number of each hit from its entry in src/shared/timings.json, the file assets:check and the recipe read", () => {
     for (const hit of COMBO_HITS) {
-      expect([hit.duration, hit.strike], hit.name).toEqual([timings.commanders.commander_pip[hit.name].duration, timings.commanders.commander_pip[hit.name].strike]);
-      // The active frames follow the strike: 50 ms before it to 80 ms after it.
-      expect(hit.activeFrom, hit.name).toBeCloseTo(hit.strike - ACTIVE_BEFORE_STRIKE, 12);
-      expect(hit.activeTo, hit.name).toBeCloseTo(hit.strike + ACTIVE_AFTER_STRIKE, 12);
+      const entry = timings.commanders.commander_pip[hit.name];
+      expect([hit.duration, hit.strike, hit.activeFrom, hit.activeTo, hit.cancel], hit.name).toEqual([entry.duration, entry.strike, entry.activeFrom, entry.activeTo, entry.cancel]);
     }
-    expect([ACTIVE_BEFORE_STRIKE, ACTIVE_AFTER_STRIKE]).toEqual([0.05, 0.08]);
+    // The values the lab kept in its own constants until the windows moved to the shared file, unchanged: the active
+    // frames 50 ms before each strike to 80 ms after it, the light hits cancelling at 0.30 s, the finisher not at all.
+    expect(COMBO_HITS.map((hit) => [hit.activeFrom, hit.activeTo, hit.cancel])).toEqual([
+      [0.15, 0.28, 0.3],
+      [0.15, 0.28, 0.3],
+      [0.33, 0.46, null],
+    ]);
+    for (const hit of COMBO_HITS) {
+      expect(hit.strike - hit.activeFrom, hit.name).toBeCloseTo(0.05, 12);
+      expect(hit.activeTo - hit.strike, hit.name).toBeCloseTo(0.08, 12);
+    }
+  });
+
+  it('drive the chain from any set of contracts handed in: Quaternius-like 0.7 s hits chain, strike and plant by their own numbers', () => {
+    // A set with other numbers throughout, as a retargeted sword combo would bring: longer light hits with a later
+    // strike and cancel, and a longer finisher. Nothing in the combo reads COMBO_HITS once these are handed in.
+    const timing: Record<'attack_1' | 'attack_2' | 'attack_3', HitTiming> = {
+      attack_1: { duration: 0.7, strike: 0.32, activeFrom: 0.26, activeTo: 0.4, cancel: 0.45 },
+      attack_2: { duration: 0.7, strike: 0.3, activeFrom: 0.24, activeTo: 0.38, cancel: 0.42 },
+      attack_3: { duration: 1.1, strike: 0.5, activeFrom: 0.44, activeTo: 0.6, cancel: null },
+    };
+    const hits = comboContracts(timing);
+    expect(hits.map((hit) => [hit.name, hit.planted])).toEqual([
+      ['attack_1', false],
+      ['attack_2', false],
+      ['attack_3', true],
+    ]);
+    const frames = play(COMBO_READY, 200, [1 / 60], chainPresser(FEEL, hits), FEEL, hits);
+    expect(startedSteps(frames)).toEqual([1, 2, 3]);
+    expect(struckSteps(frames)).toEqual([1, 2, 3]);
+    // Each kept press starts the next hit exactly at this set's own cancel point, the frame's overshoot carried in.
+    for (const [i, frame] of frames.entries()) {
+      if (frame.started === null || i === 0) continue;
+      const previous = frame.before.hit!;
+      const cancel = contractOf(previous.step, hits).cancel!;
+      expect(frame.state.hit!.chainedAt, `attack_${frame.started}`).toBe(cancel);
+      expect(previous.time + frame.dt - cancel).toBeCloseTo(frame.state.hit!.time, 12);
+    }
+    // Each strike lands on the frame that crosses this set's strike, and the finisher plays its whole 1.1 s.
+    for (const frame of frames.filter((f) => f.struck !== null)) {
+      const hit = frame.state.hit!;
+      expect(hit.step).toBe(frame.struck);
+      expect(hit.time).toBeGreaterThanOrEqual(contractOf(hit.step, hits).strike);
+      expect(frame.before.hit!.time).toBeLessThan(contractOf(hit.step, hits).strike);
+    }
+    const lastFinisher = frames.filter((f) => f.state.hit?.step === 3).at(-1)!;
+    expect(lastFinisher.state.hit!.time).toBeGreaterThan(1.1 - 1 / 60 - 1e-9);
+    // The phases, the hold on his movement and the weights read this set's windows: attack_1 is still in its wind-up
+    // at 0.25 s, where the shipped light hits are already past their active frames.
+    const at = (time: number): ComboState => ({ ...COMBO_READY, hit: hitAt(1, time) });
+    expect(comboPhase(at(0.25), hits)).toBe('windup');
+    expect(comboPhase(at(0.3), hits)).toBe('active');
+    expect(comboPhase(at(0.41), hits)).toBe('recovery');
+    expect(swingMotion(at(0.25), FEEL, hits)).toMatchObject({ turnScale: FEEL.windupTurn, settleBy: expect.closeTo(0.01, 12) });
+    expect(swingMotion(at(0.3), FEEL, hits)).toMatchObject({ turnScale: 0, cap: true });
+    expect(swingMotion(at(0.43), FEEL, hits)).toMatchObject({ moveScale: FEEL.moveScale, turnScale: 0 });
+    expect(swingMotion(at(0.46), FEEL, hits)).toBe(FREE_MOTION);
+    // Full weight until this set's 0.45 s cancel point, however long the fade out.
+    expect(comboWeights(at(0.449), 1 / 60, hits).current).toBe(1);
+    expect(holdsRunWeight({ ...COMBO_READY, hit: hitAt(3, 0.01) }, hits)).toBe(true);
+    expect(longestComboStep(hits)).toBe(0.3);
   });
 
   it('strike after their first moment, and the step cap stays above 0 for a contract that does not', () => {

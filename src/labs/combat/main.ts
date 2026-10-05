@@ -88,7 +88,16 @@ async function start(): Promise<void> {
   // Play Pip keeps a copy of his rig in the bind pose, whose jaw axis his face reads; only Play Pip uses his loaded rig
   // here, so nothing poses it first, as the world's members would.
   // The sword trail paints with the painted materials' brush atlas, through their shared uniform.
-  const pipPlay = createPipPlay(assets, patch, scene, painted.energy, ctx.hullMaterial, STYLE_PLANET_RADIUS, feel, ctx.paint.uBrush);
+  const pipPlay = createPipPlay({
+    assets,
+    ground: patch,
+    parent: scene,
+    energy: painted.energy,
+    hullMaterial: ctx.hullMaterial,
+    planetRadius: STYLE_PLANET_RADIUS,
+    feel,
+    brush: ctx.paint.uBrush,
+  });
   const homes = dummyHomes();
   // A knocked-back dummy stops at Pip's body, read where he stands on each push through his cheap accessor: the full
   // reading, which this called before, builds every field of the handle's reading on every push.

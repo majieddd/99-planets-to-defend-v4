@@ -563,6 +563,28 @@ def test_commander_pip_hand_keys_rise_inside_each_clip(tmp):
             raise AssertionError(f'keys {[k for k, _ in keys]} were taken')
 
 
+def test_commander_pip_combo_timing_reads_each_cancel_from_timings_json(tmp):
+    from recipes import commander_pip as pip
+    # The shipped file: the light hits cancel at 0.30 s, frame 10 from 1 at 30 fps, the finisher not at all.
+    timings = json.loads((ROOT / 'src' / 'shared' / 'timings.json').read_text(encoding='utf-8'))
+    frames = {hit: pip.combo_timing(timings, hit) for hit in pip.COMBO}
+    assert [abs(frames[hit][2] - 10.0) < 1e-9 for hit in ('attack_1', 'attack_2')] == [True, True], frames
+    assert frames['attack_3'][2] is None, frames
+    assert not hasattr(pip, 'COMBO_CANCEL'), 'the recipe keeps a cancel table of its own again'
+    # Another set's numbers come through the file alone: a 0.7 s hit striking at 0.32 s and cancelling at 0.45 s.
+    other = {'commanders': {pip.NAME: {'attack_1': {'duration': 0.7, 'strike': 0.32, 'activeFrom': 0.26, 'activeTo': 0.4, 'cancel': 0.45}}}}
+    strike, end, cancel = pip.combo_timing(other, 'attack_1')
+    assert abs(strike - (1 + 0.32 * 30)) < 1e-9 and abs(end - (1 + 0.7 * 30)) < 1e-9 and abs(cancel - (1 + 0.45 * 30)) < 1e-9, (strike, end, cancel)
+    # An entry without its cancel stops the build, naming the key.
+    del other['commanders'][pip.NAME]['attack_1']['cancel']
+    try:
+        pip.combo_timing(other, 'attack_1')
+    except ValueError as error:
+        assert 'attack_1 has no cancel' in str(error), error
+    else:
+        raise AssertionError('a hit without its cancel was taken')
+
+
 def test_charforge_leg_ik_moves_the_ankle_by_a_step_and_keeps_the_foot_level(tmp):
     from mathutils import Vector
     from lib import charforge
