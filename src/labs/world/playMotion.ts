@@ -21,10 +21,10 @@ export const PLAY_BODY_RADIUS = 0.35;
 /** The least reach a member keeps around its root, in metres, so a flower or a grass tuft is still walked around. */
 export const PLAY_MIN_MEMBER_REACH = 0.2;
 /**
- * How far from the pole he may go on the tangent plane, in metres: inside the world sun's shadow box, 25.2 m to each
- * side of the pole across the sun's bearing (WORLD_SHADOW_HALF_WIDTH), with his shoulders and 1.85 m to spare, so he
- * never runs out of his own shadow, and 4 m past the kit arc's trees. It was set when the box reached 24.2 m, and a
- * wider box only adds to the spare.
+ * How far from the pole he may go on the tangent plane, in metres: inside the world sun's shadow box, 27.8 m to each
+ * side of the pole across the sun's bearing (WORLD_SHADOW_HALF_WIDTH) since Pip's attack member moved Bulwark's row out,
+ * with his shoulders and 4.45 m to spare, so he never runs out of his own shadow, and 4 m past the kit arc's trees. It
+ * was set when the box reached 24.2 m, and a wider box only adds to the spare.
  */
 export const PLAY_AREA_RADIUS = 23;
 /** The ground speed at which the run clip has taken over from the idle completely, in metres a second. */

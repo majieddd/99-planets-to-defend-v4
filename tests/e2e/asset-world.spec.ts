@@ -88,12 +88,15 @@ function required(): string[] {
  * browser test's ground allowances, Asset World layout). The Kit's ground contract allows 5 mm of rounding. A
  * structure's lean follows its slope only so far, and its footprint's edges stray up to 4.4 cm from the ground (LEAN);
  * the kit's rocks and flora lean on the arc's slopes only as far as the Style Lab's scatter does; and a character stands
- * in its clip's opening pose, not the bind pose the contract measures (Bulwark's run opens with both feet off the ground).
+ * plumb in its clip's opening pose, not the bind pose the contract measures. Bulwark's run opens with both feet off the
+ * ground, 3.8 cm up on the level clearing, and since Pip's attack member moved Bulwark's row 2.6 m further onto the
+ * slope it reads 5.2 cm at 18 m from the pole, where the ground falls away under his plumb stance; the characters'
+ * allowance rose from 4 cm to 5.5 cm with it, still far under the 15 to 26 cm by which misplaced roots once sank.
  */
 const CONTRACT_M = 0.005;
 const STRUCTURE_STRAY_M = 0.044;
 const KIT_STRAY_M = 0.025;
-const CLIP_STRAY_M = 0.04;
+const CLIP_STRAY_M = 0.055;
 
 function groundAllowance(member: (typeof MEMBERS)[number]): number {
   if (member.clip) return CLIP_STRAY_M;

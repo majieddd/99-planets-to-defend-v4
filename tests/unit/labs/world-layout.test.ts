@@ -643,18 +643,22 @@ describe('the Asset World views', () => {
     const commanders = ['pip_idle', 'pip_run', 'pip_face', 'pip_attack', 'bulwark_idle', 'bulwark_run', 'bulwark_attack'];
     const commanderPlacards = ['family:commanders:commander_pip', 'family:commanders:bulwark'];
     expect(shown({ view: CHARACTERS, member: '' })).toEqual(['family:xeno', ...commanderPlacards, 'husk_idle', 'husk_walk', 'husk_attack', ...commanders]);
-    // Pip leads the commanders' view, Bulwark after him; Pip has no view of his own any more.
+    // Pip leads the commanders' view, Bulwark after him; Pip has no view of his own any more. With Pip's attack the zone's
+    // seven labels crowd a portrait phone, so there it names the two placards alone, from the characters' 640 px.
     expect(shown({ view: 'commanders', member: '' })).toEqual([...commanderPlacards, ...commanders]);
-    expect(shown({ view: 'commanders', member: '' }, true, 375)).toEqual([...commanderPlacards, ...commanders]);
+    expect(FAMILY_MEMBER_LABELS_MIN_WIDTH['commanders']).toBe(CHARACTERS_MEMBER_LABELS_MIN_WIDTH);
+    for (const widthPx of [375, 390, CHARACTERS_MEMBER_LABELS_MIN_WIDTH - 1]) expect(shown({ view: 'commanders', member: '' }, true, widthPx), `${widthPx} px`).toEqual(commanderPlacards);
+    expect(shown({ view: 'commanders', member: '' }, true, CHARACTERS_MEMBER_LABELS_MIN_WIDTH)).toEqual([...commanderPlacards, ...commanders]);
+    expect(shown({ view: 'commanders', member: 'pip_attack' }, true, 375)).toEqual(['pip_attack']);
     expect(resolveAddress(null, 'pip').problems).toEqual(['no family named "pip"']);
     // The kit's eight labels crowd a narrow screen, so there its view names the kit alone, as the overview does, and each
-    // piece keeps its own view; the other families' views name their members on a phone.
+    // piece keeps its own view; the other families' views, but the commanders', name their members on a phone.
     const kit = MEMBERS.filter((m) => m.family === 'env').map((m) => m.name);
     const kitWidth = FAMILY_MEMBER_LABELS_MIN_WIDTH['env']!;
     for (const widthPx of [375, 390, kitWidth - 1]) expect(shown({ view: 'env', member: '' }, true, widthPx), `${widthPx} px`).toEqual(['family:env']);
     expect(shown({ view: 'env', member: '' }, true, kitWidth)).toEqual(['family:env', ...kit]);
     expect(shown({ view: 'env', member: 'flowers' }, true, 375)).toEqual(['flowers']);
-    expect(Object.keys(FAMILY_MEMBER_LABELS_MIN_WIDTH)).toEqual(['env']);
+    expect(Object.keys(FAMILY_MEMBER_LABELS_MIN_WIDTH)).toEqual(['env', 'commanders']);
     expect(shown({ view: 'towers', member: '' }, true, 375)).toEqual(['family:towers', 'bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
     // On a phone the characters' view, which frames the whole 27.2 m character row, names the placards alone.
     expect(shown({ view: CHARACTERS, member: '' }, true, CHARACTERS_MEMBER_LABELS_MIN_WIDTH - 1)).toEqual(['family:xeno', ...commanderPlacards]);

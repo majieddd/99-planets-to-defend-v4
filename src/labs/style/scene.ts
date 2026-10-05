@@ -17,6 +17,7 @@ import { attachHull } from '../../render/ink/hull';
 import { LAYERS } from '../../render/layers';
 import { place } from '../../render/terrain/place';
 import type { StylePatch } from '../../render/terrain/stylePatch';
+import timings from '../../shared/timings.json';
 import { createCommanderFace, FACE_SEED, holdFacePose, type FacePose } from '../shared/commanderFace';
 import { DEFAULT_COMMANDER, type CommanderKind } from '../shared/commanders';
 import type { FaceDriver } from '../shared/faceDriver';
@@ -77,6 +78,18 @@ export const BULWARK_HOME = { x: 3.2, z: 2.4 } as const;
 // inside the turret ring, and a rail reaches at most 1.7 m from its turret's axis, so no rail reaches the lap
 // whichever way the turrets aim.
 export const RUN_RADIUS = Math.hypot(BULWARK_HOME.x, BULWARK_HOME.z);
+/**
+ * Each commander's attack length in seconds, from the shared contract (src/shared/timings.json) that assets:check holds
+ * his exported clip to. The cycle's strike window lasts the shown commander's own, so a commander whose attack is timed
+ * apart from the Bulwark's strikes for his own length; the window was the Bulwark's 0.85 s for everyone.
+ */
+export const COMMANDER_ATTACK_SECONDS: Readonly<Record<CommanderKind, number>> = {
+  pip: timings.commanders.commander_pip.attack.duration,
+  bulwark: timings.commanders.bulwark.attack.duration,
+};
+/** When the cycle's strike begins, and how long the cycle runs before it repeats, in seconds. */
+export const CYCLE_STRIKE_AT = 3;
+export const CYCLE_SECONDS = 12;
 
 /** A kit piece's scatter: its node name, its count at scatter scale 1, and the ring it fills. */
 export type ScatterEntry = readonly [name: string, baseCount: number, minRadius: number, maxRadius: number];
@@ -286,8 +299,9 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
   }
 
   /**
-   * The commander's cycle: idle, a strike, idle, one lap, idle, every 12 s. Pip has no attack clip yet (phase B), so
-   * where Bulwark strikes he holds his idle, in the cycle and in attack mode alike, rather than freezing in whatever clip
+   * The commander's cycle: idle, a strike, idle, one lap, idle, every 12 s. Pip and Bulwark each strike with their own
+   * attack clip, for their own length (COMMANDER_ATTACK_SECONDS). A commander with no attack clip, such as a placeholder,
+   * holds his idle where the others strike, in the cycle and in attack mode alike, rather than freezing in whatever clip
    * played before.
    */
   const strike = (once: boolean) => (commander.has('attack') ? commander.play('attack', once) : commander.play('idle'));
@@ -297,9 +311,9 @@ export function buildStyleScene(patch: StylePatch, assets: StyleAssets, ctx: Mat
     let running = mode === 'run';
     if (running) runAngle -= (RUN_SPEED / RUN_RADIUS) * dt;
     if (mode === 'cycle') {
-      const t = cycleTime % 12;
-      if (t < 3) commander.play('idle');
-      else if (t < 3.85) strike(t - dt < 3);
+      const t = cycleTime % CYCLE_SECONDS;
+      if (t < CYCLE_STRIKE_AT) commander.play('idle');
+      else if (t < CYCLE_STRIKE_AT + COMMANDER_ATTACK_SECONDS[commanderKind]) strike(t - dt < CYCLE_STRIKE_AT);
       else if (t < 6) commander.play('idle');
       else if (t < 6 + LAP_SECONDS) {
         running = true;

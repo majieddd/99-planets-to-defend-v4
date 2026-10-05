@@ -33,24 +33,24 @@ export const MEMBER_LABEL_ROOM_PX = 36;
 export const FOCUSED_MEMBER_LABEL_ROOM_PX = 52;
 export const FAMILY_LABEL_ROOM_PX = 56;
 /**
- * The overview names every member only on a screen at least this wide, in CSS pixels; narrower, the 24 member labels
- * (25 members, but the nest, its family's only member, has none) crowd each other, so the overview names the families
- * alone and a family's view names its members. Measured on the GPU with the commanders' placards: at 1280 x 720 six pairs
- * of labels overlapped (the Worldheart's placard over the Husk's "Attack" and Pip's "Idle", "Bolt Sentinel" over
- * "Bush", "Nest" over "Rock B", the hearts' "Stage 10" over "Stage 7 (slider)", "Walk" over "Attack") and at 1366 x 768
- * five, at 1920 x 1080 and 2560 x 1440 none. It was 1280 px. These overlaps were measured after Pip became the default
- * commander, on that layout; whether the same pairs overlapped at 1280 px before it was not measured. The implementer
- * who measured them reported them as unrelated to the commander change: five of the six pairs involve no commander, and
- * Pip's "Idle" stands where Bulwark's "Idle" stood. The threshold is re-measured when Pip's attack member joins his row
- * (Task list).
+ * The overview names every member only on a screen at least this wide, in CSS pixels; narrower, the 25 member labels
+ * (26 members, but the nest, its family's only member, has none) crowd each other, so the overview names the families
+ * alone and a family's view names its members. Measured on the GPU with every member label forced on, since Pip's
+ * attack member joined his row and moved Bulwark's 2.6 m out, which widens the overview's fit: at 1280 x 720 seven pairs
+ * overlapped (the Worldheart's placard over the Husk's "Attack" and Pip's "Idle", "Bolt Sentinel" over "Bush", "Nest"
+ * over "Rock B", the Husk's "Walk" over his "Attack", Pip's "Face" over his "Attack" and the hearts' "Stage 10" over
+ * "Stage 7 (slider)"), at 1366 x 768 five, at 1440 x 900 and 1600 x 900 one ("Stage 10" over "Stage 7 (slider)" by
+ * 0.6 px), and at 1680 x 1050, 1920 x 1080 and 2560 x 1440 none. It was 1600 px, between the 1366 px that overlapped
+ * and the 1920 px that did not on the layout before; 1680 is the narrowest screen measured without an overlap now.
  */
-export const OVERVIEW_MEMBER_LABELS_MIN_WIDTH = 1600;
+export const OVERVIEW_MEMBER_LABELS_MIN_WIDTH = 1680;
 /**
  * The characters' view names its members only on a screen at least this wide, in CSS pixels; narrower, it names the
- * Husk's and the commanders' placards alone. It frames the whole character row, 24.6 m from the idle Husk to Bulwark's
- * attack: at 375 x 667 and 390 x 844 six pairs of member labels overlapped, at 667 x 375 and every larger size measured
- * none. The row's 24.6 m is today's, with Pip's three members; his attack member stretches it to 27.2 m, so the
- * threshold is re-measured then (Task list).
+ * Husk's and the commanders' placards alone. It frames the whole character row, 27.2 m from the idle Husk to Bulwark's
+ * attack since Pip's attack member joined his row (24.6 m before): measured on the GPU with every member label forced
+ * on, at 375 x 667 and 390 x 844 seven pairs of member labels overlapped (neighbours in each of the three rows) and
+ * Bulwark's "Attack" ran 1.1 px off the right edge at 375 x 667, and at 667 x 375 and the nine larger sizes measured
+ * none. 640 still lies between the widest screen that overlapped and the narrowest that did not.
  */
 export const CHARACTERS_MEMBER_LABELS_MIN_WIDTH = 640;
 /**
@@ -58,9 +58,12 @@ export const CHARACTERS_MEMBER_LABELS_MIN_WIDTH = 640;
  * crowd below it; narrower, the view names the family alone, as the overview does, and each member stays one step away
  * in its own view and in the panel's member list. The Verdant kit's eight pieces stand 4.1 m apart on an arc 25 m across,
  * which a portrait phone fits into its width: at 375 x 667 six pairs of their labels overlapped and "Flowers" ran 9.7 px
- * off the left edge, one pair still overlapped at 667 x 375 and at 768 x 1024, and from 1024 x 768 up none did.
+ * off the left edge, one pair still overlapped at 667 x 375 and at 768 x 1024, and from 1024 x 768 up none did. The
+ * commanders' zone holds seven members across 18 m since Pip's attack joined it: measured on the GPU, at 375 x 667 two
+ * pairs of its labels overlapped (Pip's "Face" and "Attack" by 3.0 px, Bulwark's "Run" and "Attack" by 1.2 px) and at
+ * 390 x 844 one (1.3 px), and at 667 x 375 and the nine larger sizes none, so it takes the characters' 640 px.
  */
-export const FAMILY_MEMBER_LABELS_MIN_WIDTH: Readonly<Record<string, number>> = { env: 1024 };
+export const FAMILY_MEMBER_LABELS_MIN_WIDTH: Readonly<Record<string, number>> = { env: 1024, commanders: 640 };
 
 /** The views the page opens, besides one per family and one per member. */
 export const OVERVIEW = 'overview';

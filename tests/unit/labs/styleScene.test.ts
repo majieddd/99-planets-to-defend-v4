@@ -26,8 +26,10 @@ import { placeholderAssets } from '../../../src/labs/style/placeholders';
 import {
   buildStyleScene,
   BULWARK_HOME,
+  COMMANDER_ATTACK_SECONDS,
   COMMANDER_LABELS,
   COMMANDERS,
+  CYCLE_STRIKE_AT,
   DEFAULT_COMMANDER,
   HUSK_RADIUS,
   HUSK_SPEED,
@@ -768,9 +770,10 @@ describe('buildStyleScene', () => {
 
 /**
  * A stand-in for Pip (commander), the `commander_pip` model: a body carrying the five face morphs, with idle and run
- * clips that hold it at their own x, and no attack clip, as the shipped model has none yet.
+ * clips that hold it at their own x, and an attack clip of his contract's length when `attack` gives its x (the shipped
+ * model has one; a stand-in without it is a commander with no attack clip).
  */
-function pipStandIn(x: { idle: number; run: number }): LoadedAsset {
+function pipStandIn(x: { idle: number; run: number; attack?: number }): LoadedAsset {
   const geometry = new CapsuleGeometry(0.25, 1.2).translate(0, 0.85, 0);
   const count = geometry.getAttribute('position').count;
   geometry.morphAttributes['position'] = ['blink_L', 'blink_R', 'smile', 'brows_up', 'pucker'].map((name) => {
@@ -785,7 +788,10 @@ function pipStandIn(x: { idle: number; run: number }): LoadedAsset {
   root.add(body);
   paintAndInk(root, ctx, 0.35);
   const pose = (value: number, duration: number) => new NumberKeyframeTrack('pip_body.position[x]', [0, duration], [value, value]);
-  return { root, animations: [new AnimationClip('idle', 1.6, [pose(x.idle, 1.6)]), new AnimationClip('run', 0.7, [pose(x.run, 0.7)])] };
+  const clips = [new AnimationClip('idle', 1.6, [pose(x.idle, 1.6)]), new AnimationClip('run', 0.7, [pose(x.run, 0.7)])];
+  const attack = COMMANDER_ATTACK_SECONDS.pip;
+  if (x.attack !== undefined) clips.push(new AnimationClip('attack', attack, [pose(x.attack, attack)]));
+  return { root, animations: clips };
 }
 
 describe('the Style Lab commander', () => {
@@ -845,13 +851,41 @@ describe('the Style Lab commander', () => {
     style.setFace(null);
   });
 
-  it("holds Pip's idle where Bulwark strikes, in the cycle and in attack mode, since he has no attack clip yet", () => {
+  it('strikes Pip with his own attack clip for his own length in the cycle and in attack mode', () => {
+    const { style } = build();
+    const pip = pipStandIn({ idle: 0.5, run: 2, attack: 1 });
+    const body = pip.root.getObjectByName('pip_body')!;
+    style.setCommander('pip', pip);
+    // His contract, from timings.json, which the cycle's strike window takes for him.
+    expect(COMMANDER_ATTACK_SECONDS).toEqual({ pip: 0.85, bulwark: 0.85 });
+    const trace: number[] = [];
+    // Through the idle, the cycle's strike window (3 s to 3 s plus his attack) and on to 6 s, where the lap begins.
+    for (let i = 0; i < 355; i++) {
+      style.update(DT);
+      trace.push(body.position.x);
+    }
+    const at = (seconds: number) => trace[Math.round(seconds / DT) - 1]!;
+    expect(at(2.9)).toBeCloseTo(0.5, 9);
+    // The strike crossfades in over 0.18 s and holds his attack pose to the end of his clip.
+    expect(at(CYCLE_STRIKE_AT + 0.3)).toBeCloseTo(1, 9);
+    expect(at(CYCLE_STRIKE_AT + COMMANDER_ATTACK_SECONDS.pip - 0.02)).toBeCloseTo(1, 9);
+    // Then the idle again until the lap.
+    expect(at(5.9)).toBeCloseTo(0.5, 9);
+    style.setBulwarkMode('attack');
+    step(style, 2);
+    expect(body.position.x).toBeCloseTo(1, 9);
+    // And his lap still runs.
+    style.setBulwarkMode('run');
+    step(style, 1);
+    expect(body.position.x).toBeCloseTo(2, 9);
+  });
+
+  it('holds the idle where the others strike for a commander with no attack clip, in the cycle and in attack mode', () => {
     const { style } = build();
     const pip = pipStandIn({ idle: 0.5, run: 2 });
     const body = pip.root.getObjectByName('pip_body')!;
     style.setCommander('pip', pip);
     const trace: number[] = [];
-    // Through the cycle's strike window, 3 to 3.85 s, and on to 6 s, where the lap begins.
     for (let i = 0; i < 355; i++) {
       style.update(DT);
       trace.push(body.position.x);
@@ -860,10 +894,6 @@ describe('the Style Lab commander', () => {
     style.setBulwarkMode('attack');
     step(style, 5);
     expect(body.position.x).toBeCloseTo(0.5, 9);
-    // And his lap still runs.
-    style.setBulwarkMode('run');
-    step(style, 1);
-    expect(body.position.x).toBeCloseTo(2, 9);
   });
 
   it('blinks Pip after his mixer and holds the blink while frozen', () => {
