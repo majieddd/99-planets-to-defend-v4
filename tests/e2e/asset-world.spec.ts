@@ -557,20 +557,24 @@ test.describe('the Asset World', () => {
       expect(followed, line).toBeGreaterThan(0.1);
       expect(held.play.stride, line).not.toBeNull();
 
-      // The moving attack: F with S held. attack_1 plays on his upper body while his legs keep the run: his pace eases
-      // down through the wind-up and is held at DEFAULT_COMBAT_FEEL.moveScale of the walk through the active frames,
-      // with his facing locked there, the hit reaches its strike at full weight, and once it ends he runs on under the
-      // held key. F is pressed in the call that starts the recorder. S turns him back toward the cameras, over the open
-      // clearing between his row and the kit's arc, more than 10 m clear, so the run through and after the hit does not
-      // depend on how far the walk above carried him toward his row: run on with W, toward the row, he came out of one
-      // swing 0.53 m from a member's reach, where S heads him away from the row.
+      // The moving attack: F with S and D held. attack_1 plays on his upper body while his legs keep the run: his pace
+      // eases down through the wind-up and is held at DEFAULT_COMBAT_FEEL.moveScale of the walk through the active
+      // frames, with his facing locked there, the hit reaches its strike at full weight, and once it ends he runs on
+      // under the held keys. F is pressed in the call that starts the recorder. S and D head him down and to the right,
+      // away from his row and between it and the nest, with more than 2.5 m to spare however far the walk above carried
+      // him: run on with W, toward the row, he came out of one swing 0.53 m from a member's reach, and S alone heads him
+      // at the nest, 5.5 m ahead of the spawn on the tower row (NEST_SPOT), whose reach he met at the hit's end once the
+      // hit kept him moving (clearance 0.00 m, 2026-10-05). The hit's checks on his speed need open ground, so his
+      // clearance is held above 0 through it.
       await page.keyboard.down('KeyS');
+      await page.keyboard.down('KeyD');
       await page.waitForFunction(() => (window.__P99__!['play'] as () => PlayReading)().runWeight > 0.5, undefined, { timeout: 60_000 });
       await startRecording(page, true);
       // Until the hit has come and gone and he runs on under the held key.
       await waitForSwing(page, true);
       const samples = await stopRecording(page);
       await page.keyboard.up('KeyS');
+      await page.keyboard.up('KeyD');
       const before = samples[0]!;
       const first = samples.findIndex((sample) => sample.attacking);
       const last = samples.length - 1 - [...samples].reverse().findIndex((sample) => sample.attacking);
@@ -588,7 +592,7 @@ test.describe('the Asset World', () => {
         `F started ${swings} hit over ${swing.length} frames, steps ${[...new Set(swing.map((sample) => sample.comboStep))].join(',')} from ${swingStart.source}, ${swingStart.attackSeconds} s with strike ${swingStart.strikeAt} s; ` +
         `speed through the hit ${span(swing.map((sample) => sample.speed))} m/s, in its ${active.length} active frames ${span(active.map((sample) => sample.speed))} m/s against a cap of ${paceCap.toFixed(2)} (pace kept ${active[0]?.moveScale}); ` +
         `legs' run weight ${span(swing.map((sample) => sample.legsRunWeight))}, upper-body hit weight up to ${Math.max(...swing.map((sample) => sample.upperAttackWeight)).toFixed(3)}, lower-body hit weight up to ${Math.max(...swing.map((sample) => sample.lowerAttackWeight)).toFixed(3)}; ` +
-        `turned ${lockedDeg.toFixed(2)} degrees through the active frames; ` +
+        `turned ${lockedDeg.toFixed(2)} degrees through the active frames; clearance through the hit ${span(swing.map((sample) => sample.clearance ?? NaN))} m; ` +
         `first frame at or past the strike ${atStrike ? `clip time ${atStrike.attackTime?.toFixed(3)} s, weight ${atStrike.attackWeight.toFixed(2)}, speed ${atStrike.speed.toFixed(2)} m/s, strikes ${atStrike.strikes}` : 'none'}; ` +
         `after the hit attacking ${after.attacking}, run weight ${after.runWeight.toFixed(2)} at ${after.speed.toFixed(2)} m/s, clearance ${after.clearance?.toFixed(2)} m, strikes ${after.strikes}`;
       console.log(attackLine);
@@ -609,6 +613,8 @@ test.describe('the Asset World', () => {
         expect(sample.speed, attackLine).toBeLessThanOrEqual(paceCap + 1e-9);
       }
       expect(lockedDeg, attackLine).toBe(0);
+      // On open ground throughout, so nothing but the hit held his pace back.
+      for (const sample of swing) expect(sample.clearance!, attackLine).toBeGreaterThan(0);
       // His legs keep the run under the swinging arms: the run's weight on the legs never leaves them.
       for (const sample of swing) expect(sample.legsRunWeight, attackLine).toBeGreaterThan(0);
       expect(Math.max(...swing.map((sample) => sample.upperAttackWeight)), attackLine).toBe(1);
