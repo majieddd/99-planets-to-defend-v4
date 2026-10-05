@@ -25,6 +25,11 @@ export interface CombatFeel {
   fadeIn: number;
   /** Seconds the last hit of a chain takes to hand back to the idle and run. */
   fadeOut: number;
+  /**
+   * Seconds a restarted chain's first hit blends in over, eased: begun over the finisher, over a recovery clip or from
+   * the guard idle (combo.ts, restartFades), and never past that hit's active frames.
+   */
+  restartBlend: number;
   /** Seconds before a hit's cancel point (the finisher's end) from which a press is kept for the next hit. */
   buffer: number;
   /** Seconds after a hit ends, with no press, before the chain starts again from its first hit. */
@@ -84,6 +89,7 @@ export const DEFAULT_COMBAT_FEEL: Readonly<CombatFeel> = Object.freeze({
   crossfade: 0.1,
   fadeIn: 0.07,
   fadeOut: 0.2,
+  restartBlend: 0.2,
   buffer: 0.2,
   reset: 0.3,
   moveScale: 0.4,
@@ -154,9 +160,11 @@ export function isFeelChoice(control: FeelControl): control is FeelChoice {
  * Each setting's control, in the order the folder shows them. The ranges also bound what `?feel=` may set. The crossfade
  * stops at 0.25 s, under every light hit's cancel point (0.367 s for the Quaternius hits, 0.30 s for the hand-keyed ones,
  * in clip seconds as the fades are), so a hit has always finished fading in by the time the next one can take over from
- * it, and no more than two clips ever show at once (combo.ts, startHit). The playback speeds run from 0.8 to 1.6: the
- * Quaternius hits strike in a chain at 0.27, 0.63 and 1.40 s against the hand-keyed 0.20, 0.50 and 0.98 s, and 1.6 brings
- * their finisher's 0.67 s wind-up near the hand-keyed one's 0.38 s.
+ * it, and no more than two clips ever show at once (combo.ts, startHit). The restart blend stops at 0.25 s for the same
+ * reason: a restart enters the forehand at most 0.087 s in (restart.ts, RESTART_SEARCH_SHARE), and 0.367 - 0.087 s is
+ * still over 0.25 s. The playback speeds run from 0.8 to 1.6: the Quaternius hits strike in a chain at 0.27, 0.63 and
+ * 1.40 s against the hand-keyed 0.20, 0.50 and 0.98 s, and 1.6 brings their finisher's 0.67 s wind-up near the hand-keyed
+ * one's 0.38 s.
  */
 export const COMBAT_FEEL_RANGES: {
   readonly [K in keyof CombatFeel]: CombatFeel[K] extends boolean ? FeelToggle : CombatFeel[K] extends string ? FeelChoice : FeelRange;
@@ -165,6 +173,7 @@ export const COMBAT_FEEL_RANGES: {
   crossfade: { min: 0.02, max: 0.25, step: 0.01, label: 'crossfade between hits (s)' },
   fadeIn: { min: 0.02, max: 0.15, step: 0.01, label: 'first hit fade in (s)' },
   fadeOut: { min: 0.05, max: 0.4, step: 0.01, label: 'last hit fade out (s)' },
+  restartBlend: { min: 0.05, max: 0.25, step: 0.01, label: 'restart blend into hit 1 (s)' },
   buffer: { min: 0, max: 0.3, step: 0.01, label: 'press buffer before cancel (s)' },
   reset: { min: 0, max: 1, step: 0.05, label: 'chain reset after a hit (s)' },
   moveScale: { min: 0, max: 1, step: 0.05, label: 'pace kept in a light hit' },

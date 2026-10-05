@@ -33,6 +33,7 @@ import {
   contractOf,
   fadeStep,
   FIRST_FADE_STEP,
+  restartFades,
   stepCombo,
   swingMotion,
   swingSetContracts,
@@ -41,11 +42,12 @@ import {
   type ComboState,
   type ComboStep,
   type HitContract,
+  type RestartContext,
   type SwingSet,
 } from './combo';
 import { hipsBoneName, hitClips, splitClip, splitHips, upperBodyBones, type HitClip, type HitSource } from './comboClips';
 import type { PlacedMember } from './layout';
-import { freshLunge, resetLunge, rootMotionCurves, ScriptedLunge, stepLunge, type LungeCurve } from './lunge';
+import { freshLunge, resetLunge, rootMotionCurves, ScriptedLunge, startLunge, stepLunge, type LungeCurve } from './lunge';
 import {
   clearance,
   FREE_MOTION,
@@ -66,6 +68,7 @@ import {
   type SwingMotion,
 } from './playMotion';
 import { THREE_QUARTER_TURN_DEG, toTangent, TOWARD_CAMERAS } from './registry';
+import { bestEntry, entryTimes, RESTART_MATCH_BONES, restartSearchLimit, type EntrySample, type MatchPose, type Quat, type RestartEntry } from './restart';
 import { createSwordTrail, trailEmitting, type SwordTrail, type TrailLook, type TrailReading } from './swordTrail';
 
 /** The follow camera's opening distance from his chest, and its pitch above his horizon, in metres and degrees. */
@@ -105,12 +108,16 @@ export const LEG_SHARE_SECONDS = 0.08;
  * on the spot). Weighing the clip's legs by the share he travels, and the stance by the rest, keeps the feet where they
  * stand: the clip's feet slide back by what is cut while the stance's feet are carried on by what is kept, and the two
  * cancel at that weight. Only the legs: the hips stay the clip's (Halves), since they turn his upper body and so aim his
- * blade. A clip with no root motion (the scripted lunge) keeps its legs whole.
+ * blade. A clip with no root motion (the scripted lunge) keeps its legs whole. The share counts from the curve's metres
+ * where the hit entered its clip (`from`, a restart's entry, lunge.ts startLunge), whose plan is of the reach left: read
+ * against the whole reach, a restart entering the forehand 0.083 s in would have given its legs 0.63 of their motion
+ * with nothing cut, and slid his feet.
  */
-export function legShare(curve: LungeCurve | null, planned: number | null, blocked: boolean): number {
-  if (!curve || curve.source !== 'root' || !(curve.reach > 0)) return blocked && curve?.source === 'root' ? 0 : 1;
+export function legShare(curve: LungeCurve | null, planned: number | null, blocked: boolean, from = 0): number {
+  const reach = curve ? curve.reach - from : 0;
+  if (!curve || curve.source !== 'root' || !(reach > 0)) return blocked && curve?.source === 'root' ? 0 : 1;
   if (blocked) return 0;
-  return planned === null ? 1 : Math.min(1, Math.max(0, planned / curve.reach));
+  return planned === null ? 1 : Math.min(1, Math.max(0, planned / reach));
 }
 
 const UP = new Vector3(0, 1, 0);
@@ -154,6 +161,11 @@ export interface PlayReading {
   opensAt: number | null;
   /** Whether the playing hit is the finisher. */
   finisher: boolean;
+  /** The clip time the playing hit entered its clip at (0, or a restart's entry; null out of a hit), and whether it restarted the chain. */
+  startAt: number | null;
+  restarted: boolean;
+  /** Where a restart would enter the first hit for the pose drawn now, and how far that pose is from the hit's there (null without a pose to read). */
+  restartEntry: RestartEntry | null;
   /** When a press starts to count during the playing hit (bufferOpensAt), in seconds into it (null out of a hit). */
   bufferOpensAt: number | null;
   /** The strikes since he came out to play, in all, by hit (attack_1 to attack_3), and the hit that struck last. */
@@ -345,6 +357,39 @@ export interface PipPlay {
   rig(): Object3D | null;
 }
 
+/** Each restart match bone (RESTART_MATCH_BONES) of a rig, in order, or null when the rig lacks one. */
+function matchBones(root: Object3D): Object3D[] | null {
+  const bones = RESTART_MATCH_BONES.map((bone) => findBone(root, [bone.name]));
+  return bones.every(Boolean) ? (bones as Object3D[]) : null;
+}
+
+/** The match bones' rotations in the rig's root frame, as drawn on its last update (restart.ts, MatchPose). */
+function matchPose(root: Object3D, bones: readonly Object3D[]): MatchPose {
+  const inverse = root.getWorldQuaternion(new Quaternion()).invert();
+  const turn = new Quaternion();
+  return bones.map((bone) => turn.copy(inverse).multiply(bone.getWorldQuaternion(new Quaternion())).toArray() as unknown as Quat);
+}
+
+/**
+ * The first hit's early wind-up as the restart's search reads it (restart.ts): a copy of the rig posed by the hit's whole
+ * clip at each entry time up to the search limit, its match bones' pose read at each. Read once, when he first comes out.
+ */
+function measureEntries(template: Object3D, clip: AnimationClip, contract: HitContract): EntrySample[] | null {
+  const rig = cloneRig(template);
+  const bones = matchBones(rig);
+  if (!bones) return null;
+  const mixer = new AnimationMixer(rig);
+  mixer.clipAction(clip).play();
+  const samples = entryTimes(restartSearchLimit(contract)).map((time) => {
+    mixer.setTime(time);
+    rig.updateMatrixWorld(true);
+    return { time, pose: matchPose(rig, bones) };
+  });
+  mixer.stopAllAction();
+  mixer.uncacheRoot(rig);
+  return samples;
+}
+
 /** The first bone whose name ends with one of the names, in the order given: GLTFLoader strips Mixamo's colon. */
 function findBone(root: Object3D, names: readonly string[]): Object3D | null {
   const nodes: Object3D[] = [];
@@ -532,6 +577,8 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
   const bladeMeasure = template ? measureBlade(template) : null;
   if (template && !bladeMeasure) console.warn('Play Pip: the rig has no blade on its right hand, so no sword trail is drawn');
   let stride: PlayReading['stride'] | undefined;
+  // Each set's first hit's entries for a restart (measureEntries), read when he first comes out.
+  const entries: Partial<Record<SwingSet, EntrySample[] | null>> = {};
 
   // The set the combo plays, from the feel, while the build offers it.
   const wanted = (): SwingSet | null => (sets[feel.swingSet] ? feel.swingSet : (offered[0] ?? null));
@@ -541,6 +588,7 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
 
   let root: Object3D | null = null;
   let feet: (Object3D | null)[] = [];
+  let liveMatch: Object3D[] | null = null;
   let mixer: AnimationMixer | null = null;
   let idle: HalfActions | null = null;
   let guard: HalfActions | null = null;
@@ -678,7 +726,11 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
     const hit = combo.hit;
     if (hit) {
       const contract = contractOf(hit.step, contracts);
-      lungeCurve ??= curveFor(contract);
+      if (!lungeCurve) {
+        lungeCurve = curveFor(contract);
+        // A restart enters its clip part way into the wind-up, so its root motion counts from there (startLunge).
+        startLunge(lunge, lungeCurve, hit.startAt, contract.activeFrom);
+      }
       carry(lunge, lungeCurve, hit.time, targets(), (feel.assistTurn * Math.PI) / 180, contract.activeFrom);
     }
     const recovery = combo.recovery;
@@ -719,6 +771,26 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
     const step = dt > 0 ? dt / GUARD_BLEND_SECONDS : 0;
     guardWeight = up > guardWeight ? Math.min(up, guardWeight + step) : Math.max(up, guardWeight - step);
   }
+
+  /**
+   * Where a restart enters the first hit of the set playing for his pose as last drawn, and how far it is from the hit's
+   * there (restart.ts, bestEntry); a rig without the match bones, or a set without entries, enters at the first moment
+   * with the pose taken as near, as every restart did before the pose was read.
+   */
+  function restartEntry(): RestartEntry {
+    const samples = entries[setName];
+    if (!root || !liveMatch || !samples) return { at: 0, distance: 0 };
+    const first = contractOf(1, contracts);
+    // Judged by how fast the blend must cross to each entry, in the seconds it leaves before the active frames.
+    return bestEntry(samples, matchPose(root, liveMatch), restartSearchLimit(first), (at) => restartFades(first, at, feel).rise);
+  }
+  // What the combo reads of a restart (RestartContext): the guard idle showing, at half its share or more, and the entry.
+  const restartContext: RestartContext = {
+    get guard() {
+      return guard !== null && guardWeight >= 0.5;
+    },
+    entry: restartEntry,
+  };
 
   /** Switches to the swing set the feel asks for, once no hit and no recovery clip of the set playing is showing. */
   function followSwingSet(): void {
@@ -778,9 +850,16 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       start = startNow ?? worldPlayStart();
       stride ??= measureRunLoop(template, runClip);
       if (!stride) console.warn('Play Pip: the run clip gave no stride to read, so it plays at its authored rate');
+      for (const name of offered) {
+        if (entries[name] !== undefined) continue;
+        const first = sets[name]!.hits[0]!;
+        entries[name] = measureEntries(template, first.clip, first.contract);
+        if (!entries[name]) console.warn('Play Pip: the rig lacks a restart match bone, so a restarted chain enters its first hit at its first moment');
+      }
       root = cloneRig(template);
       root.name = 'play_pip';
       feet = [findBone(root, ['LeftToeBase', 'LeftFoot']), findBone(root, ['RightToeBase', 'RightFoot'])];
+      liveMatch = matchBones(root);
       // A SkeletonUtils copy's hulls hold sliced copies of the body's morph influences until their first draw, as in
       // layout.ts, so the ink would not close with the lids until then.
       root.traverse((child) => {
@@ -836,6 +915,7 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       root.traverse((child) => (child as SkinnedMesh).isSkinnedMesh && (child as SkinnedMesh).skeleton.dispose());
       root = null;
       feet = [];
+      liveMatch = null;
       mixer = idle = guard = run = null;
       hitActions = {};
       recoveryActions = {};
@@ -862,7 +942,7 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       // a hit begun in a hit-stop takes over from the weight drawn on the frame before it.
       if (asked && frozen) dropped += 1;
       fadeStepNow = fadeStep(fadeStepNow, clocks.combo);
-      const frame = stepCombo(combo, asked && !frozen, clocks.combo, feel, fadeStepNow, contracts);
+      const frame = stepCombo(combo, asked && !frozen, clocks.combo, feel, fadeStepNow, contracts, restartContext);
       combo = frame.state;
       lastClocks.combo = clocks.combo;
       lastClocks.motion = clocks.motion;
@@ -904,7 +984,7 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
       body = bodyWeights(runShare, currentWeight, outgoing ? weights.outgoing : 0);
       // The legs take the share of the clip's root motion he is given, the stance the rest (legShare says why).
       const wantLegs = current
-        ? legShare(lungeCurve, lunge.plan ? lunge.plan.length : null, lunge.blocked)
+        ? legShare(lungeCurve, lunge.plan ? lunge.plan.length : null, lunge.blocked, lunge.from)
         : recovery
           ? legShare(recoveryCurve, null, recoveryLunge.blocked)
           : 1;
@@ -1027,6 +1107,9 @@ export function createPipPlay(options: PipPlayOptions): PipPlay {
         attackSpeed: hit ? hit.speed : null,
         opensAt: hit ? hit.opensAt : null,
         finisher: contract ? contract.finisher : false,
+        startAt: hit ? hit.startAt : null,
+        restarted: hit ? hit.restart : false,
+        restartEntry: root && liveMatch && entries[setName] ? restartEntry() : null,
         bufferOpensAt: hit ? bufferOpensAt(hit.opensAt, feel.buffer) : null,
         strikes,
         strikesByStep: [...strikesByStep],

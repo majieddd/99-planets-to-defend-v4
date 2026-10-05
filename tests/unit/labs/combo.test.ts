@@ -102,7 +102,7 @@ const hitAt = (step: ComboStep, time: number, fields: Partial<HitPlay> = {}, hit
   const fades = hitFades(crossfaded, FEEL);
   const opensAt = contract.cancel ?? recoveryCut(contract, FEEL.recoveryCut);
   const endsAt = contract.finisher && contract.recoverFrom !== null ? Math.min(contract.duration, opensAt + fades.fadeOut) : contract.duration;
-  return { step, time, struck: false, crossfaded, chainedAt: null, fades, speed: 1, opensAt, endsAt, ...fields };
+  return { step, time, struck: false, crossfaded, chainedAt: null, fades, speed: 1, opensAt, endsAt, startAt: 0, restart: false, ...fields };
 };
 
 const startedSteps = (frames: readonly Frame[]): ComboStep[] => frames.filter((frame) => frame.started !== null).map((frame) => frame.started!);
@@ -536,7 +536,7 @@ describe('the combo chain', () => {
     expect(next.hit!.fades).toEqual(hitFades(true, FEEL));
     // The next hit takes the edited fades as it begins.
     const third = play({ ...next, queued: true }, 40, [1 / 60], () => false, edited).find((frame) => frame.started === 3)!;
-    expect(third.state.hit!.fades).toEqual({ rise: 0.25, fadeOut: 0.4 });
+    expect(third.state.hit!.fades).toEqual({ rise: 0.25, fadeOut: 0.4, eased: false });
   });
 });
 

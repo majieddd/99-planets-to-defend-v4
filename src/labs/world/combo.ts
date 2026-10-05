@@ -26,6 +26,7 @@
 import timings from '../../shared/timings.json' with { type: 'json' };
 import type { CombatFeel } from './combatFeel';
 import { FREE_MOTION, type SwingMotion } from './playMotion';
+import { RESTART_POSE_NEAR_DEG, restartSearchLimit, type RestartEntry } from './restart';
 
 export type ComboStep = 1 | 2 | 3;
 
@@ -180,11 +181,41 @@ export function swingSetContracts(set: SwingSet): readonly HitContract[] {
 export interface HitFades {
   rise: number;
   fadeOut: number;
+  /** Whether the rise is eased in and out (easeInOut) rather than straight: a restart's blend (restartFades). */
+  eased: boolean;
 }
 
 /** The fades a hit takes on from the settings as it begins, over a clip still showing (`crossfaded`) or over the idle. */
 export function hitFades(crossfaded: boolean, feel: CombatFeel): HitFades {
-  return { rise: crossfaded ? feel.crossfade : feel.fadeIn, fadeOut: feel.fadeOut };
+  return { rise: crossfaded ? feel.crossfade : feel.fadeIn, fadeOut: feel.fadeOut, eased: false };
+}
+
+/**
+ * The ease of a restart's blend: a smoothstep, which leaves and reaches its ends at rest, so the blend starts and
+ * finishes without a kick, at 1.5 times a straight blend's rate at its middle.
+ */
+export function easeInOut(u: number): number {
+  const t = Math.min(1, Math.max(0, u));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * The fades a restart takes on (a chain's first hit begun over the finisher, over a recovery clip or from the guard idle,
+ * entering its clip at `startAt`): the feel's restart blend, eased, and never longer than the time left before the hit's
+ * active frames, so the blade is wholly the hit's where it can land (Pillar 4). The first hit took the chain's 0.1 s
+ * straight crossfade over the finisher or a recovery clip, and the 0.07 s fade in over the guard idle, from wherever the
+ * pose stood: from the spin finisher at its cut, 76 to 93 degrees from the forehand's early wind-up, the blade went from
+ * 0.05 to 0.43 m a frame in two frames and on to 0.64, and the owner saw the swing pop back into hit 1.
+ */
+export function restartFades(contract: HitContract, startAt: number, feel: CombatFeel): HitFades {
+  const room = Math.max(1e-3, contract.activeFrom - startAt);
+  return { rise: Math.min(Math.max(0, feel.restartBlend), room), fadeOut: feel.fadeOut, eased: true };
+}
+
+/** How far a hit has risen over its fades, from 0 to 1, `since` clip seconds after it entered its clip. */
+export function riseShare(fades: HitFades, since: number): number {
+  const u = fades.rise > 0 ? Math.min(1, Math.max(0, since / fades.rise)) : 1;
+  return fades.eased ? easeInOut(u) : u;
 }
 
 /** A hit's playback speed from the feel, by its place in the chain (1 plays every time as authored). */
@@ -229,7 +260,24 @@ export interface HitPlay {
    * clip fades back to the idle from the cut rather than playing a recovery he has already left.
    */
   endsAt: number;
+  /**
+   * The clip time it entered its clip at: 0, or for a restart the wind-up's frame that best matches the pose drawn
+   * (restart.ts, bestEntry).
+   * Its time starts here, so the strike, the active frames, the cancel and the root motion stay in clip seconds and all
+   * come that much sooner; its rise counts from here.
+   */
+  startAt: number;
+  /** Whether it restarted the chain (restartFades): over the finisher, over a recovery clip or from the guard idle. */
+  restart: boolean;
 }
+
+/**
+ * How a fading clip's own weight goes on as its time moves: a hit's fades, the clip time it ends at and the one it holds
+ * its whole weight to, and where it entered its clip; or a recovery clip's fade out.
+ */
+export type FadingOwn =
+  | { kind: 'hit'; fades: HitFades; endsAt: number; holdTo: number | null; startAt: number }
+  | { kind: 'recovery'; fadeOut: number };
 
 /** A clip fading out under the hit that took over from it: a hit, or a recovery clip, and its weight then. */
 export interface FadingClip {
@@ -239,6 +287,8 @@ export interface FadingClip {
   speed: number;
   /** Whether it is the recovery clip of the hit `step` rather than that hit. */
   recovery: boolean;
+  /** How its own weight goes on (fadingOwnWeight), which a restart follows; without it, its weight then stands. */
+  own?: FadingOwn;
 }
 
 /** A light hit's recovery clip, playing after a chain stopped there: the hit it follows, its clip time and speed. */
@@ -340,7 +390,9 @@ export function fadeStep(previous: number, comboStep: number): number {
  * buffered hit always takes over from a hit at full weight and no idle shows between two hits; one with a recovery clip
  * keeps it to its very end, where the recovery takes over at full weight (the two clips meet in one pose). The finisher
  * with a cuttable recovery holds its full weight to its cut (`holdTo`) in the same way, so a new chain kept for the cut
- * crossfades from it whole.
+ * crossfades from it whole, and fades out from the cut eased (easeInOut), as a restart blends in: straight, the blade went
+ * from 0.05 to 0.29 m a frame over its first two frames past the cut, and a restart kept for the pose (stepCombo) passes
+ * through that fade.
  */
 export function ownWeight(
   contract: HitContract,
@@ -349,13 +401,14 @@ export function ownWeight(
   weightStep: number,
   endsAt: number = contract.duration,
   holdTo: number | null = contract.cancel,
+  startAt = 0,
 ): number {
   const step = weightStep > 0 ? weightStep : 0;
-  const rise = fades.rise > 0 ? time / fades.rise : 1;
-  if (contract.recovery !== null && contract.recoveryDuration !== null) return Math.min(1, Math.max(0, rise));
+  const rise = riseShare(fades, time - startAt);
+  if (contract.recovery !== null && contract.recoveryDuration !== null) return rise;
   const room = holdTo === null ? fades.fadeOut : Math.min(fades.fadeOut, endsAt - step - holdTo);
-  const fall = (endsAt - step - time) / Math.max(1e-6, room);
-  return Math.min(1, Math.max(0, Math.min(rise, fall)));
+  const fall = Math.min(1, Math.max(0, (endsAt - step - time) / Math.max(1e-6, room)));
+  return Math.min(rise, contract.finisher && contract.recoverFrom !== null ? easeInOut(fall) : fall);
 }
 
 /**
@@ -373,18 +426,47 @@ function holdOf(contract: HitContract, hit: HitPlay): number | null {
   return contract.cancel ?? (contract.recoverFrom !== null ? hit.opensAt : null);
 }
 
-/** The weight a fading clip had when the hit over it began: a hit's own weight, or a recovery clip's. */
+/** The weight a fading clip had when the hit over it began, a hit's own weight or a recovery clip's, and how it goes on. */
 function clipWeight(state: ComboState, hits: readonly HitContract[], weightStep: number): FadingClip | null {
   if (state.hit) {
     const hit = state.hit;
     const contract = contractOf(hit.step, hits);
-    return { step: hit.step, time: hit.time, speed: hit.speed, recovery: false, weight: ownWeight(contract, hit.time, hit.fades, weightStep * hit.speed, hit.endsAt, holdOf(contract, hit)) };
+    const holdTo = holdOf(contract, hit);
+    return {
+      step: hit.step,
+      time: hit.time,
+      speed: hit.speed,
+      recovery: false,
+      weight: ownWeight(contract, hit.time, hit.fades, weightStep * hit.speed, hit.endsAt, holdTo, hit.startAt),
+      own: { kind: 'hit', fades: hit.fades, endsAt: hit.endsAt, holdTo, startAt: hit.startAt },
+    };
   }
   if (state.recovery) {
     const r = state.recovery;
-    return { step: r.step, time: r.time, speed: r.speed, recovery: true, weight: recoveryWeight(contractOf(r.step, hits), r.time, r.fadeOut, weightStep * r.speed) };
+    return {
+      step: r.step,
+      time: r.time,
+      speed: r.speed,
+      recovery: true,
+      weight: recoveryWeight(contractOf(r.step, hits), r.time, r.fadeOut, weightStep * r.speed),
+      own: { kind: 'recovery', fadeOut: r.fadeOut },
+    };
   }
   return null;
+}
+
+/**
+ * A fading clip's own weight at its time now, as it would have gone on alone (never above its weight when the hit over it
+ * began): the finisher still fading out from its cut toward the guard idle, or a recovery clip in its fade out, falls on.
+ * A clip without the record keeps its weight then.
+ */
+export function fadingOwnWeight(clip: FadingClip, hits: readonly HitContract[], weightStep: number): number {
+  const own = clip.own;
+  if (!own) return clip.weight;
+  const contract = contractOf(clip.step, hits);
+  const step = weightStep * clip.speed;
+  const weight = own.kind === 'recovery' ? recoveryWeight(contract, clip.time, own.fadeOut, step) : ownWeight(contract, clip.time, own.fades, step, own.endsAt, own.holdTo, own.startAt);
+  return Math.min(clip.weight, weight);
 }
 
 /**
@@ -392,7 +474,10 @@ function clipWeight(state: ComboState, hits: readonly HitContract[], weightStep:
  * hit rises over its crossfade while the outgoing clip falls from the weight it had when the next began, so the two never
  * sum past 1 and, from a clip at full weight, sum to exactly 1 through the crossfade: the idle and run take only what
  * the two leave, and the pose never pops. `weightStep` is the step the combo's clock last moved by (fadeStep; ownWeight
- * says why), which each clip reads at its own speed.
+ * says why), which each clip reads at its own speed. Under a restart the outgoing clip falls on from its own weight now
+ * (fadingOwnWeight), so a restart that waited for the pose while the finisher faded toward the guard idle carries that
+ * fade on under its blend: held at its weight then, the fade stopped dead on the restart's first frame, and the blade
+ * dropped from 0.24 to 0.05 m a frame before the blend took it up again. The chain's crossfades keep the weight then.
  */
 export function comboWeights(state: ComboState, weightStep: number, hits: readonly HitContract[]): { current: number; outgoing: number; recovery: number } {
   const { hit, outgoing, recovery } = state;
@@ -401,25 +486,61 @@ export function comboWeights(state: ComboState, weightStep: number, hits: readon
     return { current: 0, outgoing: 0, recovery: recoveryWeight(contractOf(recovery.step, hits), recovery.time, recovery.fadeOut, weightStep * recovery.speed) };
   }
   const contract = contractOf(hit.step, hits);
-  const current = ownWeight(contract, hit.time, hit.fades, weightStep * hit.speed, hit.endsAt, holdOf(contract, hit));
-  const handed = hit.fades.rise > 0 ? Math.min(1, hit.time / hit.fades.rise) : 1;
-  return { current, outgoing: outgoing ? outgoing.weight * (1 - handed) : 0, recovery: 0 };
+  const current = ownWeight(contract, hit.time, hit.fades, weightStep * hit.speed, hit.endsAt, holdOf(contract, hit), hit.startAt);
+  // The same share the incoming hit rises by, eased for a restart, so the two still sum to exactly 1 from a whole clip.
+  const handed = riseShare(hit.fades, hit.time - hit.startAt);
+  const under = outgoing ? (hit.restart ? fadingOwnWeight(outgoing, hits, weightStep) : outgoing.weight) : 0;
+  return { current, outgoing: under * (1 - handed), recovery: 0 };
 }
 
 /**
- * Begins a hit, `time` seconds into its clip, over the clip now showing (`from`, its weight then), which fades out under
- * it if it still shows. Only two clips ever show: the crossfade's 0.25 s ceiling (COMBAT_FEEL_RANGES) is under every
- * light hit's cancel point, so a hit has always finished fading in, and dropped the clip under it, by the time the next
- * can begin. The new hit takes its fades, its speed and its recovery cut from the settings now and keeps them.
+ * What a restart reads of the page, which only the page can know: whether the guard idle is the idle showing (a chain's
+ * first hit begun over no clip then restarts from it), and where the first hit would enter its clip for the pose drawn
+ * now, and how far that pose is from the hit's there (restart.ts, bestEntry). Asked only on a frame that may restart.
  */
-function startHit(step: ComboStep, time: number, from: FadingClip | null, chainedAt: number | null, feel: CombatFeel, hits: readonly HitContract[]): { hit: HitPlay; outgoing: FadingClip | null } {
+export interface RestartContext {
+  guard: boolean;
+  entry(): RestartEntry;
+}
+
+/**
+ * The restart context for a caller with no pose to read: no guard, and every restart enters at the first moment with its
+ * pose taken as near, so a kept restart fires at the finisher's recovery cut as it did before the pose was read.
+ */
+export const NO_RESTART_POSE: RestartContext = Object.freeze({ guard: false, entry: () => ({ at: 0, distance: 0 }) });
+
+/**
+ * Begins a hit, `carry` seconds of its clip past where it enters it, over the clip now showing (`from`, its weight then),
+ * which fades out under it if it still shows. A restart (`entry` given) enters its clip at the entry, held to the search
+ * limit (restartSearchLimit), and takes the restart's eased blend; any other hit enters at its first moment with the
+ * chain's crossfade or the first hit's fade in. Only two clips ever show: the crossfade's and the restart blend's 0.25 s
+ * ceilings (COMBAT_FEEL_RANGES) are under every light hit's cancel point less the latest entry (0.367 - 0.087 s for the
+ * Quaternius forehand), so a hit has always finished rising, and dropped the clip under it, by the time the next can
+ * begin. The new hit takes its fades, its speed and its recovery cut from the settings now and keeps them.
+ */
+function startHit(
+  step: ComboStep,
+  carry: number,
+  from: FadingClip | null,
+  chainedAt: number | null,
+  feel: CombatFeel,
+  hits: readonly HitContract[],
+  entry: RestartEntry | null = null,
+): { hit: HitPlay; outgoing: FadingClip | null } {
   const outgoing = from && from.weight > 0 ? from : null;
   const crossfaded = outgoing !== null;
-  const fades = hitFades(crossfaded, feel);
   const contract = contractOf(step, hits);
+  const startAt = entry ? Math.min(restartSearchLimit(contract), Math.max(0, Number.isFinite(entry.at) ? entry.at : 0)) : 0;
+  const fades = entry ? restartFades(contract, startAt, feel) : hitFades(crossfaded, feel);
   const opensAt = contract.cancel ?? recoveryCut(contract, feel.recoveryCut);
   const endsAt = contract.finisher && contract.recoverFrom !== null ? Math.min(contract.duration, opensAt + fades.fadeOut) : contract.duration;
-  return { hit: { step, time, struck: false, crossfaded, chainedAt, fades, speed: hitSpeed(step, feel), opensAt, endsAt }, outgoing };
+  const hit: HitPlay = { step, time: startAt + carry, struck: false, crossfaded, chainedAt, fades, speed: hitSpeed(step, feel), opensAt, endsAt, startAt, restart: entry !== null };
+  return { hit, outgoing };
+}
+
+/** Whether a restart's pose is near enough the first hit's to fire it: the pose threshold (RESTART_POSE_NEAR_DEG). */
+export function restartNear(entry: RestartEntry): boolean {
+  return entry.distance <= RESTART_POSE_NEAR_DEG;
 }
 
 /**
@@ -454,7 +575,13 @@ function advanceFading(clip: FadingClip, dt: number, hits: readonly HitContract[
  *   begins the next hit at once, on this frame.
  * - During the finisher, a press in the buffer before its recovery cut is kept and begins a new chain at the cut; one
  *   past the cut begins it at once; one before the buffer is dropped. Three hits at most, then the finisher's recovery,
- *   cut where the feel says.
+ *   cut where the feel says. The new chain waits, kept, while the pose drawn is further from the first hit's best entry
+ *   than the pose threshold (restartNear), and fires on the first frame it is near or at the finisher's end, whichever
+ *   comes first: so a kept restart fires at the later of the cut and the pose coming near, and never after the
+ *   finisher has ended.
+ * - A chain's first hit begun over the finisher, over a recovery clip, or over no clip while the guard idle shows
+ *   (`restart.guard`) restarts it: it enters its clip at its best entry for the pose drawn (`restart.entry()`) and rises
+ *   over the restart's eased blend (restartFades). Every other hit enters at its first moment with the fades it had.
  * - A press before the buffer opens and a second press while one is kept are dropped.
  * - A press on a step of 0, a hit-stop, starts a hit at its first moment or is kept, and the time it would have moved
  *   waits for a step that moves it (the module's comment says why). One the buffer would drop for coming early is kept
@@ -474,24 +601,46 @@ function advanceFading(clip: FadingClip, dt: number, hits: readonly HitContract[
  * either, so it cannot leave a hit whose time never reaches its end); each clip's time moves by it times that clip's
  * speed. `weightStep` is the step the weights read (fadeStep: the combo's last moving step), the same as `dt` unless the
  * combo's clock is held, so a hit begun on a held frame takes over from the weight drawn on the frame before.
+ * `restart` is what a restart reads of the page (RestartContext); NO_RESTART_POSE by default.
  */
-export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel: CombatFeel, weightStep: number, hits: readonly HitContract[]): ComboFrame {
+export function stepCombo(
+  state: ComboState,
+  pressed: boolean,
+  dt: number,
+  feel: CombatFeel,
+  weightStep: number,
+  hits: readonly HitContract[],
+  restart: RestartContext = NO_RESTART_POSE,
+): ComboFrame {
   let { hit, outgoing, recovery, queued, next, sinceEnd } = state;
   let started: ComboStep | null = null;
   let struck: ComboStep | null = null;
   let press: PressResult = 'none';
   // Written as "not above 0" so that a NaN step, which compares false both ways, counts as held and moves no time.
   const held = !(dt > 0);
+  // The entry is read at most once a frame, and only on a frame that may restart: it poses nothing, but it reads the rig.
+  let entryRead: RestartEntry | null = null;
+  const entry = (): RestartEntry => (entryRead ??= restart.entry());
 
   if (pressed) {
     if (!hit) {
-      ({ hit, outgoing } = startHit(next, 0, clipWeight(state, hits, weightStep), null, feel, hits));
+      const restarts = next === 1 && (state.recovery !== null || restart.guard);
+      ({ hit, outgoing } = startHit(next, 0, clipWeight(state, hits, weightStep), null, feel, hits, restarts ? entry() : null));
       recovery = null;
       started = hit.step;
       press = 'started';
       queued = false;
+    } else if (hit.time >= hit.opensAt && followingStep(hit.step) === 1 && hit.time < hit.endsAt && !restartNear(entry())) {
+      // Past the finisher's cut with the pose still far from the first hit's: kept until it comes near or the finisher
+      // ends (the kept branch below), rather than blending across the whole distance at once.
+      if (queued) press = 'dropped';
+      else {
+        queued = true;
+        press = 'queued';
+      }
     } else if (hit.time >= hit.opensAt) {
-      ({ hit, outgoing } = startHit(followingStep(hit.step), 0, clipWeight(state, hits, weightStep), hit.time, feel, hits));
+      const nextStep = followingStep(hit.step);
+      ({ hit, outgoing } = startHit(nextStep, 0, clipWeight(state, hits, weightStep), hit.time, feel, hits, nextStep === 1 ? entry() : null));
       started = hit.step;
       press = 'started';
       queued = false;
@@ -520,14 +669,18 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
       struck = hit.step;
     }
     const playing: HitPlay = { ...hit, time: after, struck: hitStruck };
-    if (queued && after >= playing.opensAt) {
-      // The kept press begins the next hit exactly at the opening: it starts the time past it in (that much real time,
-      // at the new hit's own speed), and the hit it takes over from fades from its weight at the opening, full by
-      // ownWeight's rule at a cancel point and at a recovery cut.
-      const carry = (after - playing.opensAt) / playing.speed;
-      const at: ComboState = { ...state, hit: { ...playing, time: playing.opensAt } };
-      const nextStep = followingStep(playing.step);
-      ({ hit, outgoing } = startHit(nextStep, carry * hitSpeed(nextStep, feel), clipWeight(at, hits, weightStep), playing.opensAt, feel, hits));
+    const nextStep = followingStep(playing.step);
+    // A kept restart fires once the pose is near the first hit's entry, or at the finisher's end whatever the pose.
+    const ready = queued && after >= playing.opensAt && (nextStep !== 1 || after >= playing.endsAt || restartNear(entry()));
+    if (ready) {
+      // The kept press begins the next hit exactly at the opening, or for a restart that waited on the pose at the
+      // start of this frame: it starts the time past that moment in (that much real time, at the new hit's own speed),
+      // and the hit it takes over from fades from its weight then, full by ownWeight's rule at a cancel point and at a
+      // recovery cut.
+      const from = Math.max(before, playing.opensAt);
+      const carry = (after - from) / playing.speed;
+      const at: ComboState = { ...state, hit: { ...playing, time: from } };
+      ({ hit, outgoing } = startHit(nextStep, carry * hitSpeed(nextStep, feel), clipWeight(at, hits, weightStep), from, feel, hits, nextStep === 1 ? entry() : null));
       outgoing = outgoing ? { ...outgoing, time: after } : null;
       started = hit.step;
       queued = false;
@@ -545,7 +698,7 @@ export function stepCombo(state: ComboState, pressed: boolean, dt: number, feel:
     } else {
       hit = playing;
     }
-    if (hit && outgoing && hit.time >= hit.fades.rise) outgoing = null;
+    if (hit && outgoing && hit.time - hit.startAt >= hit.fades.rise) outgoing = null;
     if (hit) sinceEnd = 0;
   } else {
     sinceEnd += dt;

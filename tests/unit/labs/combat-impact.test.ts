@@ -206,7 +206,19 @@ describe('the hit-stop clock (labs/combat/hitStop.ts)', () => {
     const out: PlayClocks = { combo: 0, motion: 0, frame: 0 };
     let combo: ComboState = {
       ...COMBO_READY,
-      hit: { step: 1, time: HIT1.strike, struck: true, crossfaded: false, chainedAt: null, fades: { rise: FEEL.fadeIn, fadeOut: FEEL.fadeOut }, speed: 1, opensAt: HIT1.cancel!, endsAt: HIT1.duration },
+      hit: {
+        step: 1,
+        time: HIT1.strike,
+        struck: true,
+        crossfaded: false,
+        chainedAt: null,
+        fades: { rise: FEEL.fadeIn, fadeOut: FEEL.fadeOut, eased: false },
+        speed: 1,
+        opensAt: HIT1.cancel!,
+        endsAt: HIT1.duration,
+        startAt: 0,
+        restart: false,
+      },
     };
     let motion: MotionState = { x: 0, z: 0, yaw: 0, speed: 1.28, drive: 1.28 };
     let lastStep = DT;

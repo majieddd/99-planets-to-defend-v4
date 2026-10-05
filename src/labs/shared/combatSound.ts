@@ -56,12 +56,15 @@ export const WHOOSH_WINDUP_LEVEL = 0.12;
 
 /**
  * A hit's whoosh, from its voice and its contract, at the hit's playback `speed` (the feel's per-hit speed): it peaks a
- * little before the strike and dies away after it, both in real seconds, so a hit played faster whooshes faster.
+ * little before the strike and dies away after it, both in real seconds, so a hit played faster whooshes faster. A hit
+ * that entered its clip at `startAt` (a restart, combo.ts) peaks at the same moment of its clip, that much sooner;
+ * timed from the clip's first moment, a restart entering the forehand 0.083 s in would have whooshed after its strike.
  */
-export function whooshParams(step: ComboStep, contract: HitContract, speed = 1): WhooshParams {
+export function whooshParams(step: ComboStep, contract: HitContract, speed = 1, startAt = 0): WhooshParams {
   const voice = WHOOSH_VOICES[step];
   const rate = speed > 0 && Number.isFinite(speed) ? speed : 1;
-  return { ...voice, rise: Math.max(0.02, (contract.strike * WHOOSH_PEAK_SHARE) / rate), fall: voice.fall / rate };
+  const entered = startAt > 0 && Number.isFinite(startAt) ? startAt : 0;
+  return { ...voice, rise: Math.max(0.02, (contract.strike * WHOOSH_PEAK_SHARE - entered) / rate), fall: voice.fall / rate };
 }
 
 /** An impact: a tonal thunk falling in pitch, a short metallic click and a noise transient, on the contact frame. */
@@ -281,8 +284,8 @@ export interface SoundReading {
 }
 
 export interface CombatSound {
-  /** A swing begins: its whoosh, peaking near its strike, at the hit's playback `speed`. */
-  whoosh(step: ComboStep, contract: HitContract, speed?: number): void;
+  /** A swing begins: its whoosh, peaking near its strike, at the hit's playback `speed`, the hit entering its clip at `startAt`. */
+  whoosh(step: ComboStep, contract: HitContract, speed?: number, startAt?: number): void;
   /** A hit connects: its impact, now. */
   impact(finisher: boolean): void;
   /** A swing ended having met nothing: the whiff, now. */
@@ -361,9 +364,9 @@ export function createCombatSound(o: CombatSoundOptions): CombatSound {
   };
 
   return {
-    whoosh(step, contract, speed = 1) {
+    whoosh(step, contract, speed = 1, startAt = 0) {
       const live = ready('whoosh');
-      if (live) scheduleWhoosh(live.ctx, live.master, live.noise, whooshParams(step, contract, speed), live.ctx.currentTime, noiseOffset);
+      if (live) scheduleWhoosh(live.ctx, live.master, live.noise, whooshParams(step, contract, speed, startAt), live.ctx.currentTime, noiseOffset);
     },
     impact(finisher) {
       const live = ready('impact');

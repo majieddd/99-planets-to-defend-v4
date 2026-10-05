@@ -292,7 +292,9 @@ export function planLunge(x: number, z: number, yaw: number, reach: number, targ
 
 /**
  * A hit's lunge as it runs: its plan (made when its curve first moves), the curve's metres carried along his facing and
- * to his right, the share of the turn carried, the metres he actually moved, and whether a body stopped him.
+ * to his right, the share of the turn carried, the metres he actually moved, and whether a body stopped him; and where
+ * the hit entered its clip (startLunge): the curve's metres ahead there, which the plan's reach counts from, and the
+ * turn's share there, which the turn counts from (both 0 for a hit begun at its first moment).
  */
 export interface LungeState {
   plan: LungePlan | null;
@@ -301,15 +303,37 @@ export interface LungeState {
   turned: number;
   moved: number;
   blocked: boolean;
+  from: number;
+  turnFrom: number;
 }
 
 export function freshLunge(): LungeState {
-  return { plan: null, done: 0, sideDone: 0, turned: 0, moved: 0, blocked: false };
+  return { plan: null, done: 0, sideDone: 0, turned: 0, moved: 0, blocked: false, from: 0, turnFrom: 0 };
 }
 
 /** Forgets a lunge in place: a new hit plans its own. */
 export function resetLunge(state: LungeState): void {
   Object.assign(state, freshLunge());
+}
+
+/** The share of a lunge's turn a time into its clip has reached: by the curve's progress, and whole by `turnBy`. */
+function turnShare(curve: LungeCurve, time: number, forward: number, turnBy: number): number {
+  return Math.max(curve.reach > 0 ? Math.min(1, Math.max(0, forward / curve.reach)) : 1, Math.min(1, Math.max(0, time / turnBy)));
+}
+
+/**
+ * Starts a lunge at `time` into its clip, where a restart entered it (restart.ts): the curve's metres there count as
+ * carried already, so its first step moves him only by what the curve moves after the entry, from wherever he stands,
+ * and the assist plans from the reach left and turns him by the share of its turn left. Begun at 0, as every hit was, a
+ * restart entering the forehand 0.083 s in would have carried him the 0.29 m its root motion covers by then on its first
+ * frame, and turned him at once by the share of the assist's turn the entry had passed.
+ */
+export function startLunge(state: LungeState, curve: LungeCurve, time: number, turnBy = Infinity): void {
+  resetLunge(state);
+  if (!(time > 0)) return;
+  state.from = state.done = curve.at(time);
+  state.sideDone = curve.side ? curve.side(time) : 0;
+  state.turnFrom = turnShare(curve, time, state.from, turnBy);
 }
 
 /** Where he stands and faces, which a lunge's frame starts from and writes back. */
@@ -356,9 +380,11 @@ export function stepLunge(
   const forward = curve.at(time);
   const side = curve.side ? curve.side(time) : 0;
   if (forward === state.done && side === state.sideDone) return;
-  state.plan ??= planLunge(at.x, at.z, at.yaw, curve.reach, targets, assistTurn);
+  // The reach left from where the hit entered its clip: the whole reach for a hit begun at its first moment.
+  const reach = Math.max(0, curve.reach - state.from);
+  state.plan ??= planLunge(at.x, at.z, at.yaw, reach, targets, assistTurn);
   const plan = state.plan;
-  const scale = curve.reach > 0 ? plan.length / curve.reach : 1;
+  const scale = reach > 0 ? plan.length / reach : 1;
   const along = (forward - state.done) * scale;
   const right = (side - state.sideDone) * scale;
   state.done = forward;
@@ -367,7 +393,9 @@ export function stepLunge(
   // whatever the curve has done. It followed the curve alone, so the scripted lunge, whose curve runs to 0.04 s past
   // the strike, went on turning him through the active frames his facing is locked for, and a root-motion curve that
   // had not moved far by then left the turn part done at the strike.
-  const share = Math.max(curve.reach > 0 ? Math.min(1, Math.max(0, forward / curve.reach)) : 1, Math.min(1, Math.max(0, time / turnBy)));
+  // Counted from the share where the hit entered its clip, so a restart's entry is not turned through at once.
+  const reached = turnShare(curve, time, forward, turnBy);
+  const share = state.turnFrom < 1 ? Math.min(1, Math.max(0, (reached - state.turnFrom) / (1 - state.turnFrom))) : 1;
   const turn = (share - state.turned) * plan.turn;
   state.turned = share;
   const ahead = blendRootStep(along, driven.metres * Math.cos(wrapAngle(driven.yaw - plan.yaw)));

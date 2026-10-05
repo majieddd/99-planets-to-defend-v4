@@ -1,4 +1,4 @@
-import { Vector3, type WebGLRenderer } from 'three';
+import { Quaternion, Vector3, type Bone, type WebGLRenderer } from 'three';
 import { standardBlendFor } from '../../render/assets/familyBlend';
 import type { LoadedAsset, MaterialContext } from '../../render/assets/loadAsset';
 import { assetUrl, fetchManifest, type Manifest } from '../../render/assets/manifest';
@@ -308,6 +308,27 @@ async function start(): Promise<void> {
       props ??= pipProps(rig);
       return bodyGap(rig, props, dummy.root, { hullMaterial: ctx.hullMaterial });
     },
+    /**
+     * An evidence hook: Pip's pose as drawn on the last frame, for measuring a transition frame by frame. Each bone's
+     * local rotation (its quaternion in its parent's frame) and its rotation in his root's frame, and the blade's tip in
+     * his root's frame, so a pop of the pose reads apart from his travel. Nothing on the page calls it.
+     */
+    pose: () => {
+      const rig = pipPlay.rig();
+      if (!rig) return null;
+      rig.updateMatrixWorld(true);
+      const rootTurn = rig.getWorldQuaternion(new Quaternion()).invert();
+      const bones: { name: string; local: number[]; inRoot: number[] }[] = [];
+      rig.traverse((node) => {
+        if (!(node as Bone).isBone) return;
+        const inRoot = rootTurn.clone().multiply(node.getWorldQuaternion(new Quaternion()));
+        bones.push({ name: node.name, local: node.quaternion.toArray(), inRoot: inRoot.toArray() });
+      });
+      const base = new Vector3();
+      const tip = new Vector3();
+      const drawn = pipPlay.blade(base, tip);
+      return { bones, tipInRoot: drawn ? rig.worldToLocal(tip).toArray() : null };
+    },
     hitDummy: (index: number) => {
       const dummy = dummies?.list[index];
       const play = pipPlay.reading();
@@ -360,7 +381,7 @@ async function start(): Promise<void> {
     if (pipPlay.active) frame = pipPlay.update(clocks, input.read(), input.takeAttack(), camera, controls);
     impact?.afterPlay(frame, dt);
     // The whoosh starts with the hit's wind-up, timed on the audio clock from this frame, at the hit's playback speed.
-    if (frame?.started) sound.whoosh(frame.started, contractOf(frame.started, pipPlay.contracts), frame.state.hit?.speed ?? 1);
+    if (frame?.started) sound.whoosh(frame.started, contractOf(frame.started, pipPlay.contracts), frame.state.hit?.speed ?? 1, frame.state.hit?.startAt ?? 0);
     sound.sync();
     controls.update(dt);
     painted.sky.follow(camera);

@@ -553,7 +553,7 @@ async function start(): Promise<void> {
       if (pipPlay.active) {
         const frame = pipPlay.update({ combo: dt, motion: dt, frame: dt }, input.read(), input.takeAttack(), camera, controls);
         // His swings whoosh here too; the impacts and whiffs belong to the arena, where the dummies take the hits.
-        if (frame?.started) sound.whoosh(frame.started, contractOf(frame.started, pipPlay.contracts), frame.state.hit?.speed ?? 1);
+        if (frame?.started) sound.whoosh(frame.started, contractOf(frame.started, pipPlay.contracts), frame.state.hit?.speed ?? 1, frame.state.hit?.startAt ?? 0);
       }
       sound.sync();
       // The turntable turns around the open view, and waits while a view glides in or Pip plays.
