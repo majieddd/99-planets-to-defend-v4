@@ -12,8 +12,9 @@ template's defaults, the attack, and the record.
 Result: 1.78 m and 5.0 heads, 24 bones (the finger bones go: the hands stay culled inside the mitten gauntlets), at most
 24,000 triangles with the face kept dense, two meshes (commander_body with the five morphs, `_ink` and `_skin`;
 commander_armour with `_ink`), one 1,024 atlas for body and armour and a 1,024 head texture. Clips: Pip's idle and run
-retargeted onto the reshaped rig, each raised by one constant so its lowest boot point stands on the ground
-(lib/charforge.py ground_clips), and an attack authored here (0.85 s, strike at 0.34 s from src/shared/timings.json).
+retargeted onto the reshaped rig, each moved by one constant so its lowest boot point stands on the ground (both sink
+as retargeted, so both are raised; lib/charforge.py ground_clips), and an attack authored here (0.85 s, strike at
+0.34 s from src/shared/timings.json).
 Each clip's lowest point is recorded in the sidecar's notes as clip_ground, which a unit test holds to the ground.
 
 The attack is a shield-and-sword cleave. From the guard the torso coils to the right and the sword rises behind the

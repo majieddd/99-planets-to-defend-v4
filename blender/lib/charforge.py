@@ -18,8 +18,8 @@ overrides through settings()):
 9. face_landmarks, ink_and_skin and relax_face_normals: the `_ink` and `_skin` attributes and the face normal fixes.
 10. paint_commander: one 1,024 atlas for body and armour, and a 1,024 head texture sampled from the source at about
     3,200 texels per metre with the defects removed.
-11. retarget_clips, ground_clips and export_commander: the source clips on the reshaped rig, each raised by one constant
-    so its lowest boot point stands on the ground, and the GLB with morphs.
+11. retarget_clips, ground_clips and export_commander: the source clips on the reshaped rig, each moved up or down by
+    one constant so its lowest boot point stands on the ground, and the GLB with morphs.
 
 Image arrays are top-down (row 0 is the top of the texture, as baked), RGB floats. Where a comment calls a value sRGB
 it is stored gamma encoded, the way Blender reads an 8-bit texture as Non-Color."""
@@ -2149,6 +2149,16 @@ SWORD_BONE = P + 'RightHand'
 # How far above the ground a clip's lowest sword point is held, in metres: clear of it by a visible margin, so the tip
 # reads as held over the ground rather than grazing it, and so it stays clear where the ground rises a little ahead.
 BLADE_CLEARANCE_M = 0.01
+# The secant steps _lift_blade takes after its first guess before it gives up. Each step measures the whole clip once
+# (every frame posed and read), so the cap bounds the build's time; the secant closes in faster than linearly where the
+# lowest point moves smoothly with the turn, and six steps leave room for a clip whose worst frame changes as the hand
+# turns.
+BLADE_TURN_STEPS = 6
+# The least reach from the wrist that _lift_blade's first guess divides the lift by, in metres. The guess is the angle a
+# point at that reach turns through to travel the lift, lift over reach; a point beside the wrist, which a turn hardly
+# lifts, would otherwise ask for a turn of many radians at once. A tenth of a metre is far inside a sword's reach from
+# the wrist (the Blender test's stand-in hangs its tip 0.69 m out), so the floor acts only on a degenerate clip.
+BLADE_TURN_MIN_REACH_M = 0.1
 
 
 def _play_alone(arm, action):
@@ -2281,12 +2291,20 @@ def _lift_blade(arm, body, armour, action, sword, worst):
         return _clip_lowest(arm, body, armour, action, {'sword': sword}).low['sword'][0]
 
     a0, z0 = 0.0, lowest(0.0)
-    a1 = (BLADE_CLEARANCE_M - z0) / max((Vector(point) - wrist).length, 0.1)
+    a1 = (BLADE_CLEARANCE_M - z0) / max((Vector(point) - wrist).length, BLADE_TURN_MIN_REACH_M)
     z1 = lowest(a1)
-    for _ in range(6):
+    for _ in range(BLADE_TURN_STEPS):
         if abs(z1 - BLADE_CLEARANCE_M) < 5e-4:
             break
-        a0, z0, a1 = a1, z1, a1 + (BLADE_CLEARANCE_M - z1) * (a1 - a0) / ((z1 - z0) or 1e-9)
+        # Two turns that leave the lowest point where it was give the secant no slope to follow. It used to divide by
+        # 1e-9 in their place and leap through an arbitrary angle, up to millions of radians, and then either fail as
+        # unconverged, naming the wrong fault, or land by chance on a wild turn; the fault is that the lowest sword
+        # point is one the hand's turn does not carry. 1e-7 m is far below any lift a turn gives the blade and far above
+        # the float noise of two readings of one pose, which are equal.
+        if abs(z1 - z0) < 1e-7:
+            raise RuntimeError(f'clip {action.name!r}: the hand turn does not move the lowest sword point ({z1:.4f} m at both '
+                               f'{math.degrees(a0):.2f} and {math.degrees(a1):.2f} degrees), so no turn lifts it')
+        a0, z0, a1 = a1, z1, a1 + (BLADE_CLEARANCE_M - z1) * (a1 - a0) / (z1 - z0)
         z1 = lowest(a1)
     if abs(z1 - BLADE_CLEARANCE_M) >= 5e-4:
         raise RuntimeError(f'clip {action.name!r}: the sword turn did not converge (lowest point {z1:.4f} m at {math.degrees(a1):.2f} degrees)')
@@ -2298,10 +2316,10 @@ def ground_clips(arm, body, armour, actions):
     body or the sword where the clip does not.
 
     The boots: one vertical offset of the hips, so the clip's lowest boot point over all its frames sits on the ground
-    (z 0). retarget_clips carries the source's rotations over unchanged and only scales the root's translation, with no
-    ground pass, so on the 2026-10-03 source the run's boots reached 1.75 cm under the ground (1.0 cm in its opening
-    pose); only the attack, authored with its boots planted by IK, was measured (attack_checks). A clip whose lowest
-    boot point is already at 0 or above is left as it is.
+    (z 0), raising a clip that sinks and lowering one that floats. retarget_clips carries the source's rotations over
+    unchanged and only scales the root's translation, with no ground pass, so on the 2026-10-03 source the run's boots
+    reached 1.75 cm under the ground (1.0 cm in its opening pose); only the attack, authored with its boots planted by
+    IK, was measured (attack_checks). A clip whose lowest boot point is already at 0 is left as it is.
 
     The sword: the idle's new arm rotations lower the right hand so far that the blade's tip passed 3.4 cm into the
     ground in front of him (1.8 cm in the opening pose, which the Asset World read as his idle sinking 1.7 cm), while his
@@ -2311,8 +2329,8 @@ def ground_clips(arm, body, armour, actions):
 
     Each changed clip is measured again; the build stops unless its boots reach 0 within 0.1 mm and its sword the
     clearance within 0.5 mm. Returns, per clip, in metres and degrees: the lowest boot and sword points as retargeted,
-    the hips offset and the hand's turn, and after both the lowest boot and sword points and the lowest point of the
-    whole figure (min_z, the value attack_checks records for the attack)."""
+    the hips offset (negative where it lowered the clip) and the hand's turn, and after both the lowest boot and sword
+    points and the lowest point of the whole figure (min_z, the value attack_checks records for the attack)."""
     hips = arm.data.bones[P + 'Hips']
     if hips.parent is not None:
         raise ValueError(f'ground_clips: {hips.name} has the parent {hips.parent.name}; the offset assumes the hips are the root')
@@ -2333,7 +2351,9 @@ def ground_clips(arm, body, armour, actions):
         if before.moved < 1e-4:
             raise RuntimeError(f'ground_clips: clip {name!r} did not pose the rig (no armour point moved over its frames)')
         boot_low = before.low['boots'][0]
-        offset = -boot_low if boot_low < 0 else 0.0
+        # Both ways: a clip whose boots never come down to the ground floats as surely as one that sinks, and only
+        # sinking used to be corrected, so a floating clip would have kept its boots off the ground on every frame.
+        offset = -boot_low
         after = before
         if offset:
             _shift_channels(action, path, to_local @ Vector((0.0, 0.0, offset)))
