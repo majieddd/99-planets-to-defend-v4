@@ -18,7 +18,8 @@ overrides through settings()):
 9. face_landmarks, ink_and_skin and relax_face_normals: the `_ink` and `_skin` attributes and the face normal fixes.
 10. paint_commander: one 1,024 atlas for body and armour, and a 1,024 head texture sampled from the source at about
     3,200 texels per metre with the defects removed.
-11. retarget_clips and export_commander: the source clips on the reshaped rig, and the GLB with morphs.
+11. retarget_clips, ground_clips and export_commander: the source clips on the reshaped rig, each raised by one constant
+    so its lowest boot point stands on the ground, and the GLB with morphs.
 
 Image arrays are top-down (row 0 is the top of the texture, as baked), RGB floats. Where a comment calls a value sRGB
 it is stored gamma encoded, the way Blender reads an 8-bit texture as Non-Color."""
@@ -29,7 +30,7 @@ from types import SimpleNamespace
 import bmesh
 import bpy
 import numpy as np
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Quaternion, Vector
 from mathutils.bvhtree import BVHTree
 from mathutils.kdtree import KDTree
 
@@ -2111,7 +2112,8 @@ def _stash(arm, action):
 def retarget_clips(arm, actions, scale, keep):
     """The source clips on the reshaped rig. The skeleton keeps its bone names and rest orientations, so rotations
     carry over unchanged; only the root's translation scales with the body (the uniform reshape scale), and channels
-    of deleted bones (the fingers) go. Clips not in `keep` are deleted, or the exporter would ship all of them."""
+    of deleted bones (the fingers) go. Clips not in `keep` are deleted, or the exporter would ship all of them. Nothing
+    here sets the clips on the ground; ground_clips does that next."""
     bones = {b.name for b in arm.data.bones}
     kept = {}
     for name, act in list(actions.items()):
@@ -2137,6 +2139,218 @@ def retarget_clips(arm, actions, scale, keep):
     if missing:
         raise ValueError(f'source clips missing: {missing} (has {sorted(actions)})')
     return kept
+
+
+# The bones the block boots ride: an armour vertex weighted more than half to them is part of a boot.
+BOOT_BONES = (P + 'LeftFoot', P + 'RightFoot', P + 'LeftToeBase', P + 'RightToeBase')
+# The sword's hilt and blade on the armour (cf_part 1 and 3, see assemble), which ride the right hand.
+SWORD_PARTS = (1, 3)
+SWORD_BONE = P + 'RightHand'
+# How far above the ground a clip's lowest sword point is held, in metres: clear of it by a visible margin, so the tip
+# reads as held over the ground rather than grazing it, and so it stays clear where the ground rises a little ahead.
+BLADE_CLEARANCE_M = 0.01
+
+
+def _play_alone(arm, action):
+    """Poses the rig by one action alone, NLA off, as lib/anim.play does, with the pose position on. A source clip's slot
+    is the importer's, which Blender need not pick by itself once the armature is renamed, so the first slot is assigned
+    when none was. Returns a callable that restores the NLA and the pose position."""
+    data = arm.animation_data
+    saved = (data.use_nla, arm.data.pose_position)
+    data.use_nla = False
+    data.action = action
+    if getattr(data, 'action_slot', True) is None and len(getattr(action, 'slots', ())):
+        data.action_slot = action.slots[0]
+    arm.data.pose_position = 'POSE'
+
+    def restore():
+        data.action = None
+        data.use_nla, arm.data.pose_position = saved
+
+    return restore
+
+
+def _clip_lowest(arm, body, armour, action, masks):
+    """Over every whole frame of a clip, in the rig's frame (z up, the ground at 0): for each named mask of armour
+    vertices, its lowest point as (z, frame, point); the lowest point of the whole figure, body and armour; and how far
+    any armour point moved from the clip's first frame, which says the clip posed the rig at all."""
+    restore = _play_alone(arm, action)
+    start, end = action.frame_range
+    low = {name: (math.inf, None, None) for name in masks}
+    figure_low = math.inf
+    first = None
+    moved = 0.0
+    try:
+        for f in range(int(start), int(math.ceil(end)) + 1):
+            bpy.context.scene.frame_set(f)
+            ac, bc = _evaluated_co(armour), _evaluated_co(body)
+            if first is None:
+                first = ac
+            for name, mask in masks.items():
+                i = int(np.argmin(ac[mask, 2]))
+                z = float(ac[mask][i, 2])
+                if z < low[name][0]:
+                    low[name] = (z, f, ac[mask][i].copy())
+            figure_low = min(figure_low, float(ac[:, 2].min()), float(bc[:, 2].min()))
+            moved = max(moved, float(np.abs(ac - first).max()))
+    finally:
+        restore()
+        bpy.context.scene.frame_set(1)
+    return SimpleNamespace(low=low, figure=figure_low, moved=moved)
+
+
+def _channel(action, path, index):
+    return next((fc for fcs in _channelbags(action) for fc in fcs if fc.data_path == path and fc.array_index == index), None)
+
+
+def _shift_channels(action, path, delta):
+    """Adds a constant vector to the three channels of a vector property, keys and handles alike. A channel the action
+    lacks is created as one key at the constant (the property rests at 0)."""
+    for i in range(3):
+        if abs(delta[i]) < 1e-9:
+            continue
+        fc = _channel(action, path, i)
+        if fc is None:
+            fc = _channelbags(action)[0].new(path, index=i)
+            fc.keyframe_points.insert(action.frame_range[0], delta[i])
+        else:
+            for kp in fc.keyframe_points:
+                kp.co[1] += delta[i]
+                kp.handle_left[1] += delta[i]
+                kp.handle_right[1] += delta[i]
+        fc.update()
+
+
+def _quaternion_keys(action, bone):
+    """A bone's rotation keys as (curves, original values per key): the four rotation_quaternion curves, which must be
+    keyed at the same frames, as a source clip baked frame by frame is."""
+    path = f'pose.bones["{bone}"].rotation_quaternion'
+    curves = [_channel(action, path, i) for i in range(4)]
+    if any(fc is None for fc in curves):
+        raise ValueError(f'clip {action.name!r} does not key all four rotation channels of {bone}')
+    frames = [tuple(kp.co[0] for kp in fc.keyframe_points) for fc in curves]
+    if any(f != frames[0] for f in frames):
+        raise ValueError(f'clip {action.name!r} keys the rotation channels of {bone} at different frames')
+    original = [Quaternion([fc.keyframe_points[k].co[1] for fc in curves]) for k in range(len(frames[0]))]
+    return curves, original
+
+
+def _turn_keys(curves, original, turn):
+    """Writes every key as `turn` (a rotation in the bone's own frame) applied to its original value, handles moved with
+    their key, so one constant turn holds for the whole clip."""
+    for k, q in enumerate(original):
+        turned = turn @ q
+        for i, fc in enumerate(curves):
+            kp = fc.keyframe_points[k]
+            delta = turned[i] - kp.co[1]
+            kp.co[1] += delta
+            kp.handle_left[1] += delta
+            kp.handle_right[1] += delta
+    for fc in curves:
+        fc.update()
+
+
+def _lift_blade(arm, body, armour, action, sword, worst):
+    """Turns the sword hand by one constant rotation in its own frame for the whole clip, until the sword's lowest point
+    over the clip is BLADE_CLEARANCE_M up. The axis is found at the clip's worst frame (`worst`, its frame and point): the
+    horizontal axis square to the line from the wrist to that point, about which a turn raises it, carried into the
+    hand's own frame there. The angle is solved by the secant method on the measured lowest point, since a constant turn
+    lifts the point by a different amount at each frame. Returns the angle in degrees and the clip's lowest sword point."""
+    frame, point = worst
+    restore = _play_alone(arm, action)
+    try:
+        bpy.context.scene.frame_set(frame)
+        posed = arm.evaluated_get(bpy.context.evaluated_depsgraph_get()).pose.bones[SWORD_BONE]
+        hand = posed.matrix.copy()
+        basis = posed.matrix_basis.copy()
+    finally:
+        restore()
+        bpy.context.scene.frame_set(1)
+    wrist = hand.translation
+    axis = (Vector(point) - wrist).cross(Vector((0.0, 0.0, 1.0)))
+    if axis.length < 1e-6:
+        raise ValueError(f'clip {action.name!r}: the sword points straight down at frame {frame}, so no turn about a level axis lifts it')
+    # The hand's pose is its parent frame times its basis, so a turn in world space about the wrist is, in the basis,
+    # a turn about the same axis carried through the parent frame.
+    parent = hand.to_3x3() @ basis.to_3x3().inverted()
+    local_axis = (parent.inverted() @ axis.normalized()).normalized()
+    curves, original = _quaternion_keys(action, SWORD_BONE)
+
+    def lowest(angle):
+        _turn_keys(curves, original, Quaternion(local_axis, angle))
+        return _clip_lowest(arm, body, armour, action, {'sword': sword}).low['sword'][0]
+
+    a0, z0 = 0.0, lowest(0.0)
+    a1 = (BLADE_CLEARANCE_M - z0) / max((Vector(point) - wrist).length, 0.1)
+    z1 = lowest(a1)
+    for _ in range(6):
+        if abs(z1 - BLADE_CLEARANCE_M) < 5e-4:
+            break
+        a0, z0, a1 = a1, z1, a1 + (BLADE_CLEARANCE_M - z1) * (a1 - a0) / ((z1 - z0) or 1e-9)
+        z1 = lowest(a1)
+    if abs(z1 - BLADE_CLEARANCE_M) >= 5e-4:
+        raise RuntimeError(f'clip {action.name!r}: the sword turn did not converge (lowest point {z1:.4f} m at {math.degrees(a1):.2f} degrees)')
+    return math.degrees(a1), z1
+
+
+def ground_clips(arm, body, armour, actions):
+    """The ground pass for the retargeted clips, two constants per clip and never one per frame, which would move the
+    body or the sword where the clip does not.
+
+    The boots: one vertical offset of the hips, so the clip's lowest boot point over all its frames sits on the ground
+    (z 0). retarget_clips carries the source's rotations over unchanged and only scales the root's translation, with no
+    ground pass, so on the 2026-10-03 source the run's boots reached 1.75 cm under the ground (1.0 cm in its opening
+    pose); only the attack, authored with its boots planted by IK, was measured (attack_checks). A clip whose lowest
+    boot point is already at 0 or above is left as it is.
+
+    The sword: the idle's new arm rotations lower the right hand so far that the blade's tip passed 3.4 cm into the
+    ground in front of him (1.8 cm in the opening pose, which the Asset World read as his idle sinking 1.7 cm), while his
+    boots stood within 1 mm of it. Raising the body would float the boots, so the hand is turned instead, by one constant
+    rotation for the whole clip (_lift_blade), until the sword's lowest point is BLADE_CLEARANCE_M up. A clip whose sword
+    stays above that is left as it is.
+
+    Each changed clip is measured again; the build stops unless its boots reach 0 within 0.1 mm and its sword the
+    clearance within 0.5 mm. Returns, per clip, in metres and degrees: the lowest boot and sword points as retargeted,
+    the hips offset and the hand's turn, and after both the lowest boot and sword points and the lowest point of the
+    whole figure (min_z, the value attack_checks records for the attack)."""
+    hips = arm.data.bones[P + 'Hips']
+    if hips.parent is not None:
+        raise ValueError(f'ground_clips: {hips.name} has the parent {hips.parent.name}; the offset assumes the hips are the root')
+    boots = weight_of(armour, BOOT_BONES) > 0.5
+    part = np.empty(len(armour.data.polygons), np.int32)
+    armour.data.attributes['cf_part'].data.foreach_get('value', part)
+    sword = np.zeros(len(armour.data.vertices), bool)
+    sword[[v for i in np.flatnonzero(np.isin(part, SWORD_PARTS)) for v in armour.data.polygons[i].vertices]] = True
+    if not boots.any() or not sword.any():
+        raise ValueError(f'ground_clips: the armour has {int(boots.sum())} boot vertices ({", ".join(BOOT_BONES)}) and {int(sword.sum())} sword vertices')
+    masks = {'boots': boots, 'sword': sword}
+    # The hips are the root bone, so a change of their location moves them by their rest frame times the change.
+    to_local = hips.matrix_local.to_3x3().inverted()
+    path = f'pose.bones["{hips.name}"].location'
+    out = {}
+    for name, action in actions.items():
+        before = _clip_lowest(arm, body, armour, action, masks)
+        if before.moved < 1e-4:
+            raise RuntimeError(f'ground_clips: clip {name!r} did not pose the rig (no armour point moved over its frames)')
+        boot_low = before.low['boots'][0]
+        offset = -boot_low if boot_low < 0 else 0.0
+        after = before
+        if offset:
+            _shift_channels(action, path, to_local @ Vector((0.0, 0.0, offset)))
+            after = _clip_lowest(arm, body, armour, action, masks)
+        turn = 0.0
+        if after.low['sword'][0] < BLADE_CLEARANCE_M:
+            turn, _ = _lift_blade(arm, body, armour, action, sword, after.low['sword'][1:])
+            after = _clip_lowest(arm, body, armour, action, masks)
+        if offset and abs(after.low['boots'][0]) > 1e-4:
+            raise RuntimeError(f'ground_clips: clip {name!r} lowest boot point {after.low["boots"][0]:.5f} m after a {offset:.5f} m offset, not 0')
+        if turn and abs(after.low['sword'][0] - BLADE_CLEARANCE_M) > 5e-4:
+            raise RuntimeError(f'ground_clips: clip {name!r} lowest sword point {after.low["sword"][0]:.5f} m after the turn, not {BLADE_CLEARANCE_M}')
+        out[name] = dict(retargeted_boot_min_z=round(boot_low, 4), retargeted_sword_min_z=round(before.low['sword'][0], 4),
+                         offset_m=round(offset, 4), sword_turn_deg=round(turn, 2), boot_min_z=round(after.low['boots'][0], 4),
+                         sword_min_z=round(after.low['sword'][0], 4), min_z=round(after.figure, 4))
+        log('ground', name, out[name])
+    return out
 
 
 def pose_rotations(arm, ops):

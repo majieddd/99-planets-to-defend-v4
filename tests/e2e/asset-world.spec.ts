@@ -88,20 +88,27 @@ function required(): string[] {
  * browser test's ground allowances, Asset World layout). The Kit's ground contract allows 5 mm of rounding. A
  * structure's lean follows its slope only so far, and its footprint's edges stray up to 4.4 cm from the ground (LEAN);
  * the kit's rocks and flora lean on the arc's slopes only as far as the Style Lab's scatter does; and a character stands
- * plumb in its clip's opening pose, not the bind pose the contract measures. Bulwark's run opens with both feet off the
- * ground, 3.8 cm up on the level clearing, and since Pip's attack member moved Bulwark's row 2.6 m further onto the
- * slope it reads 5.2 cm at 18 m from the pole, where the ground falls away under his plumb stance; the characters'
- * allowance rose from 4 cm to 5.5 cm with it, still far under the 15 to 26 cm by which misplaced roots once sank.
+ * plumb in its clip's opening pose, not the bind pose the contract measures, so a character's float and sink are held
+ * apart. Its float may reach 5.5 cm: Bulwark's run opens with both feet off the ground, 3.8 cm up on the level
+ * clearing, and since Pip's attack member moved Bulwark's row 2.6 m further onto the slope it reads 5.24 cm at 18 m
+ * from the pole, where the ground falls away under his plumb stance. Its sink may reach 1 cm, a 1.5 cm limit with the
+ * contract: the deepest character reads 0.71 cm, Pip's attack member standing plumb on the slope 10.6 m out, while
+ * Pip's idle sank 1.69 cm and his face member 3.47 cm before the recipe's ground pass (the idle's sword tip in the
+ * ground). One allowance for both sides, checked on the size of the reading alone, had loosened sinking to the 6.0 cm
+ * limit only Bulwark's float needed, which passed both. Both stay far under the 15 to 26 cm by which misplaced roots
+ * once sank.
  */
 const CONTRACT_M = 0.005;
 const STRUCTURE_STRAY_M = 0.044;
 const KIT_STRAY_M = 0.025;
-const CLIP_STRAY_M = 0.055;
+const CLIP_FLOAT_M = 0.055;
+const CLIP_SINK_M = 0.01;
 
-function groundAllowance(member: (typeof MEMBERS)[number]): number {
-  if (member.clip) return CLIP_STRAY_M;
-  if (member.entry === 'verdant_kit') return KIT_STRAY_M;
-  return member.lean === LEAN.structure ? STRUCTURE_STRAY_M : 0;
+/** A member's allowance beyond the contract above its designed sink (float) and below it (sink), in metres. */
+function groundAllowance(member: (typeof MEMBERS)[number]): { float: number; sink: number } {
+  if (member.clip) return { float: CLIP_FLOAT_M, sink: CLIP_SINK_M };
+  const stray = member.entry === 'verdant_kit' ? KIT_STRAY_M : member.lean === LEAN.structure ? STRUCTURE_STRAY_M : 0;
+  return { float: stray, sink: stray };
 }
 
 function collectConsole(page: Page): { errors: string[]; warnings: string[] } {
@@ -208,10 +215,15 @@ test.describe('the Asset World', () => {
       const record = manifest.assets.find((asset) => asset.name === entry)?.ground?.find((r) => r.node === node);
       expect(record, `the manifest has no ground record for member "${contact.name}" (entry "${entry}", node ${JSON.stringify(node)})`).toBeDefined();
       const height = fromCentre(contact.lowest) - fromCentre(contact.ground);
-      return { name: contact.name, off: height + record!.sink, limit: CONTRACT_M + groundAllowance(member!) };
+      const allowance = groundAllowance(member!);
+      return { name: contact.name, off: height + record!.sink, float: CONTRACT_M + allowance.float, sink: CONTRACT_M + allowance.sink };
     });
-    const unground = contacts.filter((contact) => Math.abs(contact.off) > contact.limit);
-    const worst = contacts.reduce((a, b) => (Math.abs(b.off) > Math.abs(a.off) ? b : a));
+    // Each side against its own limit: above the ground by the float, below it by the sink.
+    const limitOf = (contact: (typeof contacts)[number]) => (contact.off >= 0 ? contact.float : contact.sink);
+    const unground = contacts.filter((contact) => contact.off > contact.float || -contact.off > contact.sink);
+    const worst = contacts.reduce((a, b) => (Math.abs(b.off) / limitOf(b) > Math.abs(a.off) / limitOf(a) ? b : a));
+    const sinking = contacts.filter((contact) => contact.off < 0);
+    const deepest = sinking.length ? sinking.reduce((a, b) => (b.off < a.off ? b : a)) : null;
 
     // The commanders' zone, left to right as placed: Pip (commander), the default, first, then Bulwark, the alternate.
     const commanders = state.roots.filter((root) => root.zone === 'commanders').map((root) => root.name);
@@ -223,7 +235,8 @@ test.describe('the Asset World', () => {
       `asset world [${test.info().project.name}]: assets ${state.assets}, look ${state.look}, opened ${state.focused} (${state.search}), ` +
       `placed ${state.placed.length} names covering ${need.length - missing.length} of ${need.length} required, missing ${JSON.stringify(missing)}, ` +
       `registry gaps ${JSON.stringify(gaps)}, clips no root loops ${JSON.stringify(unlooped)}, ${state.roots.length} roots, ` +
-      `ground: worst ${worst.name} ${(worst.off * 100).toFixed(2)} cm off its sink (limit ${(worst.limit * 100).toFixed(1)} cm), off their limit ${JSON.stringify(unground)}; ` +
+      `ground: nearest its limit ${worst.name} ${(worst.off * 100).toFixed(2)} cm off its sink (limit ${worst.off >= 0 ? '+' : '-'}${(limitOf(worst) * 100).toFixed(1)} cm), ` +
+      `deepest ${deepest ? `${deepest.name} ${(deepest.off * 100).toFixed(2)} cm (limit -${(deepest.sink * 100).toFixed(1)} cm)` : 'none'}, off their limit ${JSON.stringify(unground)}; ` +
       `ground offsets ${contacts.map((c) => `${c.name} ${(c.off * 100).toFixed(2)}`).join(', ')} cm; ` +
       `towers view unframed ${JSON.stringify(towersUnframed)}, labels ${JSON.stringify(state.towerLabels)}; outside the overview ${JSON.stringify(outside)}; ` +
       `commanders ${JSON.stringify(commanders)}; ` +

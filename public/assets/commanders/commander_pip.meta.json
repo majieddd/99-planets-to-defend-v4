@@ -82,6 +82,30 @@
         "y": -1.12,
         "x": 0.094
       }
+    },
+    "clip_ground": {
+      "idle": {
+        "retargeted_boot_min_z": -0.001,
+        "retargeted_sword_min_z": -0.0338,
+        "offset_m": 0.001,
+        "sword_turn_deg": 4.63,
+        "boot_min_z": 0.0,
+        "sword_min_z": 0.01,
+        "min_z": 0.0
+      },
+      "run": {
+        "retargeted_boot_min_z": -0.0176,
+        "retargeted_sword_min_z": 0.5135,
+        "offset_m": 0.0176,
+        "sword_turn_deg": 0.0,
+        "boot_min_z": -0.0,
+        "sword_min_z": 0.5311,
+        "min_z": -0.0
+      },
+      "attack": {
+        "offset_m": 0.0,
+        "min_z": -0.0
+      }
     }
   },
   "placeables": []

@@ -281,6 +281,87 @@ def test_charforge_import_names_what_the_source_lacks(tmp):
         raise AssertionError('a source without an albedo image imported')
 
 
+def _charforge_stand_in():
+    """A stand-in for a CharForge commander: the root hips 1 m up, pointing up (so their local Y is world up), a left
+    foot and a right hand under them, a body box on the hips, and an armour of a boot box on the foot from the ground up
+    and a blade on the hand, hanging 0.3 m in front of the wrist with its tip 2 cm into the ground, its faces marked
+    as charforge's assemble marks a blade (cf_part 3). Bound as charforge binds."""
+    from lib import charforge
+    data = bpy.data.armatures.new('rig')
+    arm = bpy.data.objects.new('rig', data)
+    bpy.context.scene.collection.objects.link(arm)
+    scene.select_only([arm])
+    bpy.ops.object.mode_set(mode='EDIT')
+    hips = data.edit_bones.new(charforge.P + 'Hips')
+    hips.head, hips.tail = (0, 0, 1.0), (0, 0, 1.1)
+    for name, head, tail in (('LeftFoot', (0.1, 0, 0.1), (0.1, -0.1, 0.02)), ('RightHand', (-0.2, 0, 0.6), (-0.2, -0.1, 0.6))):
+        bone = data.edit_bones.new(charforge.P + name)
+        bone.head, bone.tail = head, tail
+        bone.parent = hips
+    bpy.ops.object.mode_set(mode='OBJECT')
+    body = geo.box('body', (0.3, 0.2, 0.4), location=(0, 0, 1.0))
+    boot = geo.box('boot', (0.1, 0.2, 0.1), location=(0.1, 0, 0.05))
+    blade = geo.box('blade', (0.02, 0.04, 0.62), location=(-0.2, -0.3, 0.29))
+    for ob, bone, code in ((body, 'Hips', None), (boot, 'LeftFoot', 0), (blade, 'RightHand', 3)):
+        scene.apply_transforms(ob)
+        ob.vertex_groups.new(name=charforge.P + bone).add([v.index for v in ob.data.vertices], 1.0, 'REPLACE')
+        if code is not None:
+            ob.data.attributes.new('cf_part', 'INT', 'FACE').data.foreach_set('value', np.full(len(ob.data.polygons), code, np.int32))
+    armour = scene.join([boot, blade], 'armour')
+    for ob in (body, armour):
+        charforge.bind(ob, arm)
+    return arm, body, armour
+
+
+def _hips_clip(arm, name, heights):
+    """A clip that only raises and lowers the hips, one key a frame from frame 1, with the hand keyed at rest on every
+    frame as a baked source clip keys every bone, stashed as retarget_clips stashes."""
+    from lib import charforge
+    arm.animation_data_create()
+    action = bpy.data.actions.new(name)
+    arm.animation_data.action = action
+    pb = arm.pose.bones[charforge.P + 'Hips']
+    hand = arm.pose.bones[charforge.P + 'RightHand']
+    for i, height in enumerate(heights):
+        pb.location = (0.0, height, 0.0)
+        pb.keyframe_insert('location', frame=1 + i)
+        hand.keyframe_insert('rotation_quaternion', frame=1 + i)
+    arm.animation_data.action = None
+    charforge._stash(arm, action)
+    pb.location = (0.0, 0.0, 0.0)
+    return action
+
+
+def _keys(action, bone, prop, index):
+    from lib import charforge
+    return [kp.co[1] for fcs in charforge._channelbags(action) for fc in fcs
+            if fc.data_path == f'pose.bones["{charforge.P}{bone}"].{prop}' and fc.array_index == index for kp in fc.keyframe_points]
+
+
+def test_charforge_ground_pass_lifts_a_sinking_clip_by_one_constant(tmp):
+    from lib import charforge
+    arm, body, armour = _charforge_stand_in()
+    sinking = _hips_clip(arm, 'idle', [0.0, -0.01, -0.02, -0.01, 0.0])
+    floating = _hips_clip(arm, 'run', [0.05, 0.06, 0.05])
+    out = charforge.ground_clips(arm, body, armour, {'idle': sinking, 'run': floating})
+    # The idle's boot reached 2 cm under the ground at its lowest frame; one hips offset of 2 cm puts that frame on it.
+    idle = out['idle']
+    assert abs(idle['retargeted_boot_min_z'] + 0.02) < 1e-4 and abs(idle['offset_m'] - 0.02) < 1e-4, idle
+    assert abs(idle['boot_min_z']) < 1e-4 and abs(idle['min_z']) < 1e-4, idle
+    # Every hips key moved by the same amount, so the clip's own rise and fall is kept rather than flattened.
+    assert np.allclose(_keys(sinking, 'Hips', 'location', 1), [0.02, 0.01, 0.0, 0.01, 0.02], atol=1e-6), _keys(sinking, 'Hips', 'location', 1)
+    # The blade, still 2 cm into the ground at the lowest frame after that offset, is lifted to the clearance by one turn
+    # of the hand, the same on every key.
+    assert abs(idle['retargeted_sword_min_z'] + 0.04) < 1e-4, idle
+    assert idle['sword_turn_deg'] > 0 and abs(idle['sword_min_z'] - charforge.BLADE_CLEARANCE_M) < 5e-4, idle
+    hand = np.array([_keys(sinking, 'RightHand', 'rotation_quaternion', i) for i in range(4)]).T
+    assert np.allclose(hand, hand[0], atol=1e-7) and hand[0][0] < 1 - 1e-6, hand
+    # A clip whose boots and blade stay clear of the ground is left alone.
+    run = out['run']
+    assert run['offset_m'] == 0 and run['sword_turn_deg'] == 0 and abs(run['retargeted_boot_min_z'] - 0.05) < 1e-4, run
+    assert np.allclose(_keys(floating, 'Hips', 'location', 1), [0.05, 0.06, 0.05], atol=1e-9), _keys(floating, 'Hips', 'location', 1)
+
+
 def _flat(value, shape=(4, 4)):
     return np.full(shape, value, np.float64)
 

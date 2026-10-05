@@ -12,7 +12,9 @@ template's defaults, the attack, and the record.
 Result: 1.78 m and 5.0 heads, 24 bones (the finger bones go: the hands stay culled inside the mitten gauntlets), at most
 24,000 triangles with the face kept dense, two meshes (commander_body with the five morphs, `_ink` and `_skin`;
 commander_armour with `_ink`), one 1,024 atlas for body and armour and a 1,024 head texture. Clips: Pip's idle and run
-retargeted onto the reshaped rig, and an attack authored here (0.85 s, strike at 0.34 s from src/shared/timings.json).
+retargeted onto the reshaped rig, each raised by one constant so its lowest boot point stands on the ground
+(lib/charforge.py ground_clips), and an attack authored here (0.85 s, strike at 0.34 s from src/shared/timings.json).
+Each clip's lowest point is recorded in the sidecar's notes as clip_ground, which a unit test holds to the ground.
 
 The attack is a shield-and-sword cleave. From the guard the torso coils to the right and the sword rises behind the
 right shoulder while the shield comes up in front (a wind-up that reads from the gameplay camera), the cut comes over
@@ -180,9 +182,12 @@ def build(ctx, source=SOURCE, name=NAME):
     body.name = body.data.name = 'commander_body'
     armour.name = armour.data.name = 'commander_armour'
     arm.name = 'commander_rig'
-    charforge.retarget_clips(arm, src.actions, shape.scale, s['clips'])
+    clips = charforge.retarget_clips(arm, src.actions, shape.scale, s['clips'])
+    ground = charforge.ground_clips(arm, body, armour, clips)
     attack = charforge.make_action_quat(arm, 'attack', attack_keys(arm, blade_axis(armour, arm), strike_frame, end_frame), loc_bones=(P + 'Hips',))
     checks = charforge.attack_checks(arm, body, armour, attack, strike_frame)
+    # The attack needs no offset: its boots are held by IK where they stand in the rest pose, on the ground.
+    ground['attack'] = dict(offset_m=0.0, min_z=checks['min_z'])
     if ctx.previews_enabled:
         out = ctx.preview_dir(name)
         export.render_views([body, armour], out, name, views=4, size=640)
@@ -201,5 +206,6 @@ def build(ctx, source=SOURCE, name=NAME):
             AnimRecord('attack', anim.duration(attack), False, strike=(strike_frame - 1) / anim.FPS),
         ],
         notes=dict(source=source, bones=meta['bones'], morphs=meta['meshes']['commander_body']['morphs'],
-                   height_m=meta['height_m'], decimation=decimation, morph_transfer=morphs, attack_checks=checks),
+                   height_m=meta['height_m'], decimation=decimation, morph_transfer=morphs, attack_checks=checks,
+                   clip_ground=ground),
     )]
