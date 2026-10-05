@@ -231,8 +231,9 @@ a milestone's assets are built, the Content entries for that milestone must equa
 counts, a rule kept by hand; later milestones' entries are plans until then. The current count
 is 9 manifest entries: M0c's 8, the `brush_strokes` and `ink_noise` textures and the models `verdant_kit`
 (8 pieces), `worldheart` (plinth and 11 stages), `nest`, `bolt_sentinel` (marks I to III), `husk`
-and `bulwark`, and M1's `commander_pip`, Pip-A, the commander preview (idle and run, the five face
-morphs, no attack clip until phase B). Pip-A was built in Blender 5.2.1 by the M1 study's scripts, which
+and `bulwark`, and M1's `commander_pip`, Pip-A, the build of Pip (commander), the M1 commander preview
+and since 2026-10-04 the default commander (idle and run, the five face morphs, no attack clip until
+phase B). Pip-A was built in Blender 5.2.1 by the M1 study's scripts, which
 are not yet a recipe in `blender/recipes`, and brought in through the build's own optimize, inspect and
 manifest steps; `npm run assets` keeps the committed file and does not rebuild it. Every placeable
 asset has its root at its ground contact point, so the bind-pose
@@ -269,7 +270,7 @@ face, so the hull does not outline the hair across it.
 
 | Class | Planned count | Recipe | First milestone |
 |---|---|---|---|
-| Commanders | 5 archetypes on one shared skeleton (Bulwark, Twinfang, Longsight, Kettle, Emberline), rebuilt from M1 in the CharForge style with a cartoon face; Pip-A (`commander_pip`) is the M1 preview of that rebuild | `bulwark.py` (M0); Pip-A from the M1 study's scripts; one recipe per commander after | M0 (Bulwark), M1 (Pip-A preview), M4 (all five) |
+| Commanders | 5 archetypes on one shared skeleton (Bulwark, Twinfang, Longsight, Kettle, Emberline), rebuilt from M1 in the CharForge style with a cartoon face; Pip (commander), built as Pip-A (`commander_pip`), is the M1 preview of that rebuild and the default commander since 2026-10-04, with Bulwark the alternate | `bulwark.py` (M0); Pip-A from the M1 study's scripts; one recipe per commander after | M0 (Bulwark, now the alternate), M1 (Pip-A preview, the default commander), M4 (all five) |
 | Allies | 1 (Warden) | `allies.py` | M4 |
 | Xeno species | 4 (Mite, Husk, Aegis, Wisp) plus 4 evolution overlays (armour, speed, shield, split) | `husk.py` (M0); one recipe per species after | M0 (Husk), M2 (all four) |
 | Towers | 6 families x 3 marks = 18 models, plus 12 specialization variants | `bolt_sentinel.py` (M0); one recipe per family after | M0 (Bolt Sentinel I to III), M2 (all) |
@@ -1054,7 +1055,13 @@ its measured rationale and gives renderer v1's start where it helps ("was"). In 
 defaults" and "the default key" mean renderer v1's starts, measured before the lock, unless a figure
 names the locked set. A dials link names only the dials that differ from the defaults, so a link made
 before the lock opens every dial it does not name at its locked value: B3's own link now opens the
-locked look with B3's edgeStrength of 1 and litSaturation of 0.87.
+locked look with B3's edgeStrength of 1 and litSaturation of 0.87. The colour audit at the locked
+defaults, frozen at 1920 x 1080 on the RTX 4080 laptop (gate 1.5), with Pip (commander), the labs'
+default commander since 2026-10-04: 1.927, 1.942 and 1.945 at the hero camera on the high, medium and
+low tiers, and 1.963, 1.980 and 1.982 at the close-up, strategic and horizon cameras on high. With
+Bulwark, the commander the look was locked on (`?commander=bulwark`): 1.926, 1.942 and 1.946, and 1.974,
+1.980 and 1.982, the lock's figures to the digit. The mutation proof rejects the hue-rotated copy of all
+twelve frames. Where a row's figures name Bulwark, they were measured with him.
 
 | Dial | Locked | Rationale |
 |---|---|---|
@@ -1252,8 +1259,10 @@ Bulwark, Twinfang, Longsight, Kettle and Emberline (v3), on one shared skeleton;
 M1 the commanders take the owner's CharForge style, as its Bo and Pip show
 (https://majieddd.github.io/charforge/): about 4.5 to 5 heads tall, oversized hands and feet, slim
 limbs and chunky rounded volumes, with a visible cartoon face (painted features, blink and jaw shape
-keys). M0's Bulwark stays the visored knight the style gate locked on. Pip-A (`commander_pip`) is
-the M1 preview of the rebuild. Inspection view: Asset World (`/labs/world.html?family=commanders`,
+keys). M0's Bulwark stays the visored knight the style gate locked on. Pip (commander), built as
+Pip-A (`commander_pip`), is the M1 preview of the rebuild and, by the owner's decision of 2026-10-04,
+the default commander, with Bulwark the alternate; the owner has not named the character yet, so the
+labs call him "Pip (commander)". Inspection view: Asset World (`/labs/world.html?family=commanders`,
 Pip (commander) first and Bulwark after him, his face with `?member=pip_face`, one of Bulwark's clips
 with `?member=bulwark_run`), the Style Lab, which opens on Pip (`?commander=bulwark` for Bulwark), and
 the M1 test course (`/labs/course.html`).
@@ -1298,10 +1307,16 @@ built); Planet Lab's disaster trigger for disasters.
 ### Style
 
 Inspection view: **Style Lab** (`/labs/style.html`), the style scene with live dials, the reference
-board, and the colour audit. Its commander is Bulwark, the locked look's; the panel's commander control,
-or `?commander=pip`, shows Pip-A in his place and cycle, blinking, holding his idle where Bulwark strikes
-until his attack clip is made (phase B). A lab opened without the parameter never loads Pip-A, and its
-hero frame is unchanged: 0 of 2,073,600 pixels differ at `?tier=high&freeze=1` on the GPU.
+board, and the colour audit. Its commander is Pip (commander), the default since the owner's decision
+of 2026-10-04 (Decided), built as `commander_pip`: he loads with the other models, so the first frame and
+its colour audit show him with no swap, blinking on his own timing, in the commander's cycle, holding his
+idle where Bulwark strikes until his attack clip is made (phase B); `?commander=pip` names him too.
+Bulwark, the visored knight the look was locked on, is the alternate: the panel's commander control or
+`?commander=bulwark` shows him, and a lab opened on him loads nothing of Pip until the panel switches.
+An unknown `?commander=` name shows Pip and names itself once in the console and the banner, and a build
+whose manifest lacks Pip shows Bulwark and says so. Opened on Bulwark, the lab draws the look as it was
+locked: the colour audit reads the lock's figures to the digit (Render defaults), and his evidence
+frames match the lock's but for the moving Husk, turrets and commander (Where we are, 2026-10-04).
 
 ### Asset World
 
@@ -1474,12 +1489,13 @@ The order of construction:
 |---|---|---|
 | Browser game: TypeScript, Three.js on WebGL2, Vite, GitHub Pages | partial | toolchain, CI and Pages live (docs/evidence/m0/pages-placeholder.png); no game yet |
 | Repository majieddd/99-planets-to-defend-v4, public | partial | repository created holding this blueprint, 2026-09-23 |
-| Approach A: painted assets, shader lighting, two-pass ink | in game | Style Lab live; docs/evidence/m0/style-hero-high.png; locked dials in src/render/defaults.ts |
-| Painted-Anime-Inkline 4.0 render defaults locked, from preset B3's link with the owner's three adjustments | in game | owner, 2026-09-28: "I looked at the golden-hour style lab, and it definitely looks great! Let's stick with it, but here are a couple minor adjustments to make as the default: Make default EdgeStrength = .33; Make default Edgefadefar = 65" and "Also make litsaturation 1.09"; preset B3's live link with those three adjustments, locked in src/render/defaults.ts (Render defaults); frames at the locked defaults in docs/evidence/m0/style-*-high.png and style-*-low.png |
+| Approach A: painted assets, shader lighting, two-pass ink | in game | Style Lab live; docs/evidence/m0/style-hero-high.png (Pip (commander), the default since 2026-10-04) and style-hero-high-bulwark.png (Bulwark); locked dials in src/render/defaults.ts |
+| Painted-Anime-Inkline 4.0 render defaults locked, from preset B3's link with the owner's three adjustments | in game | owner, 2026-09-28: "I looked at the golden-hour style lab, and it definitely looks great! Let's stick with it, but here are a couple minor adjustments to make as the default: Make default EdgeStrength = .33; Make default Edgefadefar = 65" and "Also make litsaturation 1.09"; preset B3's live link with those three adjustments, locked in src/render/defaults.ts (Render defaults); frames at the locked defaults with Bulwark, the commander it was locked on, in docs/evidence/m0/style-*-high-bulwark.png and style-*-low-bulwark.png (retaken 2026-10-04 by the lock's methods), and with Pip (commander), the default since then, in style-*-high.png and style-*-low.png |
 | Every asset built by script in Blender 5.2.1 | partial | style-scene set built by npm run assets; assets:check pass=8 fail=0; sheets in docs/evidence/assets |
 | Stylized, visored commanders | dropped | owner replaced the visor with a visible cartoon face, 2026-09-27 |
 | Character bodies in the owner's CharForge stylized cartoon style, as its Bo and Pip show (https://majieddd.github.io/charforge/): about 4.5 to 5 heads tall, oversized hands and feet, slim limbs, chunky rounded volumes | not yet | owner choice, 2026-09-27; it replaces heroic proportions; the commanders take it first, from M1 (Task list); which other characters take it, such as the Warden on the commanders' skeleton, is not yet decided |
 | Commanders show a visible cartoon face: painted features, with blink and jaw shape keys | not yet | owner choice, 2026-09-27; it replaces the visor, and M0's Bulwark stays visored |
+| Pip is the default commander; Bulwark is an alternate | partial | owner, 2026-10-04: "yes make Pip the default, keep Bulwark as alternate"; in both labs: the Style Lab opens on Pip (commander) (`commander_pip`), `?commander=bulwark` opens Bulwark, and the Asset World's commanders' zone leads with Pip, Bulwark after him; frames in docs/evidence/m0/style-*-high.png and style-*-low.png (Pip) and style-*-bulwark.png (Bulwark); no game yet |
 | Generated sources, such as CharForge shapes, allowed only as inputs that a Blender 5.2.1 recipe re-proportions, decimates, repaints, animates and exports | not yet | owner choice, 2026-09-27; no Mac is available to run CharForge, so M1's commanders are modelled in Blender against the published Bo and Pip GLBs as measured proportion references |
 | The game stays free and non-commercial | partial | owner, 2026-09-27; the public Pages site is free to open, and no license records the non-commercial terms yet (Task list) |
 | Every v3 system returns, staged by milestone for quality | not yet | owner choice, 2026-09-23 |
@@ -1539,7 +1555,8 @@ The order of construction:
       materials, soft skin light from `_SKIN`, no crease ink on skin meshes, the labs' face driver;
       Kit, Face morphs and skin); Pip-A, the first build, is in the manifest (morph names recorded,
       the `commanders` budget's morph line, his attack pending) and in both labs, and the owner judges
-      him there. Phase B for Pip-A: the attack clip, and the face's export (see Where we are)
+      him there; since 2026-10-04 he is the labs' default commander and Bulwark the alternate
+      (Decided). Phase B for Pip-A: the attack clip, and the face's export (see Where we are)
 - [ ] For M2, from the M0 gate: a per-pixel ink signal so the bloom never lifts fogged or edge ink;
       per-theme seeds for the sun dials, which override the theme's light; a bloom rule for warm
       hazards such as magma, which would take heartHalo because warm glow means the heart; deciding
@@ -1602,7 +1619,8 @@ still locks on the current, visored Bulwark, and the new commander is M1's first
 locked as Painted-Anime-Inkline 4.0: preset B3's live link with three adjustments, edge ink strength
 0.33, the edge fade's far end at 65 m and lit saturation 1.09 (Render defaults, which quote the
 owner). `DEFAULT_DIALS` holds the locked set, the Style Lab opens on it with no dials link, and the
-high-tier evidence frames were taken at it (docs/evidence/m0/style-{hero,strategic,closeup,horizon}-high.png).
+high-tier evidence frames were taken at it (docs/evidence/m0/style-{hero,strategic,closeup,horizon}-high.png,
+with Bulwark; since 2026-10-04 those names hold Pip's frames and Bulwark's are the `-bulwark` ones).
 At the hero camera the colour audit reads 1.926, 1.942 and 1.946 times chance on the high, medium and
 low tiers (gate 1.5), the mutation proof rejects the hue-rotated copy of each, and on the RTX 4080
 laptop the high tier draws the hero camera at 2560 x 1440 in 2.07 ms uncapped (16.67 ms under vsync).
@@ -1661,4 +1679,29 @@ off at every pitch (tests/unit/labs/play-motion.test.ts). A key held with Ctrl, 
 its shortcut, Cmd going down lets go of the held keys, the slider heart's reach is read again when it changes while he
 plays, and leaving play gives the turntable back as it was. It stays a lab prototype, not the M1 commander controller,
 and Next is unchanged.
-2026-10-04. The expression-decal renderer and the anime-head WIP are shelved on branch `m1-anime-shelved`.
+2026-10-04. The expression-decal renderer (texture-swap eye and mouth cells for an anime head) and the anime head test GLB are shelved on branch `m1-anime-shelved` (head 69b86c3); Pip-A's face stays on morphs.
+2026-10-04. Pip is the default commander and Bulwark the alternate, at the owner's word: "yes make Pip
+the default, keep Bulwark as alternate" (Decided). The Style Lab opens on Pip (commander), loaded with
+the other models so his first frame and its colour audit need no swap; `?commander=bulwark` opens
+Bulwark without loading Pip, an unknown name falls back to Pip and a manifest without Pip to Bulwark,
+each named in the banner. The Asset World's commanders' zone leads with Pip, idle, run and face on the
+level clearing beside the Husk, and Bulwark follows past it, each row under a placard naming its
+commander; Pip's zone of his own is gone, his attack member comes with his attack clip, and Play Pip
+(prototype) spawns in front of his row, 2.41 m clear of every member's reach (Asset World layout). The
+colour audit at the locked defaults, frozen at 1920 x 1080 on the RTX 4080 laptop, reads 1.927, 1.942
+and 1.945 with Pip at the hero camera on the high, medium and low tiers and 1.963, 1.980 and 1.982 at
+the close-up, strategic and horizon cameras on high, and with Bulwark the lock's 1.926, 1.942 and 1.946
+and 1.974, 1.980 and 1.982 (gate 1.5); the mutation proof rejects every hue-rotated copy. The evidence
+frames now show Pip under their old names (docs/evidence/m0/style-{hero,strategic,closeup,horizon}-{high,low}.png)
+and Bulwark under `-bulwark` names, each set taken by the method that took the lock's: the high tier
+unfrozen at 1920 x 1080 on the GPU inside an idle stretch of the commander's cycle with the lab UI
+hidden, the low tier as the browser test takes it, under SwiftShader at 1280 x 720 with the UI. They show
+that this branch's renderer has not moved the locked look for Bulwark. At the high tier his retakes
+differ from the lock's frames on 0.005, 0.018, 0.010 and 0.351 percent of the pixels by more than 2 of
+255 at the hero, strategic, close-up and horizon cameras, all on the walking Husk, the turret heads
+tracking it and the commander's idle, against 0.044, 0.093, 0.032 and 0.448 percent between two retakes,
+and on at most 0.003 percent outside that motion. The lock's low-tier frames landed at later scene times
+than the retakes, so a retake differs on 3.7 to 21.6 percent of the frame, on the same moving actors and
+the panel's new commander rows; at the matching scene time the canvas strip between the board and the
+panel differs on 0.0011, 0.025, 0 and 0.0002 percent, the four cameras in the same order. Next is
+unchanged: Pip's phase B (his attack clip and a face export that fixes the seams), alongside M1 and M2.
