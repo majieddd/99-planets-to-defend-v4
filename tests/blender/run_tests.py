@@ -236,6 +236,51 @@ def test_morph_export_is_opt_in(tmp):
         raise AssertionError('a triangulated mesh lost its shape keys and the export passed')
 
 
+def test_charforge_settings_refuse_unknown_keys(tmp):
+    from lib import charforge
+    # A known key merges one level deep, keeping its siblings.
+    s = charforge.settings({'reshape': {'chin_source_z': 1.258}})
+    assert s['reshape'] == {**charforge.DEFAULTS['reshape'], 'chin_source_z': 1.258}, s['reshape']
+    # A misspelt key, at the top, one level down or inside a nested table, stops the recipe with its dotted name.
+    for overrides, named in (({'clipz': ('idle',)}, 'clipz'), ({'reshape': {'head_factr': 1.1}}, 'reshape.head_factr'),
+                             ({'garments': {'contrast': {'hoody': 0.7}}}, 'garments.contrast.hoody'),
+                             ({'commander_pose': {charforge.P + 'RightArmm': (0, 0, -1)}}, f'commander_pose.{charforge.P}RightArmm')):
+        try:
+            charforge.settings(overrides)
+        except ValueError as error:
+            assert named in str(error), error
+        else:
+            raise AssertionError(f'settings accepted the unknown key {named}')
+    # An entry whose default is not a table is taken whole: the fist's own keys are its own.
+    assert charforge.settings({'fist': {'finger_curl_deg': {'1': 60}}})['fist'] == {'finger_curl_deg': {'1': 60}}
+
+
+def test_charforge_import_names_what_the_source_lacks(tmp):
+    from lib import charforge
+    arm = rig.humanoid('rig')
+    head = geo.box('head', (0.2, 0.2, 0.24), location=(0, 0, 1.6))
+    body = rig.bind_rigid(arm, [(head, 'head')], 'body')
+    body.parent = arm
+    bare = export.export_glb([arm, body], tmp / 'bare.glb')
+    # No shape keys: the error names the file and the missing morphs, where it was an AttributeError on None.
+    try:
+        charforge.import_source(bare)
+    except ValueError as error:
+        assert str(bare) in str(error) and 'no shape keys' in str(error), error
+    else:
+        raise AssertionError('a source without shape keys imported')
+    body.shape_key_add(name='Basis', from_mix=False)
+    body.shape_key_add(name='blink_L', from_mix=False).data[0].co.z += 0.01
+    faced = export.export_glb([arm, body], tmp / 'faced.glb', morphs=True)
+    # Shape keys but no albedo: the error names the file and the image, where the build failed later on None.
+    try:
+        charforge.import_source(faced)
+    except ValueError as error:
+        assert str(faced) in str(error) and 'no albedo image' in str(error), error
+    else:
+        raise AssertionError('a source without an albedo image imported')
+
+
 def _flat(value, shape=(4, 4)):
     return np.full(shape, value, np.float64)
 

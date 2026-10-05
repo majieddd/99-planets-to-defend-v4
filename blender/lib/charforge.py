@@ -76,9 +76,29 @@ DEFAULTS = {
 }
 
 
+def _unknown_keys(value, default, path=''):
+    """The dotted paths of the keys in `value` that `default` lacks, at every depth where both are dicts. An entry whose
+    default is not a dict (such as 'fist', None by default) is taken whole, so only its own key is checked."""
+    if not (isinstance(value, dict) and isinstance(default, dict)):
+        return []
+    out = []
+    for key, sub in value.items():
+        where = f'{path}.{key}' if path else str(key)
+        if key in default:
+            out.extend(_unknown_keys(sub, default[key], where))
+        else:
+            out.append(where)
+    return out
+
+
 def settings(overrides=None):
     """DEFAULTS with the recipe's overrides merged in, one level of nesting deep (a nested dict replaces keys, not the
-    whole entry), so a recipe states only what differs for its character."""
+    whole entry), so a recipe states only what differs for its character. A key DEFAULTS does not have, at the top or
+    nested in a dict entry (commander_pose's bone names included), raises a ValueError naming it: an unknown key used to
+    be merged in silently and never read, so a misspelt override left the build on the default it meant to change."""
+    unknown = _unknown_keys(overrides or {}, DEFAULTS)
+    if unknown:
+        raise ValueError(f'charforge settings: unknown key(s) {", ".join(unknown)}; a recipe may override only keys DEFAULTS has')
     out = copy.deepcopy(DEFAULTS)
     for key, value in (overrides or {}).items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
@@ -422,26 +442,37 @@ def ao_tree(samples=16, distance=0.04):
 def import_source(path):
     """Imports the CharForge GLB at rest: no action playing, every pose bone and shape key zeroed. The importer also
     brings a stray unit icosphere with no parent; it is deleted. Returns the armature, the body, the source albedo
-    image and the source's actions by name (kept with a fake user so they survive until export)."""
+    image and the source's actions by name (kept with a fake user so they survive until export).
+
+    A source without an armature, a skinned mesh, shape keys or an albedo image raises a ValueError naming the file and
+    what it lacks; each used to surface as a bare StopIteration or AttributeError from the line that first reached for
+    it, which named neither."""
     before, before_actions = set(bpy.data.objects), set(bpy.data.actions)
     bpy.ops.import_scene.gltf(filepath=str(path))
     new = [o for o in bpy.data.objects if o not in before]
     for o in [o for o in new if o.type == 'MESH' and o.parent is None]:
         new.remove(o)
         bpy.data.objects.remove(o)
-    arm = next(o for o in new if o.type == 'ARMATURE')
-    body = next(o for o in new if o.type == 'MESH')
+    arm = next((o for o in new if o.type == 'ARMATURE'), None)
+    body = next((o for o in new if o.type == 'MESH'), None)
+    if arm is None or body is None:
+        lacking = ' and '.join(what for what, ob in (('an armature', arm), ('a mesh parented to it', body)) if ob is None)
+        raise ValueError(f'CharForge source {path}: has no {lacking}')
+    if body.data.shape_keys is None:
+        raise ValueError(f'CharForge source {path}: mesh {body.name!r} has no shape keys (the face morphs blink_L, blink_R, '
+                         'smile, brows_up and pucker are required)')
+    material = body.data.materials[0] if len(body.data.materials) else None
+    nodes = material.node_tree.nodes if material is not None and material.node_tree is not None else []
+    image = next((node.image for node in nodes if node.type == 'TEX_IMAGE' and node.image is not None), None)
+    if image is None:
+        raise ValueError(f'CharForge source {path}: mesh {body.name!r} has no albedo image (no image texture node on its '
+                         f'first material, {material.name if material else None!r})')
     arm.animation_data_clear()
     for pb in arm.pose.bones:
         pb.matrix_basis = Matrix.Identity(4)
     arm.data.pose_position = 'REST'
     for kb in body.data.shape_keys.key_blocks:
         kb.value = 0.0
-    image = None
-    for node in body.data.materials[0].node_tree.nodes:
-        if node.type == 'TEX_IMAGE' and node.image is not None:
-            image = node.image
-            break
     actions = {a.name: a for a in bpy.data.actions if a not in before_actions}
     for a in actions.values():
         a.use_fake_user = True
