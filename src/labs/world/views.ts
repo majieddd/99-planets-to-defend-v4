@@ -40,10 +40,11 @@ export const FAMILY_LABEL_ROOM_PX = 56;
  * overlapped (the Worldheart's placard over the Husk's "Attack" and Pip's "Idle", "Bolt Sentinel" over "Bush", "Nest"
  * over "Rock B", the Husk's "Walk" over his "Attack", Pip's "Face" over his "Attack" and the hearts' "Stage 10" over
  * "Stage 7 (slider)"), at 1366 x 768 five, at 1440 x 900 and 1600 x 900 one ("Stage 10" over "Stage 7 (slider)" by
- * 0.6 px), and at 1680 x 1050, 1920 x 1080 and 2560 x 1440 none. The 16:9 screen of the same width, 1680 x 945, has
- * none either (2026-10-05, as 1760 x 990), so the threshold holds at both shapes. It was 1600 px, between the 1366 px
- * that overlapped and the 1920 px that did not on the layout before; 1680 is the narrowest screen measured without an
- * overlap now.
+ * 0.6 px), and at 1680 x 1050, 1920 x 1080 and 2560 x 1440 none. On 2026-10-05 the 16:9 screen of the same width,
+ * 1680 x 945, was measured directly and has none either, so the threshold holds at both shapes; 1760 x 990, a 16:9
+ * screen between it and 1920 x 1080, has none as well, so the shorter shape stays clear above the threshold and not
+ * only at it. It was 1600 px, between the 1366 px that overlapped and the 1920 px that did not on the layout before;
+ * 1680 is the narrowest screen measured without an overlap now.
  */
 export const OVERVIEW_MEMBER_LABELS_MIN_WIDTH = 1680;
 /**

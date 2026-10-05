@@ -1070,8 +1070,8 @@ names the locked set. A dials link names only the dials that differ from the def
 before the lock opens every dial it does not name at its locked value: B3's own link now opens the
 locked look with B3's edgeStrength of 1 and litSaturation of 0.87. The colour audit at the locked
 defaults, frozen at 1920 x 1080 on the RTX 4080 laptop (gate 1.5), with Pip (commander), the labs'
-default commander since 2026-10-04: 1.927, 1.942 and 1.945 at the hero camera on the high, medium and
-low tiers, and 1.963, 1.980 and 1.982 at the close-up, strategic and horizon cameras on high. With
+default commander since 2026-10-04: 1.927, 1.942 and 1.946 at the hero camera on the high, medium and
+low tiers, and 1.961, 1.980 and 1.982 at the close-up, strategic and horizon cameras on high. With
 Bulwark, the commander the look was locked on (`?commander=bulwark`): 1.926, 1.942 and 1.946, and 1.974,
 1.980 and 1.982, the lock's figures to the digit. The mutation proof rejects the hue-rotated copy of all
 twelve frames. Where a row's figures name Bulwark, they were measured with him.
