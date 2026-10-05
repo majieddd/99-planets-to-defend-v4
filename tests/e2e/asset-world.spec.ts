@@ -161,11 +161,14 @@ type Recorder = { playSamples: PlayReading[]; playStop: boolean; playMark: numbe
  * `pressF`, F's keydown and keyup are dispatched in the same call, right after it, so the swing starts from the state
  * recorded: pressed from the test once the recorder had started, F came a round trip later, while he ran on under the
  * held key toward whatever stood ahead. With `pressF` set to a speed, the recorder waits in the page for the first frame
- * at that ground speed or faster, takes it as the first reading and presses F there, so how far he runs before the hit
- * does not hang on how long the test's round trips take.
+ * at that ground speed or faster, takes it as the first reading and presses F there, and `hold` names keys it presses
+ * down in the same call (releaseKeys lets them go), so how far he runs before the hit does not hang on how long the
+ * test's round trips take: with the keys held from the test, a busy run let him run on for a round trip before the
+ * recorder started, 0.5 m further than an idle one (2.26 m of clearance at the press against 2.75 m).
  */
-async function startRecording(page: Page, pressF: boolean | number = false): Promise<void> {
-  await page.evaluate((press) => {
+async function startRecording(page: Page, pressF: boolean | number = false, hold: readonly string[] = []): Promise<void> {
+  await page.evaluate(([press, keys]) => {
+    for (const code of keys) window.dispatchEvent(new KeyboardEvent('keydown', { code }));
     const recorder = window as unknown as Recorder;
     const read = () => (window.__P99__!['play'] as () => PlayReading)();
     const swing = (): void => {
@@ -188,7 +191,14 @@ async function startRecording(page: Page, pressF: boolean | number = false): Pro
     };
     requestAnimationFrame(tick);
     if (press === true) swing();
-  }, pressF);
+  }, [pressF, hold] as const);
+}
+
+/** Lets go of keys a recorder pressed down in the page (startRecording's `hold`). */
+async function releaseKeys(page: Page, keys: readonly string[]): Promise<void> {
+  await page.evaluate((codes) => {
+    for (const code of codes) window.dispatchEvent(new KeyboardEvent('keyup', { code }));
+  }, keys);
 }
 
 /** Stops the recorder and returns every reading it took. */
@@ -588,17 +598,14 @@ test.describe('the Asset World', () => {
       // ahead of the spawn on the tower row (NEST_SPOT), whose reach he met at the hit's end once the hit kept him moving
       // (clearance 0.00 m, 2026-10-05). The hit's checks on his speed need open ground, so his clearance is held above 0
       // through it.
-      // F goes on the first frame he reaches the walk's pace, pressed from the page: from the spawn the room ahead is
-      // fixed, and with F pressed from the test after a wait for the run, a run busy with other tests let him run on
-      // for round trips first and come out of the hit 0.33 m from a member's reach (2026-10-05).
-      await page.keyboard.down('KeyS');
-      await page.keyboard.down('KeyD');
-      await startRecording(page, PLAY_WALK_SPEED - 1e-9);
+      // S and D go down and F goes on the first frame he reaches the walk's pace, all from the page: from the spawn the
+      // room ahead is fixed, and with F pressed from the test after a wait for the run, a run busy with other tests let
+      // him run on for round trips first and come out of the hit 0.33 m from a member's reach (2026-10-05).
+      await startRecording(page, PLAY_WALK_SPEED - 1e-9, ['KeyS', 'KeyD']);
       // Until the hit has come and gone and he runs on under the held key.
       await waitForSwing(page, true);
       const samples = await stopRecording(page);
-      await page.keyboard.up('KeyS');
-      await page.keyboard.up('KeyD');
+      await releaseKeys(page, ['KeyS', 'KeyD']);
       const before = samples[0]!;
       const first = samples.findIndex((sample) => sample.attacking);
       const last = samples.length - 1 - [...samples].reverse().findIndex((sample) => sample.attacking);
