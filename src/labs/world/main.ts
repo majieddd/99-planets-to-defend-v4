@@ -53,9 +53,9 @@ const PLAY_PIP = 'pip';
  * and how presses chain the combo (combo.ts).
  */
 const PLAY_HINT_KEYS =
-  'Play Pip (prototype): WASD or the arrow keys move him, Shift sprints; F or a click swings his sword, and pressing again during a swing chains up to three hits, the third a planted finisher; drag to orbit, wheel to zoom.';
+  'Play Pip (prototype): WASD or the arrow keys move him, Shift sprints; F or a click swings his sword, and pressing again mid-swing chains up to three hits, the third planted; drag to orbit, wheel to zoom.';
 const PLAY_HINT_TOUCH =
-  'Play Pip (prototype): the pad moves him, pushed to its rim he sprints; Attack swings his sword, and tapping it again during a swing chains up to three hits; drag elsewhere to orbit, pinch to zoom.';
+  'Play Pip (prototype): the pad moves him, pushed to its rim he sprints; Attack swings his sword, and tapping again mid-swing chains up to three hits; drag elsewhere to orbit, pinch to zoom.';
 
 // start() fills these in, so a failure at any point can stop the loop and word the banner for when it happened.
 let activeRenderer: WebGLRenderer | null = null;
