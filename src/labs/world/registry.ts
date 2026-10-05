@@ -182,8 +182,11 @@ const huskRow = characterRow('husk', 'xeno', HUSK_ROW_START, null, [
  * Pip (commander), the default commander, leads the commanders' zone, first in its order and on the level clearing next
  * to the Husk: idle and running, each blinking on its own, and a third idle whose face cycles the held-expression demo.
  * His attack clip is pending (tools/assets/budgets.json, phase B), so it has no member: when the clip ships, the coverage
- * check names it until one more slot here loops it, and Bulwark's row, which starts from the end of this one, moves on
- * by itself. The two commanders share a zone, so each row's placard names its commander ("Pip (commander)", the name
+ * check names it until one more slot here loops it. What is computed from the layout then follows it: Bulwark's row,
+ * which starts from the end of this one, steps 2.6 m further out, and WORLD_REACH with the sun's box, the views' fits
+ * and the label anchors move with it. What was measured does not: the label width thresholds (views.ts), the shadow
+ * texel and reach figures quoted in comments and the blueprint, and Bulwark's ground contact readings on the slope past
+ * the clearing, which the Task list has re-measured once the clip ships. The two commanders share a zone, so each row's placard names its commander ("Pip (commander)", the name
  * the labs give him until the owner names the character) and the member labels stay as short as the Husk's: a label
  * that named him too, "Pip (commander) idle", overlapped its neighbours by 68 px in the 1920 x 1080 overview, and still
  * by 39 px at 2560 x 1440. The member names stay as they were (`pip_face` is the face member's address).
@@ -201,7 +204,10 @@ const bulwarkRow = characterRow('bulwark', 'commanders', nextRowStart(pipRow, CO
   ['bulwark_attack', 'Attack', 'attack', false],
 ]);
 
-/** Where Pip's row and Bulwark's begin along s, in metres: 2.8 m, on the level clearing, and 13 m, past it. */
+/**
+ * Where Pip's row and Bulwark's begin along s, in metres: 2.8 m, on the level clearing, and, while Pip has three
+ * members, 13 m, past it, since Bulwark's row follows the end of Pip's.
+ */
 export const PIP_ROW_START = pipRow[0]!.s;
 export const BULWARK_ROW_START = bulwarkRow[0]!.s;
 
@@ -344,6 +350,37 @@ export function coverageGaps(
     else if (looping) gaps.push(`CLIPS_NOT_SHOWN gives a reason for "${key}", but member "${looping.name}" loops that clip; remove the reason (${where})`);
   }
   return gaps;
+}
+
+/**
+ * The members a build can show, read from what loaded: each one whose model loaded and whose clip, if it loops one, the
+ * loaded model carries (`loaded` maps each loaded model's entry to its clip names). The page builds only these, since a
+ * member whose clip is missing would stop it with "has no clip". The coverage check reads the manifest instead, so the
+ * two can disagree, for instance on a GLB rebuilt without a clip the manifest still lists: such a member used to drop
+ * out of the world without a word. `unnamed` has one sentence for every member left out that none of `gaps`
+ * (coverageGaps' sentences) already names, for the console and the banner.
+ */
+export function showableMembers(
+  loaded: ReadonlyMap<string, readonly string[]>,
+  gaps: readonly string[],
+  members: readonly WorldMember[] = MEMBERS,
+): { shown: WorldMember[]; unnamed: string[] } {
+  const shown: WorldMember[] = [];
+  const unnamed: string[] = [];
+  for (const m of members) {
+    const clips = loaded.get(m.entry);
+    if (clips && (m.clip === null || clips.includes(m.clip))) {
+      shown.push(m);
+      continue;
+    }
+    if (gaps.some((gap) => gap.includes(`member "${m.name}"`))) continue;
+    unnamed.push(
+      clips
+        ? `member "${m.name}" loops a clip "${m.clip}" that the loaded "${m.entry}" model does not carry, though the manifest lists it; rebuild the assets (npm run assets)`
+        : `member "${m.name}" is left out because its model "${m.entry}" did not load`,
+    );
+  }
+  return { shown, unnamed };
 }
 
 const FACING = (WORLD_FACING_DEG * Math.PI) / 180;

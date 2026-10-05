@@ -9,9 +9,10 @@ import { WORLD_REACH } from './registry';
  * The Asset World's sun, which the page moves with the sun dials as the Style Lab moves its own: the elevation, colour
  * and intensity come from the dials, whose locked defaults override the theme's light, and the theme keeps the azimuth,
  * so both pages draw the same key from the same dials. It keeps the Style Lab's distance, depth range, biases and
- * single-tap filter (labs/style/main.ts, Render constants), whose reasons hold here too: at 90 m out every member, all
- * within 24.2 m of the centre, lies well past the 1 m near plane, and the patch's farthest corner, 96.9 m from the centre,
- * inside the 220 m far plane. Only the box's width follows this page's layout.
+ * single-tap filter (labs/style/main.ts, Render constants), whose reasons hold here too: at 90 m out every member, each
+ * point of it within 25.2 m of the centre (WORLD_SHADOW_HALF_WIDTH, the furthest root plus the caster margin), lies well
+ * past the 1 m near plane, and the patch's farthest corner, 96.9 m from the centre, inside the 220 m far plane. Only the
+ * box's width follows this page's layout.
  */
 export const WORLD_SUN_DISTANCE = 90;
 export const WORLD_SHADOW_NEAR = 1;
@@ -26,10 +27,11 @@ export const WORLD_SHADOW_NORMAL_BIAS = 0.03;
  */
 export const WORLD_CASTER_MARGIN = 7;
 /**
- * Half the side of the sun's square shadow box: the furthest root, Bulwark's attack member 17.2 m out (the kit arc stands at
- * 17 m), plus the caster margin, so 24.2 m, and every member casts at every elevation the dial allows. Narrower than the
- * Style Lab's 50 m, which holds a scatter ring 48 m out, so the high tier's 2048 map has 2.4 cm texels here against
- * 4.9 cm there.
+ * Half the side of the sun's square shadow box: the furthest root, Bulwark's attack member 18.2 m out (the kit arc stands
+ * at 17 m), plus the caster margin, so 25.2 m, and every member casts at every elevation the dial allows. Narrower than
+ * the Style Lab's 50 m, which holds a scatter ring 48 m out, so the high tier's 2048 map has texels of about 2.5 cm here
+ * (2.46 cm) against 4.9 cm there. The width follows the layout through WORLD_REACH; this comment's figures do not, and
+ * move with Bulwark's row when Pip's attack member joins his (Task list).
  */
 export const WORLD_SHADOW_HALF_WIDTH = WORLD_REACH + WORLD_CASTER_MARGIN;
 

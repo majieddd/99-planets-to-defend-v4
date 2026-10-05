@@ -1,6 +1,6 @@
 /**
  * The movement maths of the Asset World's "Play Pip (prototype)" mode, kept apart from three and the page so the unit
- * test drives it directly. This is a lab prototype for walking Pip-A around the world, not the M1 commander controller
+ * test drives it directly. This is a lab prototype for walking Pip around the world, not the M1 commander controller
  * (Mechanics, Commander movement), which belongs to the simulation and will replace it.
  *
  * Positions are points on the plane tangent at the pole, as registry.ts's toTangent gives them and the patch's surfaceAt
@@ -21,9 +21,10 @@ export const PLAY_BODY_RADIUS = 0.35;
 /** The least reach a member keeps around its root, in metres, so a flower or a grass tuft is still walked around. */
 export const PLAY_MIN_MEMBER_REACH = 0.2;
 /**
- * How far from the pole he may go on the tangent plane, in metres: inside the world sun's shadow box, 24.2 m to each
- * side of the pole across the sun's bearing (WORLD_SHADOW_HALF_WIDTH), less his shoulders, so he never runs out of his
- * own shadow, and 4 m past the kit arc's trees.
+ * How far from the pole he may go on the tangent plane, in metres: inside the world sun's shadow box, 25.2 m to each
+ * side of the pole across the sun's bearing (WORLD_SHADOW_HALF_WIDTH), with his shoulders and 1.85 m to spare, so he
+ * never runs out of his own shadow, and 4 m past the kit arc's trees. It was set when the box reached 24.2 m, and a
+ * wider box only adds to the spare.
  */
 export const PLAY_AREA_RADIUS = 23;
 /** The ground speed at which the run clip has taken over from the idle completely, in metres a second. */

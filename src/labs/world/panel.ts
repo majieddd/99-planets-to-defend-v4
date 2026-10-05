@@ -2,7 +2,7 @@ import GUI, { type Controller } from 'lil-gui';
 import type { TierName } from '../../render/quality';
 import { NARROW_SCREEN } from '../style/referenceBoard';
 import { HEART_STAGES } from './layout';
-import { MEMBERS, ZONES } from './registry';
+import { MEMBERS, ZONES, type WorldMember } from './registry';
 import { CHARACTER_FAMILIES, CHARACTERS, OVERVIEW } from './views';
 
 const TITLE = 'Asset World';
@@ -42,11 +42,21 @@ export function viewOptions(): Record<string, string> {
   return options;
 }
 
-/** The member dropdown for a view: the whole view first, then each member it frames, by label and name. */
+/**
+ * A member's name in the member dropdown: its label and its address, with the character first for a member that shows
+ * one, "Pip (commander) idle (pip_idle)" beside "Bulwark idle (bulwark_idle)". The list used to read "Idle (pip_idle)"
+ * beside "Idle (bulwark_idle)", so the panel never named Pip (commander) and only the addresses told the two apart.
+ */
+export function memberOptionText(m: WorldMember): string {
+  if (!m.label) return m.name;
+  return m.character ? `${m.character} ${m.label.toLowerCase()} (${m.name})` : `${m.label} (${m.name})`;
+}
+
+/** The member dropdown for a view: the whole view first, then each member it frames, by memberOptionText. */
 export function memberOptions(view: string): Record<string, string> {
   const options: Record<string, string> = { 'Whole view': '' };
   const inView = MEMBERS.filter((m) => view === OVERVIEW || (view === CHARACTERS ? CHARACTER_FAMILIES.includes(m.zone) : m.zone === view));
-  for (const m of inView) options[m.label ? `${m.label} (${m.name})` : m.name] = m.name;
+  for (const m of inView) options[memberOptionText(m)] = m.name;
   return options;
 }
 

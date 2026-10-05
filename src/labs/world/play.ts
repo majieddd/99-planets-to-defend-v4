@@ -59,7 +59,7 @@ export interface PlayReading {
 }
 
 export interface PipPlay {
-  /** False when the page has no Pip-A to play (a build without the assets). */
+  /** False when the page has no Pip to play (a build without the assets). */
   readonly available: boolean;
   readonly active: boolean;
   enter(camera: PerspectiveCamera, controls: OrbitControls, members: readonly PlacedMember[], seed: number, frozen: boolean): void;
@@ -113,7 +113,7 @@ function measureRunLoop(template: Object3D, clip: AnimationClip): PlayReading['s
 }
 
 /**
- * The play prototype's Pip-A: an instance of his rig of its own, not one of the placed members, which the keys or the
+ * The play prototype's Pip: an instance of his rig of its own, not one of the placed members, which the keys or the
  * thumb pad walk about the patch while the camera follows. Call it before buildAssetWorld: it keeps a copy of his rig in
  * the bind pose, before the world's mixers pose the loaded one, because the face driver reads the jaw's axis from it.
  */

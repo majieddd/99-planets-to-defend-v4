@@ -22,7 +22,7 @@ import { buildAssetWorld, type AssetWorld } from './layout';
 import { createWorldPanel, type WorldPanelState } from './panel';
 import { createPipPlay } from './play';
 import { createPlayInput } from './playInput';
-import { coverageGaps, MEMBERS } from './registry';
+import { coverageGaps, MEMBERS, showableMembers } from './registry';
 import { createWorldSun } from './sun';
 import {
   frameView,
@@ -45,7 +45,7 @@ const PAGE = 'Asset World';
 const TURNTABLE_SECONDS = 40;
 /** How long a view chosen in the panel takes to arrive, in seconds; reduced motion and the test handle jump at once. */
 const TRANSITION_SECONDS = 0.8;
-/** The one value `?play=` takes: Pip-A under the keys (the play prototype). */
+/** The one value `?play=` takes: Pip under the keys (the play prototype). */
 const PLAY_PIP = 'pip';
 /** The play hint's words, mechanics first: the keys on a keyboard, the thumb pad on a touch screen. */
 const PLAY_HINT_KEYS = 'Play Pip (prototype): WASD or the arrow keys move him, Shift sprints, drag to orbit, wheel to zoom.';
@@ -183,18 +183,20 @@ async function start(): Promise<void> {
   if (gaps.length) showBanner(`Not in the Asset World yet: ${gaps.join('; ')}`);
   const assets = manifest ? await loadEntries(manifest, ctx) : new Map<string, LoadedAsset>();
   if (!manifest) showBanner('The Asset World needs the built assets (npm run assets); none were found.');
-  // Before the world is built: the play prototype keeps a copy of Pip-A's rig in the bind pose, which the world's mixers
+  // Before the world is built: the play prototype keeps a copy of Pip's rig in the bind pose, which the world's mixers
   // would otherwise have posed by the time it is copied. He goes in the scene, not the world's root, so the world's
   // members, bounds and labels stay exactly what they are with play off.
   const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS);
-  // A member whose model or clip this build lacks (the coverage gaps above name it) is left out rather than built, where
-  // a member put in ahead of a pending clip would stop the page with "has no clip".
-  const world: AssetWorld = buildAssetWorld(
-    patch,
-    assets,
-    ctx,
-    MEMBERS.filter((m) => assets.has(m.entry) && (m.clip === null || assets.get(m.entry)!.animations.some((clip) => clip.name === m.clip))),
-  );
+  // A member whose model or clip this build lacks is left out rather than built, where a member put in ahead of a pending
+  // clip would stop the page with "has no clip". The coverage gaps above, read from the manifest, name most such members;
+  // one the loaded GLBs drop that the manifest does not (a GLB rebuilt without a clip the manifest lists) is named here.
+  const loadedClips = new Map([...assets].map(([name, asset]) => [name, asset.animations.map((clip) => clip.name)] as const));
+  const { shown, unnamed } = showableMembers(loadedClips, gaps);
+  if (manifest) {
+    for (const line of unnamed) console.warn(`${PAGE}: ${line}`);
+    if (unnamed.length) showBanner(`Left out of the Asset World: ${unnamed.join('; ')}`);
+  }
+  const world: AssetWorld = buildAssetWorld(patch, assets, ctx, shown);
   scene.add(world.root);
 
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -257,7 +259,7 @@ async function start(): Promise<void> {
    * assets did not load, the registry's overview, so the camera never stays at the origin inside the ground.
    */
   function applyFocus(animate: boolean): void {
-    // While Pip-A plays the camera follows him: a resize or the slider heart must not glide it off to a view.
+    // While Pip plays the camera follows him: a resize or the slider heart must not glide it off to a view.
     if (pipPlay.active) return;
     const lens = { fov: camera.fov, aspect: camera.aspect, heightPx };
     const pose = frameView(current(), world.members, specs, { labels: state.labels, widthPx }, lens) ?? registryOverview(patch, lens);
@@ -293,7 +295,7 @@ async function start(): Promise<void> {
     else return false;
     return true;
   }
-  // The play prototype: Pip-A out on the patch under the keys or the thumb pad, the camera following him.
+  // The play prototype: Pip out on the patch under the keys or the thumb pad, the camera following him.
   const playHint = document.getElementById('play-hint') as HTMLElement;
   const pad = document.getElementById('pad') as HTMLElement;
   const input = createPlayInput(pad, pad.querySelector('.pad-knob') as HTMLElement);
@@ -308,7 +310,7 @@ async function start(): Promise<void> {
   coarse.addEventListener('change', syncPlayUi);
   // The turntable as the viewer had it before he came out: play turns it off, and leaving play used to leave it off.
   let turntableBeforePlay = state.turntable;
-  /** Puts Pip-A out to play or brings him in, and is false when the page has no Pip-A to play. */
+  /** Puts Pip out to play or brings him in, and is false when the page has no Pip to play. */
   function setPlay(on: boolean): boolean {
     if (on && !pipPlay.available) {
       state.play = false;
@@ -517,7 +519,7 @@ async function start(): Promise<void> {
       world.setFrozen(on);
       pipPlay.setFrozen(on);
     },
-    // The play prototype: puts Pip-A out or brings him in (false when the page has none), and reads where he is.
+    // The play prototype: puts Pip out or brings him in (false when the page has none), and reads where he is.
     setPlay: (on: boolean) => setPlay(on),
     play: () => pipPlay.reading(),
     // A face pose held on a member for an evidence frame, or null to hand it back to its blink and demo.
@@ -550,10 +552,10 @@ async function start(): Promise<void> {
         controls.target.lerpVectors(transition.from.target, transition.to.target, eased);
         if (t >= 1) transition = null;
       }
-      // Pip-A moves on the frame's own step, which the freeze stops, and not on the animation speed dial, which is the
+      // Pip moves on the frame's own step, which the freeze stops, and not on the animation speed dial, which is the
       // world's clips'; the camera then follows him before the controls apply a drag or the wheel.
       if (pipPlay.active) pipPlay.update(dt, input.read(), camera, controls);
-      // The turntable turns around the open view, and waits while a view glides in or Pip-A plays.
+      // The turntable turns around the open view, and waits while a view glides in or Pip plays.
       controls.autoRotate = state.turntable && transition === null && !pipPlay.active;
       controls.update(frozen ? 0 : Math.min(interval / 1000, 1 / 20));
       sky.follow(camera);

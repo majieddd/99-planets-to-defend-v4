@@ -38,14 +38,19 @@ export const FAMILY_LABEL_ROOM_PX = 56;
  * alone and a family's view names its members. Measured on the GPU with the commanders' placards: at 1280 x 720 six pairs
  * of labels overlapped (the Worldheart's placard over the Husk's "Attack" and Pip's "Idle", "Bolt Sentinel" over
  * "Bush", "Nest" over "Rock B", the hearts' "Stage 10" over "Stage 7 (slider)", "Walk" over "Attack") and at 1366 x 768
- * five, at 1920 x 1080 and 2560 x 1440 none. It was 1280 px.
+ * five, at 1920 x 1080 and 2560 x 1440 none. It was 1280 px. These overlaps were measured after Pip became the default
+ * commander, on that layout; whether the same pairs overlapped at 1280 px before it was not measured. The implementer
+ * who measured them reported them as unrelated to the commander change: five of the six pairs involve no commander, and
+ * Pip's "Idle" stands where Bulwark's "Idle" stood. The threshold is re-measured when Pip's attack member joins his row
+ * (Task list).
  */
 export const OVERVIEW_MEMBER_LABELS_MIN_WIDTH = 1600;
 /**
  * The characters' view names its members only on a screen at least this wide, in CSS pixels; narrower, it names the
  * Husk's and the commanders' placards alone. It frames the whole character row, 24.6 m from the idle Husk to Bulwark's
  * attack: at 375 x 667 and 390 x 844 six pairs of member labels overlapped, at 667 x 375 and every larger size measured
- * none.
+ * none. The row's 24.6 m is today's, with Pip's three members; his attack member stretches it to 27.2 m, so the
+ * threshold is re-measured then (Task list).
  */
 export const CHARACTERS_MEMBER_LABELS_MIN_WIDTH = 640;
 /**
