@@ -11,34 +11,45 @@ import { ENERGY_OUTPUT, energyDefines, PLAYER_ENERGY, useEnergyBlending } from '
  * carries no edge ink, and it runs on the frame's clock, so it flies through the hit-stop.
  */
 
-/** The sparks a light hit and the finisher throw. */
-export const SPARKS_LIGHT = 12;
-export const SPARKS_FINISHER = 20;
-/** The pool: three finisher bursts' worth, more than a chain can have alive at once (a burst lives under 0.3 s). */
-export const SPARK_POOL = 64;
+/**
+ * The sparks a light hit and the finisher throw. Phase B2 made the burst bigger and more cyan: the reviewer read the
+ * first (12 and 20 sparks, mostly white, a 0.4 m flash) as readable but small, about 25 to 30 px in an 800 px frame.
+ */
+export const SPARKS_LIGHT = 18;
+export const SPARKS_FINISHER = 30;
+/** The pool: three finisher bursts' worth, more than a chain can have alive at once (a burst lives under 0.4 s). */
+export const SPARK_POOL = 96;
 /** Flashes alive at once. */
 export const FLASH_POOL = 3;
 /** A spark's speed off the contact, in metres a second, and the finisher's share more. */
-export const SPARK_SPEED_MIN = 2.5;
-export const SPARK_SPEED_MAX = 6;
+export const SPARK_SPEED_MIN = 3;
+export const SPARK_SPEED_MAX = 7.5;
 export const SPARK_FINISHER_SPEED = 1.25;
-/** A spark's life, in seconds, drawn evenly between these. */
-export const SPARK_LIFE_MIN = 0.15;
-export const SPARK_LIFE_MAX = 0.28;
+/** A spark's life, in seconds, drawn evenly between these: still brief, gone within 0.36 s. */
+export const SPARK_LIFE_MIN = 0.2;
+export const SPARK_LIFE_MAX = 0.36;
 /** The pull down on a spark, in metres a second squared, and the share of its speed it loses each second. */
 export const SPARK_GRAVITY = 9.8;
 export const SPARK_DRAG = 3;
 /** A streak trails its spark by this many seconds of its own flight, and is this wide, in metres. */
-export const SPARK_STREAK_SECONDS = 0.045;
-export const SPARK_WIDTH_M = 0.03;
-/** The share of the sparks that burn white rather than cyan. */
-export const SPARK_WHITE_SHARE = 0.35;
+export const SPARK_STREAK_SECONDS = 0.07;
+export const SPARK_WIDTH_M = 0.045;
+/** The share of the sparks that burn white rather than cyan: a few, so the burst reads as the player's cyan. */
+export const SPARK_WHITE_SHARE = 0.12;
 /** The flash: its width at the start on a light hit and on the finisher, in metres, and its life, in seconds. */
-export const FLASH_LIGHT_M = 0.4;
-export const FLASH_FINISHER_M = 0.6;
-export const FLASH_SECONDS = 0.09;
-/** The emissive key at a spark's head and at the flash's heart, as the trail's core is keyed (over the bloom's 1.25). */
-export const SPARK_KEY = 2.8;
+export const FLASH_LIGHT_M = 0.7;
+export const FLASH_FINISHER_M = 1;
+export const FLASH_SECONDS = 0.11;
+/**
+ * The flash's white heart, as a share of its radius, and how white it gets there: a small hot centre in a cyan disc,
+ * where it was white from its middle out to its rim.
+ */
+export const FLASH_WHITE_RADIUS = 0.35;
+export const FLASH_WHITE = 0.7;
+/** How far toward the eye from the contact the flash is drawn, in metres (createSparks says why). */
+export const FLASH_TOWARD_EYE_M = 0.25;
+/** The emissive key at a spark's head and at the flash's heart, over the trail's core (over the bloom's 1.25). */
+export const SPARK_KEY = 3.4;
 
 /** A point or direction, shaped as three's Vector3 is. */
 export interface Vec3 {
@@ -210,6 +221,8 @@ const fragmentShader = /* glsl */ `
 uniform sampler2D uBrush;
 uniform vec3 uColor;
 uniform float uKey;
+uniform float uFlashWhiteRadius;
+uniform float uFlashWhite;
 varying vec2 vUv;
 varying float vShade;
 varying float vWhite;
@@ -224,11 +237,11 @@ void main() {
     shape = across * smoothstep(0.0, 0.75, vUv.x);
     hue = mix(uColor, vec3(1.0), vWhite);
   } else {
-    // The flash: a disc whose rim breaks into the brush atlas's strokes, white at its heart and cyan at its edge.
+    // The flash: a cyan disc whose rim breaks into the brush atlas's strokes, with a small white heart.
     float r = length(vUv);
     float brush = texture2D(uBrush, vUv * 0.35 + 0.5).r;
     shape = 1.0 - smoothstep(0.2 + 0.45 * brush, 1.0, r);
-    hue = mix(uColor, vec3(1.0), (1.0 - r) * vWhite);
+    hue = mix(uColor, vec3(1.0), (1.0 - smoothstep(0.0, uFlashWhiteRadius, r)) * uFlashWhite * vWhite);
   }
   gl_FragColor = energyOut(hue, uKey * shape * vShade);
 }
@@ -282,7 +295,13 @@ export function createSparks(parent: Object3D, brush: IUniform<Texture | null>):
     new ShaderMaterial({
       name: 'HitSparks',
       defines: energyDefines(),
-      uniforms: { uBrush: brush, uColor: { value: new Color(PLAYER_ENERGY) }, uKey: { value: SPARK_KEY } },
+      uniforms: {
+        uBrush: brush,
+        uColor: { value: new Color(PLAYER_ENERGY) },
+        uKey: { value: SPARK_KEY },
+        uFlashWhiteRadius: { value: FLASH_WHITE_RADIUS },
+        uFlashWhite: { value: FLASH_WHITE },
+      },
       vertexShader,
       fragmentShader,
       side: DoubleSide,
@@ -337,7 +356,8 @@ export function createSparks(parent: Object3D, brush: IUniform<Texture | null>):
       const length = side.length();
       if (length < 1e-9) side.set(0, 0, 0);
       else side.multiplyScalar((SPARK_WIDTH_M * (0.5 + 0.5 * life)) / length);
-      corners(q, tail.x, tail.y, tail.z, side.x, side.y, side.z, head.x, head.y, head.z, life * life);
+      // Straight down with its life left: it fell as the square of it, so a spark was a quarter as bright half way.
+      corners(q, tail.x, tail.y, tail.z, side.x, side.y, side.z, head.x, head.y, head.z, life);
       white.fill(spark.white, q * 4, q * 4 + 4);
     }
     for (let i = 0; i < pool.flashes.length; i++) {
@@ -352,9 +372,16 @@ export function createSparks(parent: Object3D, brush: IUniform<Texture | null>):
       const half = (flash.size * (0.7 + 0.6 * u)) / 2;
       // A square facing the eye: across is the eye's right on the ground, up its up.
       toEye.set(eye.x - flash.px, eye.y - flash.py, eye.z - flash.pz).normalize();
+      // Drawn a little toward the eye from the contact, which lies on the body's hit cylinder, so the body's own surface
+      // around the wound does not cover half the disc; the sparks still fly from the contact itself.
+      const cx = flash.px + toEye.x * FLASH_TOWARD_EYE_M;
+      const cy = flash.py + toEye.y * FLASH_TOWARD_EYE_M;
+      const cz = flash.pz + toEye.z * FLASH_TOWARD_EYE_M;
       side.set(0, 1, 0).cross(toEye).normalize().multiplyScalar(half);
       up.copy(toEye).cross(side).normalize().multiplyScalar(half);
-      corners(q, flash.px - up.x, flash.py - up.y, flash.pz - up.z, side.x, side.y, side.z, flash.px + up.x, flash.py + up.y, flash.pz + up.z, (1 - u) * (1 - u));
+      // An ease out over its life, 1 - u squared: bright through most of its 0.11 s, where the square of what was left
+      // had it at a third of its strength three frames in.
+      corners(q, cx - up.x, cy - up.y, cz - up.z, side.x, side.y, side.z, cx + up.x, cy + up.y, cz + up.z, 1 - u * u);
     }
     mesh.visible = any;
     position.needsUpdate = true;
