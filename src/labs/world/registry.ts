@@ -9,6 +9,8 @@
  * along +d, from WORLD_FACING_DEG, so each zone is a row across the view and each member faces the cameras.
  */
 
+import { COMMANDER_LABELS } from '../shared/commanders';
+
 /**
  * The bearing, from the world's centre toward its cameras, in degrees from +x toward +z (the Style Lab's convention).
  * The Verdant key's azimuth of 250 degrees puts the sun at bearing 200 on this plane, so from 145 every view has the
@@ -28,17 +30,19 @@ export const TOWER_SPACING = 3.2;
 export const NEST_SPOT = { s: 4.6, d: -9 } as const;
 export const CHARACTER_ROW_DEPTH = 0;
 export const CHARACTER_SPACING = 2.6;
+/** The gap between one character's row and the next, in metres, so the Husk, Pip and Bulwark read apart. */
+export const CHARACTER_ROW_GAP = 4;
 /**
- * The Husk's three clips from s -6.4 m and Bulwark's from 2.8 m, 4 m apart. Bulwark's row moved one spacing right
- * when the idle Husk joined, rather than the Husk's row moving left: at -9 m, past the level clearing, the ground
- * under a plumb Husk's feet strayed 7.9 cm from level, and here the new idle Husk takes the walking Husk's old spot.
- * Pip-A's three, the commander preview, stand next to Bulwark's from 12 m, 4 m on from his last, rather than moving the
- * other rows: those stand on the level clearing, and Pip-A's narrow stance, about 0.2 m from his root to a boot's edge,
- * strays least from level on the ground past it.
+ * The gap between Pip's row and Bulwark's, a metre wider, because each commander's row hangs a placard of its own: at
+ * 4 m, "Pip (commander)" and "Bulwark" overlapped by 2.6 px in a 375 x 667 phone's overview and by 8.8 px at 667 x 375.
+ */
+export const COMMANDER_ROW_GAP = 5;
+/**
+ * The Husk's three clips from s -6.4 m. Pip's row starts CHARACTER_ROW_GAP past the Husk's last member, and Bulwark's
+ * COMMANDER_ROW_GAP past Pip's. The Husk's row stays where it stood when the idle Husk joined: at -9 m, past the level
+ * clearing, the ground under a plumb Husk's feet strayed 7.9 cm from level.
  */
 export const HUSK_ROW_START = -6.4;
-export const BULWARK_ROW_START = 2.8;
-export const PIP_ROW_START = 12;
 export const HEART_ROW_DEPTH = 12.5;
 export const HEART_ROW_START = -5.4;
 export const HEART_SPACING = 3.6;
@@ -64,10 +68,7 @@ export const THREE_QUARTER_TURN_DEG = 30;
 export const LIVE_HEART_START_LEVEL = 7;
 
 export interface WorldZone {
-  /**
-   * The zone's key, the value `?family=` takes: a manifest family, or, for a preview shown apart from the rest of its
-   * family, a key of its own (Pip-A's `pip`, a commander beside the locked Bulwark).
-   */
+  /** The zone's key, the value `?family=` takes: a manifest family. */
   family: string;
   label: string;
 }
@@ -81,10 +82,19 @@ export interface WorldMember {
   node: string | null;
   /** The manifest family of the entry, which the coverage check holds it to. */
   family: string;
-  /** The zone the member stands in, the key of one of ZONES: its family's, unless it is a preview with a zone of its own. */
+  /**
+   * The zone the member stands in, the key of one of ZONES: its family's. Kept apart from the family because a preview
+   * once stood in a zone of its own (Pip's, before he became the default commander); the coverage check still holds every
+   * member's zone to ZONES.
+   */
   zone: string;
   /** Shown over the member when its family is in focus; null for a family's only member, which its zone names. */
   label: string | null;
+  /**
+   * The character the member shows, in a zone that holds more than one (the commanders'): its row's placard names him,
+   * and so does the second line of the member's label in its own view. Null in a zone of one character or none.
+   */
+  character: string | null;
   s: number;
   d: number;
   /** Degrees turned from facing the cameras toward the key's side. */
@@ -101,16 +111,12 @@ export interface WorldMember {
   faceDemo: boolean;
 }
 
-/** Pip-A's zone key, apart from Bulwark's `commanders` zone although both are in the commanders family. */
-export const PIP_ZONE = 'pip';
-
 export const ZONES: readonly WorldZone[] = [
   { family: 'env', label: 'Verdant kit' },
   { family: 'towers', label: 'Bolt Sentinel' },
   { family: 'nests', label: 'Nest' },
   { family: 'xeno', label: 'Husk' },
-  { family: 'commanders', label: 'Bulwark' },
-  { family: PIP_ZONE, label: 'Pip-A (commander preview)' },
+  { family: 'commanders', label: 'Commanders' },
   { family: 'heart', label: 'Worldheart' },
 ];
 
@@ -128,7 +134,7 @@ const KIT_ORDER: readonly [node: string, label: string, lean: number][] = [
 ];
 
 function member(fields: Partial<WorldMember> & Pick<WorldMember, 'name' | 'entry' | 'family' | 's' | 'd'>): WorldMember {
-  return { node: null, label: null, turnDeg: 0, lean: LEAN.plumb, clip: null, heartStage: null, zone: fields.family, faceDemo: false, ...fields };
+  return { node: null, label: null, character: null, turnDeg: 0, lean: LEAN.plumb, clip: null, heartStage: null, zone: fields.family, faceDemo: false, ...fields };
 }
 
 const kit = KIT_ORDER.map(([node, label, lean], index): WorldMember => {
@@ -150,19 +156,54 @@ const towers = ['I', 'II', 'III'].map((numeral, index) =>
   }),
 );
 
-const characters = (entry: string, family: string, start: number, clips: readonly string[]): WorldMember[] =>
-  clips.map((clip, index) =>
-    member({
-      name: `${entry}_${clip}`,
-      entry,
-      family,
-      label: clip.charAt(0).toUpperCase() + clip.slice(1),
-      s: start + index * CHARACTER_SPACING,
-      d: CHARACTER_ROW_DEPTH,
-      turnDeg: THREE_QUARTER_TURN_DEG,
-      clip,
-    }),
+/** One character member of a row: its name, its label, the clip it loops and whether its face cycles the demo. */
+type CharacterSlot = readonly [name: string, label: string, clip: string, faceDemo: boolean];
+
+/**
+ * A character's members side by side along the character row from `start`, CHARACTER_SPACING apart, naming the
+ * character when its zone holds another.
+ */
+const characterRow = (entry: string, family: string, start: number, character: string | null, slots: readonly CharacterSlot[]): WorldMember[] =>
+  slots.map(([name, label, clip, faceDemo], index) =>
+    member({ name, entry, family, label, character, s: start + index * CHARACTER_SPACING, d: CHARACTER_ROW_DEPTH, turnDeg: THREE_QUARTER_TURN_DEG, clip, faceDemo }),
   );
+
+/** Where the row after one ends begins: a gap past its last member. */
+const nextRowStart = (row: readonly WorldMember[], gap = CHARACTER_ROW_GAP): number => Math.max(...row.map((m) => m.s)) + gap;
+
+/** The Husk alone in its zone, so its labels name the clip only, as the placard names the Husk. */
+const huskRow = characterRow('husk', 'xeno', HUSK_ROW_START, null, [
+  ['husk_idle', 'Idle', 'idle', false],
+  ['husk_walk', 'Walk', 'walk', false],
+  ['husk_attack', 'Attack', 'attack', false],
+]);
+
+/**
+ * Pip (commander), the default commander, leads the commanders' zone, first in its order and on the level clearing next
+ * to the Husk: idle and running, each blinking on its own, and a third idle whose face cycles the held-expression demo.
+ * His attack clip is pending (tools/assets/budgets.json, phase B), so it has no member: when the clip ships, the coverage
+ * check names it until one more slot here loops it, and Bulwark's row, which starts from the end of this one, moves on
+ * by itself. The two commanders share a zone, so each row's placard names its commander ("Pip (commander)", the name
+ * the labs give him until the owner names the character) and the member labels stay as short as the Husk's: a label
+ * that named him too, "Pip (commander) idle", overlapped its neighbours by 68 px in the 1920 x 1080 overview, and still
+ * by 39 px at 2560 x 1440. The member names stay as they were (`pip_face` is the face member's address).
+ */
+const pipRow = characterRow('commander_pip', 'commanders', nextRowStart(huskRow), COMMANDER_LABELS.pip, [
+  ['pip_idle', 'Idle', 'idle', false],
+  ['pip_run', 'Run', 'run', false],
+  ['pip_face', 'Face', 'idle', true],
+]);
+
+/** Bulwark, the alternate commander, after Pip in the commanders' zone: idle, running and attacking. */
+const bulwarkRow = characterRow('bulwark', 'commanders', nextRowStart(pipRow, COMMANDER_ROW_GAP), COMMANDER_LABELS.bulwark, [
+  ['bulwark_idle', 'Idle', 'idle', false],
+  ['bulwark_run', 'Run', 'run', false],
+  ['bulwark_attack', 'Attack', 'attack', false],
+]);
+
+/** Where Pip's row and Bulwark's begin along s, in metres: 2.8 m, on the level clearing, and 13 m, past it. */
+export const PIP_ROW_START = pipRow[0]!.s;
+export const BULWARK_ROW_START = bulwarkRow[0]!.s;
 
 const hearts = ([0, 5, 10, 'live'] as const).map((stage, index) =>
   member({
@@ -178,38 +219,13 @@ const hearts = ([0, 5, 10, 'live'] as const).map((stage, index) =>
   }),
 );
 
-/**
- * Pip-A, the M1 commander preview, in a zone of his own: idle and running, each blinking on its own, and a third idle
- * whose face cycles the held-expression demo. He has no attack clip yet (phase B).
- */
-const pip: WorldMember[] = (
-  [
-    ['pip_idle', 'Idle', 'idle', false],
-    ['pip_run', 'Run', 'run', false],
-    ['pip_face', 'Face', 'idle', true],
-  ] as const
-).map(([name, label, clip, faceDemo], index) =>
-  member({
-    name,
-    entry: 'commander_pip',
-    family: 'commanders',
-    zone: PIP_ZONE,
-    label,
-    s: PIP_ROW_START + index * CHARACTER_SPACING,
-    d: CHARACTER_ROW_DEPTH,
-    turnDeg: THREE_QUARTER_TURN_DEG,
-    clip,
-    faceDemo,
-  }),
-);
-
 export const MEMBERS: readonly WorldMember[] = [
   ...kit,
   ...towers,
   member({ name: 'nest', entry: 'nest', family: 'nests', s: NEST_SPOT.s, d: NEST_SPOT.d, lean: LEAN.structure }),
-  ...characters('husk', 'xeno', HUSK_ROW_START, ['idle', 'walk', 'attack']),
-  ...characters('bulwark', 'commanders', BULWARK_ROW_START, ['idle', 'run', 'attack']),
-  ...pip,
+  ...huskRow,
+  ...pipRow,
+  ...bulwarkRow,
   ...hearts,
 ];
 
@@ -265,7 +281,8 @@ export function requiredPieces(entry: CoverageManifest['assets'][number]): strin
  * list means every entry is accounted for. A model with no member, a placeable the world leaves out, a kit piece with no
  * place, a clip no member loops and CLIPS_NOT_SHOWN does not explain, and a texture that is neither placed nor given a
  * reason each fail; so does a member whose entry the manifest no longer lists, or whose family disagrees with its
- * entry's, and a CLIPS_NOT_SHOWN reason whose clip the manifest no longer lists or a member loops. The clips were once
+ * entry's, or that loops a clip its entry does not export (a pending clip's member put in before the clip ships), and
+ * a CLIPS_NOT_SHOWN reason whose clip the manifest no longer lists or a member loops. The clips were once
  * left out: the Husk's idle shipped in its GLB and the world showed only its walk and attack, while the blueprint
  * promised every animation.
  */
@@ -303,6 +320,11 @@ export function coverageGaps(
     for (const m of own) {
       if (m.family !== entry.family) gaps.push(`member "${m.name}" sits in family ${m.family}, but its entry "${entry.name}" is in ${entry.family} (${where})`);
       if (m.node !== null && !entry.nodes.includes(m.node)) gaps.push(`member "${m.name}" places node "${m.node}", which "${entry.name}" does not have (${where})`);
+      // A member for a clip the model does not ship, such as a pending one (budgets.json) put in ahead of its clip, is
+      // named here, and the page leaves it out instead of stopping when it builds the world (labs/world/main.ts).
+      if (m.clip !== null && !(entry.animations ?? []).some((animation) => animation.name === m.clip)) {
+        gaps.push(`member "${m.name}" loops a clip "${m.clip}" that "${entry.name}" does not export; add the member once the clip ships (${where})`);
+      }
     }
   }
   for (const m of members) {

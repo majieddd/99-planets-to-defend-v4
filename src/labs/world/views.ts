@@ -2,7 +2,7 @@ import { Box3, PerspectiveCamera, Vector3 } from 'three';
 import type { Ground } from '../../render/terrain/place';
 import type { LabelSpec } from './labels';
 import type { PlacedMember } from './layout';
-import { fromTangent, MEMBERS, PIP_ZONE, toTangent, TOWARD_CAMERAS, ZONES } from './registry';
+import { fromTangent, MEMBERS, toTangent, TOWARD_CAMERAS, ZONES } from './registry';
 
 /**
  * How far above the horizontal each kind of view looks down, in degrees: the overview high enough that no row hides the
@@ -35,9 +35,19 @@ export const FAMILY_LABEL_ROOM_PX = 56;
 /**
  * The overview names every member only on a screen at least this wide, in CSS pixels; narrower, the 24 member labels
  * (25 members, but the nest, its family's only member, has none) crowd each other, so the overview names the families
- * alone and a family's view names its members.
+ * alone and a family's view names its members. Measured on the GPU with the commanders' placards: at 1280 x 720 six pairs
+ * of labels overlapped (the Worldheart's placard over the Husk's "Attack" and Pip's "Idle", "Bolt Sentinel" over
+ * "Bush", "Nest" over "Rock B", the hearts' "Stage 10" over "Stage 7 (slider)", "Walk" over "Attack") and at 1366 x 768
+ * five, at 1920 x 1080 and 2560 x 1440 none. It was 1280 px.
  */
-export const OVERVIEW_MEMBER_LABELS_MIN_WIDTH = 1280;
+export const OVERVIEW_MEMBER_LABELS_MIN_WIDTH = 1600;
+/**
+ * The characters' view names its members only on a screen at least this wide, in CSS pixels; narrower, it names the
+ * Husk's and the commanders' placards alone. It frames the whole character row, 24.6 m from the idle Husk to Bulwark's
+ * attack: at 375 x 667 and 390 x 844 six pairs of member labels overlapped, at 667 x 375 and every larger size measured
+ * none.
+ */
+export const CHARACTERS_MEMBER_LABELS_MIN_WIDTH = 640;
 /**
  * The narrowest screen, in CSS pixels, on which a family's view names its members, for each family whose member labels
  * crowd below it; narrower, the view names the family alone, as the overview does, and each member stays one step away
@@ -49,10 +59,10 @@ export const FAMILY_MEMBER_LABELS_MIN_WIDTH: Readonly<Record<string, number>> = 
 
 /** The views the page opens, besides one per family and one per member. */
 export const OVERVIEW = 'overview';
-/** The Husk's, Bulwark's and Pip-A's rows together, the page's one view of every character clip at once. */
+/** The Husk's row and the commanders' (Pip's and Bulwark's) together, the page's one view of every character clip at once. */
 export const CHARACTERS = 'characters';
-/** The zones the characters' view frames, by zone key (a member's `zone`), so Pip-A's preview zone joins the Husk and Bulwark. */
-export const CHARACTER_FAMILIES: readonly string[] = ['xeno', 'commanders', PIP_ZONE];
+/** The zones the characters' view frames, by zone key (a member's `zone`): the Husk's and the commanders'. */
+export const CHARACTER_FAMILIES: readonly string[] = ['xeno', 'commanders'];
 
 export interface ViewPose {
   position: Vector3;
@@ -88,9 +98,12 @@ export interface LabelContext {
   widthPx: number;
 }
 
-/** A family placard's key among the labels, apart from the members' names. */
-export function familyLabelKey(family: string): string {
-  return `family:${family}`;
+/**
+ * A family placard's key among the labels, apart from the members' names; in a zone that hangs one placard per character
+ * (the commanders'), the character's manifest entry follows.
+ */
+export function familyLabelKey(family: string, entry: string | null = null): string {
+  return entry ? `family:${family}:${entry}` : `family:${family}`;
 }
 
 /** Whether a name is a view's, as `?family=` takes it: the overview, the characters or a zone's family. */
@@ -143,15 +156,16 @@ export function memberLabelAnchor(entry: PlacedMember): Vector3 {
 /**
  * The ground point a family's placard hangs from: in front of the zone's front edge by FAMILY_LABEL_GAP, across the
  * middle of the zone's width, as the cameras see both. Standing under the zone, the family's name never meets the
- * members' names, which stand over the members.
+ * members' names, which stand over the members. A character's placard in a shared zone hangs across the middle of his
+ * row (`members`) and in front of the whole zone (`zone`), so the zone's placards stand in one line.
  */
-export function familyLabelAnchor(members: readonly PlacedMember[], ground: Ground): Vector3 {
+export function familyLabelAnchor(members: readonly PlacedMember[], ground: Ground, zone: readonly PlacedMember[] = members): Vector3 {
   let front = Infinity;
   let left = Infinity;
   let right = -Infinity;
+  for (const corner of boundsCorners(zone)) front = Math.min(front, fromTangent(corner.x, corner.z).d);
   for (const corner of boundsCorners(members)) {
-    const { s, d } = fromTangent(corner.x, corner.z);
-    front = Math.min(front, d);
+    const { s } = fromTangent(corner.x, corner.z);
     left = Math.min(left, s);
     right = Math.max(right, s);
   }
@@ -162,20 +176,34 @@ export function familyLabelAnchor(members: readonly PlacedMember[], ground: Grou
 /**
  * Every label the world shows: a placard under each zone with members, naming the family with its key as a second
  * line, and a label over each member that has one (a family's only member has none; its placard names it), whose second
- * line, its family's name, shows only in the member's own view.
+ * line, its family's name, shows only in the member's own view. A zone whose members show more than one character, the
+ * commanders', hangs a placard under each character's row instead, naming him ("Pip (commander)", "Bulwark") over the
+ * zone's key, and each of its members' second lines names its character, so the overview and every close view say
+ * whose clips are whose while the member labels stay short.
  */
 export function labelSpecs(members: readonly PlacedMember[], ground: Ground): LabelSpec[] {
   const specs: LabelSpec[] = [];
   for (const zone of ZONES) {
     const own = members.filter((entry) => entry.member.zone === zone.family);
-    if (own.length) specs.push({ key: familyLabelKey(zone.family), kind: 'family', family: zone.family, text: zone.label, detail: zone.family, anchor: familyLabelAnchor(own, ground) });
+    if (!own.length) continue;
+    const entries = [...new Set(own.map((entry) => entry.member.entry))];
+    const byCharacter = entries.length > 1 && own.every((entry) => entry.member.character !== null);
+    if (!byCharacter) {
+      specs.push({ key: familyLabelKey(zone.family), kind: 'family', family: zone.family, text: zone.label, detail: zone.family, anchor: familyLabelAnchor(own, ground) });
+      continue;
+    }
+    for (const name of entries) {
+      const row = own.filter((entry) => entry.member.entry === name);
+      const text = row[0]!.member.character as string;
+      specs.push({ key: familyLabelKey(zone.family, name), kind: 'family', family: zone.family, text, detail: zone.family, anchor: familyLabelAnchor(row, ground, own) });
+    }
   }
   for (const entry of members) {
     const { member } = entry;
     if (!member.label) continue;
-    // A label belongs to its member's zone, which names it: Pip-A's "Idle" reads "Pip-A (commander preview)", not "Bulwark".
+    // The second line names the member's character in a shared zone ("Face" reads "Pip (commander)"), else its zone.
     const zone = ZONES.find((candidate) => candidate.family === member.zone);
-    specs.push({ key: member.name, kind: 'member', family: member.zone, text: member.label, line: zone?.label ?? member.zone, anchor: memberLabelAnchor(entry) });
+    specs.push({ key: member.name, kind: 'member', family: member.zone, text: member.label, line: member.character ?? zone?.label ?? member.zone, anchor: memberLabelAnchor(entry) });
   }
   return specs;
 }
@@ -183,7 +211,8 @@ export function labelSpecs(members: readonly PlacedMember[], ground: Ground): La
 /**
  * Which labels an open view shows, as a test on a label, resolved once per view so the frame loop only calls it. The
  * overview names every family, and on a wide screen every member too; the characters' view names both character
- * families and their members; a family's view names the family and, on a screen wide enough to part their labels
+ * families and, past a phone's width (CHARACTERS_MEMBER_LABELS_MIN_WIDTH), their members; a family's view names the
+ * family and, on a screen wide enough to part their labels
  * (FAMILY_MEMBER_LABELS_MIN_WIDTH), its members. A member's view names the member alone, its label carrying the family's
  * name: its family's placard stands in front of the whole zone, and framing it too took an end-of-row member's camera
  * back until the zone fitted (the flowers at 29.1 m on a phone, against 7.5 m for the flowers alone, both at the 1.2 m
@@ -203,7 +232,10 @@ export function labelRule(open: OpenView, members: readonly PlacedMember[], cont
     return (spec) => spec.kind === 'family' || everyMember;
   }
   const named = (spec: Pick<LabelSpec, 'kind' | 'family'>): boolean => spec.kind === 'family' || context.widthPx >= (FAMILY_MEMBER_LABELS_MIN_WIDTH[spec.family] ?? 0);
-  if (open.view === CHARACTERS) return (spec) => CHARACTER_FAMILIES.includes(spec.family) && named(spec);
+  if (open.view === CHARACTERS) {
+    const membersNamed = context.widthPx >= CHARACTERS_MEMBER_LABELS_MIN_WIDTH;
+    return (spec) => CHARACTER_FAMILIES.includes(spec.family) && (spec.kind === 'family' || membersNamed) && named(spec);
+  }
   return (spec) => spec.family === open.view && named(spec);
 }
 
@@ -332,4 +364,14 @@ export function resolveAddress(member: string | null, family: string | null): Ad
     else open ??= { view: family, member: '' };
   }
   return { open: open ?? { view: OVERVIEW, member: '' }, problems };
+}
+
+/**
+ * The query "Open this look in the Style Lab" opens: the look on screen as a dials link and, from one of Bulwark's
+ * members, `commander=bulwark`, so the lab shows the commander on screen. Anywhere else it opens on the lab's default
+ * commander, Pip, the one the world's commanders' zone leads with.
+ */
+export function styleLabQuery(encodedDials: string, member: string): string {
+  const entry = MEMBERS.find((m) => m.name === member)?.entry;
+  return `?dials=${encodedDials}${entry === 'bulwark' ? '&commander=bulwark' : ''}`;
 }

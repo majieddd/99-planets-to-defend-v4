@@ -31,7 +31,9 @@ import { buildAssetWorld, HEART_STAGES, LABEL_AXIS_LINES, LABEL_AXIS_RADIUS, SHA
 import { fromTangent, LIVE_HEART_START_LEVEL, MEMBERS, toTangent, WORLD_FACING_DEG, ZONES } from '../../../src/labs/world/registry';
 import {
   boundsCorners,
+  CHARACTER_FAMILIES,
   CHARACTERS,
+  CHARACTERS_MEMBER_LABELS_MIN_WIDTH,
   familyLabelAnchor,
   familyLabelKey,
   FAMILY_MEMBER_LABELS_MIN_WIDTH,
@@ -49,6 +51,7 @@ import {
   OVERVIEW_MEMBER_LABELS_MIN_WIDTH,
   registryOverview,
   resolveAddress,
+  styleLabQuery,
   viewPoints,
   type Lens,
   type OpenView,
@@ -316,12 +319,12 @@ describe('buildAssetWorld', () => {
       'husk_idle',
       'husk_walk',
       'husk_attack',
-      'bulwark_idle',
-      'bulwark_run',
-      'bulwark_attack',
       'pip_idle',
       'pip_run',
       'pip_face',
+      'bulwark_idle',
+      'bulwark_run',
+      'bulwark_attack',
     ]);
     const before = characters.map((entry) => worldPosition(entry.root));
     world.update(0.5);
@@ -338,10 +341,10 @@ describe('buildAssetWorld', () => {
     characters.forEach((entry, index) => expect((entry.root.getObjectByName(`${entry.member.entry}_part`) as Object3D).rotation.y).toBeCloseTo(turns[index]!, 6));
   });
 
-  it('gives every Pip-A instance its own face, blinking out of step after its mixer, and cycles the demo on the face member alone', () => {
+  it('gives every Pip instance its own face, blinking out of step after its mixer, and cycles the demo on the face member alone', () => {
     const { world } = build();
     const faces = () => new Map(world.faces().map((face) => [face.name, face]));
-    // Only rigs with face morphs get a face: Pip-A's three, never Bulwark's visor or the Husk.
+    // Only rigs with face morphs get a face: Pip's three, never Bulwark's visor or the Husk.
     expect([...faces().keys()]).toEqual(['pip_idle', 'pip_run', 'pip_face']);
     // Before any draw, every instance's hull, the two rig copies' included, already shares its body's influences.
     for (const name of ['pip_idle', 'pip_run', 'pip_face']) {
@@ -508,7 +511,7 @@ describe('the Asset World views', () => {
         const camera = cameraAt(pose, lens);
         frustum.setFromProjectionMatrix(new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
         const framed = world.members.filter((entry) =>
-          open.member ? entry.member.name === open.member : open.view === OVERVIEW ? true : open.view === CHARACTERS ? ['xeno', 'commanders', 'pip'].includes(entry.member.zone) : entry.member.zone === open.view,
+          open.member ? entry.member.name === open.member : open.view === OVERVIEW ? true : open.view === CHARACTERS ? CHARACTER_FAMILIES.includes(entry.member.zone) : entry.member.zone === open.view,
         );
         expect(framed.length, name).toBeGreaterThan(0);
         // Every corner of what is drawn is inside the frame, and every label the view shows, with the room it takes.
@@ -577,18 +580,47 @@ describe('the Asset World views', () => {
 
   it('hangs each family placard in front of its zone, on the ground, and stands each member label on its body top', () => {
     const { world } = build();
-    for (const family of ['env', 'towers', 'nests', 'xeno', 'commanders', 'pip', 'heart']) {
-      const members = world.members.filter((entry) => entry.member.zone === family);
-      const anchor = familyLabelAnchor(members, patch);
+    const specs = labelSpecs(world.members, patch);
+    const onGround = (anchor: Vector3, name: string) => {
       const p = anchor.clone().sub(CENTER);
       const ground = patch.surfaceAt((p.x / p.y) * STYLE_PLANET_RADIUS, (p.z / p.y) * STYLE_PLANET_RADIUS);
-      expect(anchor.distanceTo(ground.position), family).toBeLessThan(1e-9);
+      expect(anchor.distanceTo(ground.position), name).toBeLessThan(1e-9);
+    };
+    const frontOf = (entry: PlacedMember) =>
+      Math.min(...[entry.bounds.min, entry.bounds.max].flatMap((a) => [entry.bounds.min, entry.bounds.max].map((b) => fromTangent(a.x, b.z).d)));
+    for (const family of ['env', 'towers', 'nests', 'xeno', 'heart']) {
+      const members = world.members.filter((entry) => entry.member.zone === family);
+      const anchor = familyLabelAnchor(members, patch);
+      onGround(anchor, family);
+      expect(specs.find((spec) => spec.key === familyLabelKey(family))!.anchor.distanceTo(anchor), family).toBe(0);
       const { d } = fromTangent(anchor.x, anchor.z);
-      for (const entry of members) {
-        const front = Math.min(...[entry.bounds.min, entry.bounds.max].flatMap((a) => [entry.bounds.min, entry.bounds.max].map((b) => fromTangent(a.x, b.z).d)));
-        expect(d, `${family} placard in front of ${entry.member.name}`).toBeLessThan(front);
-      }
+      for (const entry of members) expect(d, `${family} placard in front of ${entry.member.name}`).toBeLessThan(frontOf(entry));
       for (const entry of members) expect(memberLabelAnchor(entry).distanceTo(entry.top), entry.member.name).toBe(0);
+    }
+    // The commanders' zone hangs a placard under each commander's row, Pip's first, both in front of the whole zone in one
+    // line, each across the middle of its own row, naming him over the zone's key.
+    const zone = world.members.filter((entry) => entry.member.zone === 'commanders');
+    const placards = specs.filter((spec) => spec.kind === 'family' && spec.family === 'commanders');
+    expect(placards.map((spec) => [spec.key, spec.text, spec.detail])).toEqual([
+      ['family:commanders:commander_pip', 'Pip (commander)', 'commanders'],
+      ['family:commanders:bulwark', 'Bulwark', 'commanders'],
+    ]);
+    // On the tangent plane the anchor's point stands on (its world x and z shrink with the planet's curve).
+    const tangentOf = (anchor: Vector3) => {
+      const p = anchor.clone().sub(CENTER);
+      return fromTangent((p.x / p.y) * STYLE_PLANET_RADIUS, (p.z / p.y) * STYLE_PLANET_RADIUS);
+    };
+    const depths = placards.map((spec) => tangentOf(spec.anchor).d);
+    expect(depths[0]!).toBeCloseTo(depths[1]!, 9);
+    for (const [index, entryName] of ['commander_pip', 'bulwark'].entries()) {
+      const placard = placards[index]!;
+      onGround(placard.anchor, placard.key);
+      const row = zone.filter((entry) => entry.member.entry === entryName);
+      const { s, d } = tangentOf(placard.anchor);
+      for (const entry of zone) expect(d, `${placard.key} in front of ${entry.member.name}`).toBeLessThan(frontOf(entry));
+      expect(s, placard.key).toBeGreaterThan(Math.min(...row.map((entry) => entry.member.s)));
+      expect(s, placard.key).toBeLessThan(Math.max(...row.map((entry) => entry.member.s)));
+      for (const entry of row) expect(memberLabelAnchor(entry).distanceTo(entry.top), entry.member.name).toBe(0);
     }
   });
 
@@ -599,28 +631,20 @@ describe('the Asset World views', () => {
       const shows = labelRule(open, world.members, { labels, widthPx });
       return specs.filter((spec) => shows(spec)).map((spec) => spec.key);
     };
-    const families = ZONES.map((zone) => familyLabelKey(zone.family));
+    const families = specs.filter((spec) => spec.kind === 'family').map((spec) => spec.key);
+    // Six zones, the commanders' with a placard for each commander.
+    expect(families).toEqual(['family:env', 'family:towers', 'family:nests', 'family:xeno', 'family:commanders:commander_pip', 'family:commanders:bulwark', 'family:heart']);
     const labelled = MEMBERS.filter((m) => m.label).map((m) => m.name);
     expect(shown({ view: OVERVIEW, member: '' }, true, OVERVIEW_MEMBER_LABELS_MIN_WIDTH - 1)).toEqual(families);
     expect(shown({ view: OVERVIEW, member: '' }, true, OVERVIEW_MEMBER_LABELS_MIN_WIDTH)).toEqual([...families, ...labelled]);
     expect(shown({ view: 'towers', member: '' })).toEqual(['family:towers', 'bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
-    expect(shown({ view: CHARACTERS, member: '' })).toEqual([
-      'family:xeno',
-      'family:commanders',
-      'family:pip',
-      'husk_idle',
-      'husk_walk',
-      'husk_attack',
-      'bulwark_idle',
-      'bulwark_run',
-      'bulwark_attack',
-      'pip_idle',
-      'pip_run',
-      'pip_face',
-    ]);
-    // Pip-A, in the commanders family, has a zone and a view of his own beside Bulwark's.
-    expect(shown({ view: 'pip', member: '' })).toEqual(['family:pip', 'pip_idle', 'pip_run', 'pip_face']);
-    expect(shown({ view: 'commanders', member: '' })).toEqual(['family:commanders', 'bulwark_idle', 'bulwark_run', 'bulwark_attack']);
+    const commanders = ['pip_idle', 'pip_run', 'pip_face', 'bulwark_idle', 'bulwark_run', 'bulwark_attack'];
+    const commanderPlacards = ['family:commanders:commander_pip', 'family:commanders:bulwark'];
+    expect(shown({ view: CHARACTERS, member: '' })).toEqual(['family:xeno', ...commanderPlacards, 'husk_idle', 'husk_walk', 'husk_attack', ...commanders]);
+    // Pip leads the commanders' view, Bulwark after him; Pip has no view of his own any more.
+    expect(shown({ view: 'commanders', member: '' })).toEqual([...commanderPlacards, ...commanders]);
+    expect(shown({ view: 'commanders', member: '' }, true, 375)).toEqual([...commanderPlacards, ...commanders]);
+    expect(resolveAddress(null, 'pip').problems).toEqual(['no family named "pip"']);
     // The kit's eight labels crowd a narrow screen, so there its view names the kit alone, as the overview does, and each
     // piece keeps its own view; the other families' views name their members on a phone.
     const kit = MEMBERS.filter((m) => m.family === 'env').map((m) => m.name);
@@ -630,7 +654,9 @@ describe('the Asset World views', () => {
     expect(shown({ view: 'env', member: 'flowers' }, true, 375)).toEqual(['flowers']);
     expect(Object.keys(FAMILY_MEMBER_LABELS_MIN_WIDTH)).toEqual(['env']);
     expect(shown({ view: 'towers', member: '' }, true, 375)).toEqual(['family:towers', 'bolt_mk1', 'bolt_mk2', 'bolt_mk3']);
-    expect(shown({ view: CHARACTERS, member: '' }, true, 375)).toHaveLength(12);
+    // On a phone the characters' view, which frames the whole 24.6 m character row, names the placards alone.
+    expect(shown({ view: CHARACTERS, member: '' }, true, CHARACTERS_MEMBER_LABELS_MIN_WIDTH - 1)).toEqual(['family:xeno', ...commanderPlacards]);
+    expect(shown({ view: CHARACTERS, member: '' }, true, CHARACTERS_MEMBER_LABELS_MIN_WIDTH)).toHaveLength(12);
     expect(shown({ view: 'towers', member: 'bolt_mk2' })).toEqual(['bolt_mk2']);
     // A member opened from the overview's list is named the same way.
     expect(shown({ view: OVERVIEW, member: 'rock_a' })).toEqual(['rock_a']);
@@ -641,8 +667,10 @@ describe('the Asset World views', () => {
     expect(lines.get('bolt_mk2')).toBe('Bolt Sentinel');
     expect(lines.get('husk_idle')).toBe('Husk');
     expect(lines.get('flowers')).toBe('Verdant kit');
+    // In the commanders' shared zone the second line names the commander.
     expect(lines.get('bulwark_idle')).toBe('Bulwark');
-    expect(lines.get('pip_face')).toBe('Pip-A (commander preview)');
+    expect(lines.get('pip_face')).toBe('Pip (commander)');
+    expect(specs.find((spec) => spec.key === 'pip_face')!.text).toBe('Face');
   });
 
   it('frames the ground where the members stand when no asset loaded, rather than leaving the camera at the origin', () => {
@@ -673,6 +701,13 @@ describe('the Asset World address', () => {
     // An empty value is absent: an empty member no longer hides a good family.
     expect(resolveAddress('', 'towers')).toEqual({ open: { view: 'towers', member: '' }, problems: [] });
     expect(resolveAddress('rock_a', '')).toEqual({ open: { view: 'env', member: 'rock_a' }, problems: [] });
+  });
+
+  it('opens the Style Lab in the look on screen, on Bulwark from one of his members and on the default commander elsewhere', () => {
+    expect(styleLabQuery('abc', '')).toBe('?dials=abc');
+    expect(styleLabQuery('abc', 'pip_face')).toBe('?dials=abc');
+    expect(styleLabQuery('abc', 'husk_walk')).toBe('?dials=abc');
+    for (const name of ['bulwark_idle', 'bulwark_run', 'bulwark_attack']) expect(styleLabQuery('abc', name), name).toBe('?dials=abc&commander=bulwark');
   });
 
   it('names a bad name and falls through to the other parameter, or to the overview', () => {

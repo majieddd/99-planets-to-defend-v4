@@ -2,6 +2,7 @@ import { Group, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import {
   clampToArea,
+  clearance,
   groundDistance,
   groundForward,
   groundToTangent,
@@ -157,11 +158,22 @@ describe('the play prototype movement', () => {
     }
   });
 
-  it('spawns him clear of every placed member root', () => {
+  it("spawns him in front of his own row, between his idle and run members, clear of every placed member's reach", () => {
     const at = toTangent(PLAY_SPAWN.s, PLAY_SPAWN.d);
     const nearest = Math.min(...MEMBERS.map((m) => Math.hypot(at.x - toTangent(m.s, m.d).x, at.z - toTangent(m.s, m.d).z)));
-    // Pip-A's idle and run members, the nearest, stand 3.7 m away: room for their reach and his.
+    // Pip's idle and run members, the nearest, stand 3.7 m away: room for their reach and his.
     expect(nearest).toBeGreaterThan(3 + PLAY_BODY_RADIUS);
+    // In front of Pip's row (the cameras' side), between his idle and run, wherever the row stands.
+    const idle = MEMBERS.find((m) => m.name === 'pip_idle')!;
+    const run = MEMBERS.find((m) => m.name === 'pip_run')!;
+    expect(PLAY_SPAWN.s).toBeGreaterThan(idle.s);
+    expect(PLAY_SPAWN.s).toBeLessThan(run.s);
+    expect(PLAY_SPAWN.d).toBeLessThan(idle.d);
+    // Clear of every reach a member could have: a 3 m reach round each root, wider than any shipped member's plus his
+    // body (the browser test reads his clearance against the real bounds). Inside one, the margin is negative.
+    const generous = MEMBERS.map((m) => ({ ...toTangent(m.s, m.d), radius: 3 }));
+    expect(clearance(at.x, at.z, generous)).toBeGreaterThan(0);
+    expect(clearance(toTangent(idle.s, idle.d).x, toTangent(idle.s, idle.d).z, generous)).toBeLessThan(0);
   });
 
   it('reads an in-place run clip loop from its planted feet, and a thumb pad push as a move', () => {

@@ -20,6 +20,7 @@ interface Root {
   entry: string;
   node: string | null;
   family: string;
+  zone: string;
   clip: string | null;
   position: [number, number, number];
 }
@@ -52,6 +53,8 @@ interface PlayReading {
   runWeight: number;
   runTimeScale: number;
   stride: { loopMetres: number; loopSeconds: number; clipSpeed: number } | null;
+  /** How far he stands outside the nearest member's reach, in metres (negative inside one). */
+  clearance: number | null;
 }
 
 const manifest = JSON.parse(readFileSync('public/assets/manifest.json', 'utf8')) as { assets: ManifestEntry[] };
@@ -159,7 +162,7 @@ test.describe('the Asset World', () => {
         towers: call<CameraReading>('camera'),
         towerLabels: call<LabelReading[]>('labels').filter((label) => label.shown).map((label) => label.text),
         frameMs: call<number>('frameMs'),
-        // Pip-A's faces, read after frames have drawn, when every hull has re-pointed at its body's morph influences.
+        // Pip's faces, read after frames have drawn, when every hull has re-pointed at its body's morph influences.
         faces: call<{ name: string; blink: number; hullsShared: boolean }[]>('faces'),
         overview: null as CameraReading | null,
       };
@@ -199,6 +202,8 @@ test.describe('the Asset World', () => {
     const unground = contacts.filter((contact) => Math.abs(contact.off) > contact.limit);
     const worst = contacts.reduce((a, b) => (Math.abs(b.off) > Math.abs(a.off) ? b : a));
 
+    // The commanders' zone, left to right as placed: Pip (commander), the default, first, then Bulwark, the alternate.
+    const commanders = state.roots.filter((root) => root.zone === 'commanders').map((root) => root.name);
     const towers = state.roots.filter((root) => root.family === 'towers');
     const towersUnframed = towers.filter((root) => !inFrame(state.towers, root.position)).map((root) => root.name);
     const outside = state.roots.filter((root) => !inFrame(state.overview!, root.position)).map((root) => root.name);
@@ -210,6 +215,7 @@ test.describe('the Asset World', () => {
       `ground: worst ${worst.name} ${(worst.off * 100).toFixed(2)} cm off its sink (limit ${(worst.limit * 100).toFixed(1)} cm), off their limit ${JSON.stringify(unground)}; ` +
       `ground offsets ${contacts.map((c) => `${c.name} ${(c.off * 100).toFixed(2)}`).join(', ')} cm; ` +
       `towers view unframed ${JSON.stringify(towersUnframed)}, labels ${JSON.stringify(state.towerLabels)}; outside the overview ${JSON.stringify(outside)}; ` +
+      `commanders ${JSON.stringify(commanders)}; ` +
       `faces ${JSON.stringify(state.faces.map((face) => `${face.name} hulls ${face.hullsShared ? 'shared' : 'NOT shared'}`))}; ` +
       `frame interval ${state.frameMs.toFixed(0)} ms, ${log.errors.length} console errors`;
     console.log(line);
@@ -225,7 +231,8 @@ test.describe('the Asset World', () => {
     expect(towersUnframed, line).toEqual([]);
     expect(state.towerLabels, line).toEqual(['Bolt Sentinel', 'Mark I', 'Mark II', 'Mark III']);
     expect(outside, line).toEqual([]);
-    // Every Pip-A instance has its own face, and every one of their hulls follows its body's morphs, the copies' too.
+    expect(commanders, line).toEqual(['pip_idle', 'pip_run', 'pip_face', 'bulwark_idle', 'bulwark_run', 'bulwark_attack']);
+    // Every Pip instance has its own face, and every one of their hulls follows its body's morphs, the copies' too.
     expect(state.faces.map((face) => face.name), line).toEqual(['pip_idle', 'pip_run', 'pip_face']);
     expect(state.faces.every((face) => face.hullsShared), line).toBe(true);
     // With no dials link the world opens on DEFAULT_DIALS, Painted-Anime-Inkline 4.0, the set the Style Lab opens on.
@@ -386,6 +393,8 @@ test.describe('the Asset World', () => {
       // rather than on the minute's wait for a step below.
       const startLine = `asset world play [${test.info().project.name}]: start ${JSON.stringify(start.play)}; address ${start.search}; console errors ${JSON.stringify(log.errors)}`;
       expect(start.play.on, startLine).toBe(true);
+      // He comes out clear of every member's reach, read from the drawn bounds of the world as laid out.
+      expect(start.play.clearance, startLine).toBeGreaterThan(0);
       // Held until he has covered half a metre, since SwiftShader's frames are slow and each moves him at most 1/20 s.
       await page.keyboard.down('KeyW');
       await page.waitForFunction(
@@ -404,7 +413,8 @@ test.describe('the Asset World', () => {
       const line =
         `asset world play [${test.info().project.name}]: moved ${moved.toFixed(2)} m at ${held.play.speed.toFixed(2)} m/s ` +
         `(run weight ${held.play.runWeight.toFixed(2)}, run rate ${held.play.runTimeScale.toFixed(2)}), ${(offGround * 1000).toFixed(2)} mm off the ground, ` +
-        `camera target followed ${followed.toFixed(2)} m; run loop ${held.play.stride ? `${held.play.stride.loopMetres.toFixed(3)} m in ${held.play.stride.loopSeconds.toFixed(3)} s` : 'unread'}; address ${held.search}`;
+        `camera target followed ${followed.toFixed(2)} m; run loop ${held.play.stride ? `${held.play.stride.loopMetres.toFixed(3)} m in ${held.play.stride.loopSeconds.toFixed(3)} s` : 'unread'}; ` +
+        `spawn clearance ${start.play.clearance?.toFixed(2)} m; address ${held.search}`;
       console.log(line);
       expect(start.search, line).toContain('play=pip');
       expect(moved, line).toBeGreaterThan(0.5);
@@ -471,8 +481,8 @@ test.describe('the Asset World', () => {
         expect(layout.canvas, line).toEqual({ x: 0, y: 0, width: layout.viewport.width, height: layout.viewport.height });
         expect(share, line).toBeLessThanOrEqual(0.2);
         expect(layout.centreIsCanvas, line).toBe(true);
-        // On a phone the overview names the seven zones (the six families, Pip-A's preview apart from Bulwark) and leaves
-        // the members to their own views.
+        // On a phone the overview names the six zones on seven placards (the commanders' zone hangs one under each
+        // commander's row, Pip's and Bulwark's) and leaves the members to their own views.
         expect(layout.labels.filter((label) => label.kind === 'family'), line).toHaveLength(7);
         expect(layout.labels.filter((label) => label.kind === 'member'), line).toHaveLength(0);
         for (const label of layout.labels) expect(label.fontPx, `${label.text}: ${line}`).toBeGreaterThanOrEqual(12);

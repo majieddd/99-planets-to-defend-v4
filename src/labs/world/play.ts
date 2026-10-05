@@ -8,6 +8,7 @@ import { createCommanderFace } from '../shared/commanderFace';
 import type { FaceDriver } from '../shared/faceDriver';
 import type { PlacedMember } from './layout';
 import {
+  clearance,
   groundForward,
   moveDirection,
   PLAY_BODY_RADIUS,
@@ -53,6 +54,8 @@ export interface PlayReading {
   runTimeScale: number;
   /** The run clip's measured loop: the ground it covers, its length in seconds, and so the ground speed it plays at 1. */
   stride: { loopMetres: number; loopSeconds: number; clipSpeed: number } | null;
+  /** How far he stands outside the nearest member's reach, in metres on the tangent plane (negative inside one). */
+  clearance: number | null;
 }
 
 export interface PipPlay {
@@ -274,6 +277,7 @@ export function createPipPlay(assets: ReadonlyMap<string, LoadedAsset>, ground: 
         runWeight: weight,
         runTimeScale: timeScale,
         stride: stride ?? null,
+        clearance: root ? clearance(motion.x, motion.z, obstacles) : null,
       };
     },
   };

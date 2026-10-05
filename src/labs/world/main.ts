@@ -33,6 +33,7 @@ import {
   OVERVIEW,
   registryOverview,
   resolveAddress,
+  styleLabQuery,
   type OpenView,
   type ViewPose,
 } from './views';
@@ -186,11 +187,13 @@ async function start(): Promise<void> {
   // would otherwise have posed by the time it is copied. He goes in the scene, not the world's root, so the world's
   // members, bounds and labels stay exactly what they are with play off.
   const pipPlay = createPipPlay(assets, patch, scene, ctx.hullMaterial, STYLE_PLANET_RADIUS);
+  // A member whose model or clip this build lacks (the coverage gaps above name it) is left out rather than built, where
+  // a member put in ahead of a pending clip would stop the page with "has no clip".
   const world: AssetWorld = buildAssetWorld(
     patch,
     assets,
     ctx,
-    MEMBERS.filter((m) => assets.has(m.entry)),
+    MEMBERS.filter((m) => assets.has(m.entry) && (m.clip === null || assets.get(m.entry)!.animations.some((clip) => clip.name === m.clip))),
   );
   scene.add(world.root);
 
@@ -310,7 +313,7 @@ async function start(): Promise<void> {
     if (on && !pipPlay.available) {
       state.play = false;
       panel.refresh();
-      showBanner('Play Pip needs Pip-A and his idle and run clips, which this build does not have.');
+      showBanner('Play Pip needs Pip (commander) and his idle and run clips, which this build does not have.');
       return false;
     }
     if (on !== pipPlay.active) {
@@ -408,7 +411,7 @@ async function start(): Promise<void> {
     onTier: setTier,
     openStyleLab: () => {
       const url = new URL('style.html', location.href);
-      url.search = `?dials=${encodeDials(dials)}`;
+      url.search = styleLabQuery(encodeDials(dials), state.member);
       location.assign(url.toString());
     },
   });

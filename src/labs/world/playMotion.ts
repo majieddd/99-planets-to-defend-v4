@@ -28,8 +28,12 @@ export const PLAY_MIN_MEMBER_REACH = 0.2;
 export const PLAY_AREA_RADIUS = 23;
 /** The ground speed at which the run clip has taken over from the idle completely, in metres a second. */
 export const PLAY_RUN_FULL_WEIGHT_SPEED = 1.2;
-/** Where he appears, on the world's view frame (s, d): in front of Pip-A's row, between his idle and run members. */
-export const PLAY_SPAWN = { s: 13.3, d: -3.5 } as const;
+/**
+ * Where he appears, on the world's view frame (s, d): 3.5 m in front of Pip's row, midway between his idle (2.8 m) and
+ * run (5.4 m) members, on the level clearing. It moved from (13.3, -3.5) when Pip's row took the clearing and Bulwark's
+ * the spots past it, so it stays in front of Pip's own row rather than Bulwark's.
+ */
+export const PLAY_SPAWN = { s: 4.1, d: -3.5 } as const;
 /** A foot counts as planted within this many metres of its lowest point in the run clip, for the stride measure. */
 export const PLAY_CONTACT_TOLERANCE = 0.03;
 /** A thumb pad pushed less than this share of its reach moves nothing, and pushed past the second share sprints. */
@@ -183,6 +187,14 @@ export function resolveObstacles(x: number, z: number, fromX: number, fromZ: num
     if (!moved) break;
   }
   return { x, z, blocked };
+}
+
+/**
+ * How far a point stands outside the nearest obstacle's reach, in metres on the tangent plane, and negative inside one:
+ * the margin the browser test reads at his spawn, so a re-laid world cannot put him out inside a member.
+ */
+export function clearance(x: number, z: number, obstacles: readonly Obstacle[]): number {
+  return Math.min(Infinity, ...obstacles.map((obstacle) => Math.hypot(x - obstacle.x, z - obstacle.z) - obstacle.radius));
 }
 
 /** Holds a point inside PLAY_AREA_RADIUS of the pole, sliding along the edge rather than stopping at it. */

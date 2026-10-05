@@ -18,27 +18,14 @@ import { LAYERS } from '../../render/layers';
 import { place } from '../../render/terrain/place';
 import type { StylePatch } from '../../render/terrain/stylePatch';
 import { createCommanderFace, FACE_SEED, holdFacePose, type FacePose } from '../shared/commanderFace';
+import { DEFAULT_COMMANDER, type CommanderKind } from '../shared/commanders';
 import type { FaceDriver } from '../shared/faceDriver';
 import { NO_EDGE_PIECES } from '../shared/meadow';
 
 export type BulwarkMode = 'cycle' | 'idle' | 'run' | 'attack';
-/**
- * The commander the scene shows at home and on the lap: Pip (commander), the M1 commander built as `commander_pip`, or
- * Bulwark, the visored knight the M0 look was locked on.
- */
-export type CommanderKind = 'bulwark' | 'pip';
-/** The commanders in the order the panel offers them, the default first. */
-export const COMMANDERS: readonly CommanderKind[] = ['pip', 'bulwark'];
-/**
- * The commander a lab shows when nothing names another: Pip, by the owner's decision of 2026-10-04 ("yes make Pip the
- * default, keep Bulwark as alternate"). Bulwark stays one switch away, and is the fallback when Pip is not built.
- */
-export const DEFAULT_COMMANDER: CommanderKind = 'pip';
-/**
- * Each commander's name as the panel, the banner and the console give it. The owner has not named Pip's character yet,
- * so he is "Pip (commander)" wherever the labs name him as a character.
- */
-export const COMMANDER_LABELS: Readonly<Record<CommanderKind, string>> = { pip: 'Pip (commander)', bulwark: 'Bulwark' };
+// The commander the scene shows at home and on the lap, and the names the labs give each, live with the Asset World's
+// in labs/shared/commanders.ts; they are re-exported here for the lab's own modules and tests.
+export { COMMANDER_LABELS, COMMANDERS, DEFAULT_COMMANDER, type CommanderKind } from '../shared/commanders';
 export type PresetName = 'hero' | 'strategic' | 'closeup' | 'horizon';
 export const PRESETS: PresetName[] = ['hero', 'strategic', 'closeup', 'horizon'];
 

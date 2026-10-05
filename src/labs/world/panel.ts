@@ -23,7 +23,7 @@ export interface WorldPanelState {
   speed: number;
   paused: boolean;
   tier: TierName;
-  /** Whether Pip-A is out on the patch under the keys (the play prototype, play.ts). */
+  /** Whether Pip (commander) is out on the patch under the keys (the play prototype, play.ts). */
   play: boolean;
 }
 
@@ -37,7 +37,7 @@ export interface WorldPanelHandlers {
 
 /** The view dropdown: the overview and the characters, then the families in the order the zones stand. */
 export function viewOptions(): Record<string, string> {
-  const options: Record<string, string> = { Overview: OVERVIEW, 'Characters (Husk, Bulwark and Pip-A)': CHARACTERS };
+  const options: Record<string, string> = { Overview: OVERVIEW, 'Characters (Husk and commanders)': CHARACTERS };
   for (const zone of ZONES) options[`${zone.label} (${zone.family})`] = zone.family;
   return options;
 }

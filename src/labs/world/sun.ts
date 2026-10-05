@@ -26,7 +26,7 @@ export const WORLD_SHADOW_NORMAL_BIAS = 0.03;
  */
 export const WORLD_CASTER_MARGIN = 7;
 /**
- * Half the side of the sun's square shadow box: the furthest root, Pip-A's face member 17.2 m out (the kit arc stands at
+ * Half the side of the sun's square shadow box: the furthest root, Bulwark's attack member 17.2 m out (the kit arc stands at
  * 17 m), plus the caster margin, so 24.2 m, and every member casts at every elevation the dial allows. Narrower than the
  * Style Lab's 50 m, which holds a scatter ring 48 m out, so the high tier's 2048 map has 2.4 cm texels here against
  * 4.9 cm there.
