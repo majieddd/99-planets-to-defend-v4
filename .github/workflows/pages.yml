@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      preview_ref:
+        description: Branch to publish under /preview/ beside main (type none to skip the preview)
+        required: false
+        default: m1-combat-feel-wip
 
 permissions:
   contents: read
@@ -30,6 +35,42 @@ jobs:
       - run: npm run build
         env:
           P99_BASE: /99-planets-to-defend-v4/
+      # The owner tests work in progress from any device, so one unmerged branch is also built under
+      # /preview/. Pages serves a single site per repository, which is why the preview rides inside
+      # main's deployment instead of deploying on its own. A push to main uses the PAGES_PREVIEW_REF
+      # repository variable, or the default below; a manual run can name any branch, or none.
+      - name: Resolve the preview branch
+        id: preview
+        env:
+          INPUT_REF: ${{ inputs.preview_ref }}
+          VAR_REF: ${{ vars.PAGES_PREVIEW_REF }}
+        run: |
+          ref="${INPUT_REF:-${VAR_REF:-m1-combat-feel-wip}}"
+          if [ "$ref" = "none" ]; then
+            echo "Preview skipped on request."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --heads origin "$ref" > /dev/null; then
+            echo "Publishing $ref under /preview/."
+            echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          else
+            # A merged or deleted preview branch must not fail main's deployment.
+            echo "Preview branch $ref does not exist; main deploys without a preview."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.preview.outputs.ref != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.preview.outputs.ref }}
+          path: preview-src
+      - if: steps.preview.outputs.ref != ''
+        working-directory: preview-src
+        run: npm ci
+      # Built after main, because main's build empties dist and would delete the preview.
+      - if: steps.preview.outputs.ref != ''
+        working-directory: preview-src
+        run: npx vite build --outDir ../dist/preview --emptyOutDir
+        env:
+          P99_BASE: /99-planets-to-defend-v4/preview/
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
